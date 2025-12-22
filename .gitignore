@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+.venv-1/
+.venv_win/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.local
+
+# Sessions and sensitive data
+.sessions/
+browser_sessions/
+accounts/
+profiles/
+
+# Logs
+*.log
+celery.log
+
+# Storage and data
+storage/
+data/
+whatsapp_exports/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.bak_*
+pagina.txt
+
+# Build files
+build/
+dist/
+*.egg-info/
+
+# Specific files
+bool`
+dict

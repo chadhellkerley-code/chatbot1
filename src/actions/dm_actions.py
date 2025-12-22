@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import logging
+import os
+import random
+import sys
+from typing import Iterable, Optional
+
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import TimeoutError as PWTimeoutError
+
+# ensure imports resolve when executing module directly
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from src.actions.direct_helpers import (
+    SELECTORS,
+    ensure_inbox,
+    ensure_new_message_dialog,
+    search_and_select,
+    wait_thread_open,
+    focus_composer,
+    wait_own_bubble,
+    last_error_toast,
+    _snap,
+)
+from src.auth.persistent_login import ensure_logged_in
+from src.humanizer import type_text, random_wait, human_type, human_click, human_wait
+from src.playwright_service import shutdown
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Async DM flow                                                               #
+# --------------------------------------------------------------------------- #
+
+def pick_random_message(messages: Iterable[str], username: str) -> str:
+    pool = list(messages)
+    if not pool:
+        raise ValueError("messages pool vacío.")
+    template = random.choice(pool)
+    safe_username = username.strip().lstrip("@")
+    return template.format(username=safe_username)
+
+
+async def send_dm_to_user(
+    page: Page,
+    username: str,
+    message: str,
+    humanizer_cfg: Optional[dict] = None,
+) -> dict:
+    """
+    Envía un mensaje directo simulando interacción humana usando Playwright async.
+    """
+    cfg = humanizer_cfg or {}
+    target = username.strip().lstrip("@")
+    result = {"ok": False, "username": target}
+    if not target:
+        result["error"] = "invalid_username"
+        return result
+    safe_user = target or "unknown"
+    safe_user = safe_user.replace("/", "_")
+
+    async def snap(reason: str) -> Optional[str]:
+        return await _snap(page, f"{reason}_{safe_user}")
+
+    try:
+        inbox_ok = await ensure_inbox(page)
+        if not inbox_ok:
+            result["error"] = "inbox_unavailable"
+            result["screenshot"] = await snap("inbox_unavailable")
+            return result
+
+        if not await ensure_new_message_dialog(page):
+            result["error"] = "no_dialog"
+            result["screenshot"] = await snap("no_dialog")
+            return result
+
+        picked, reason = await search_and_select(page, target, exact=True)
+        if not picked:
+            error_label = reason or "user_not_found"
+            result["error"] = error_label
+            result["screenshot"] = await snap(error_label)
+            return result
+
+        if not await wait_thread_open(page):
+            result["error"] = "open_failed"
+            result["screenshot"] = await snap("open_failed")
+            return result
+
+        if not await focus_composer(page):
+            result["error"] = "composer_not_found"
+            result["screenshot"] = await snap("composer_not_found")
+            return result
+
+        composer = page.locator(SELECTORS["composer"]).first
+        typing_defaults = {"min_delay": 0.04, "max_delay": 0.18, "occasional_pause": 0.12}
+        typing_cfg = {**typing_defaults, **(cfg.get("typing", {}) or {})}
+        typed_message = message.format(username=target)
+        await type_text(
+            composer,
+            typed_message,
+            min_delay=typing_cfg.get("min_delay", typing_defaults["min_delay"]),
+            max_delay=typing_cfg.get("max_delay", typing_defaults["max_delay"]),
+            occasional_pause=typing_cfg.get("occasional_pause", typing_defaults["occasional_pause"]),
+        )
+        await random_wait(200, 500)
+        await page.keyboard.press("Enter")
+
+        sent = await wait_own_bubble(page, timeout_ms=9_000)
+        if not sent:
+            toast = await last_error_toast(page)
+            result["error"] = f"send_failed:{toast}" if toast else "send_failed"
+            result["screenshot"] = await snap("send_failed")
+            return result
+
+        toast = await last_error_toast(page)
+        if toast:
+            result["error"] = f"send_failed:{toast}"
+            result["screenshot"] = await snap("send_failed_toast")
+            return result
+
+        result.update(ok=True, sent_text=typed_message)
+        logger.info("[DM] Sent to %s: %s", target, typed_message)
+        return result
+    except PlaywrightTimeoutError as exc:
+        result["error"] = "timeout"
+        result["detail"] = str(exc)
+        result["screenshot"] = await snap("timeout")
+        return result
+    except Exception as exc:
+        result["error"] = f"exception:{type(exc).__name__}:{exc}"
+        result["screenshot"] = await snap("exception")
+        return result
+
+
+# --------------------------------------------------------------------------- #
+# Legacy sync helper (preserved for backwards compatibility)                  #
+# --------------------------------------------------------------------------- #
+
+def _find_message_box(page):
+    composer_selector = SELECTORS["composer"]
+    locator = page.locator(composer_selector)
+    if locator.count():
+        return locator
+    if page.locator("textarea").count():
+        return page.locator("textarea")
+    return page.locator("div[contenteditable='true']")
+
+
+def _first_present(page, selectors: list[str], timeout_each=5000):
+    """Devuelve el primer locator que aparece de la lista."""
+    for sel in selectors:
+        try:
+            page.wait_for_selector(sel, timeout=timeout_each)
+            return page.locator(sel)
+        except PWTimeoutError:
+            continue
+    raise PWTimeoutError(f"Ninguno de los selectores apareció: {selectors}")
+
+
+def send_message(account: dict, to_username: str, message: str, headful: Optional[bool] = None) -> None:
+    """Legacy synchronous helper still used by adapter flows."""
+    pw, ctx, page = ensure_logged_in(account)
+    try:
+        page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded")
+        new_btn_candidates = [
+            "a[href='/direct/new/']",
+            "div[role='button']:has-text('Nuevo mensaje')",
+            "div[role='button']:has-text('Mensaje nuevo')",
+            "div[role='button']:has-text('Enviar mensaje')",
+            "button:has-text('Nuevo mensaje')",
+            "button:has-text('Mensaje nuevo')",
+            "button:has-text('Enviar mensaje')",
+            "svg[aria-label*='New message']",
+            "svg[aria-label*='Mensaje nuevo']",
+        ]
+        dialog_open = page.locator("div[role='dialog']").count() > 0
+        if not dialog_open:
+            try:
+                new_btn = _first_present(page, new_btn_candidates, timeout_each=4000)
+                try:
+                    new_btn.click()
+                except Exception:
+                    new_btn.locator("xpath=ancestor-or-self::*[self::button or self::div or self::a]").first.click()
+            except PWTimeoutError:
+                page.goto("https://www.instagram.com/direct/new/", wait_until="domcontentloaded")
+
+        page.wait_for_selector("div[role='dialog']", timeout=15000)
+        search_input_candidates = [
+            "div[role='dialog'] input[name='queryBox']",
+            "div[role='dialog'] input[placeholder*='Search']",
+            "div[role='dialog'] input[placeholder*='Buscar']",
+            "div[role='dialog'] input[aria-label*='Search']",
+            "div[role='dialog'] input[aria-label*='Buscar']",
+            "div[role='dialog'] input[type='text']",
+        ]
+        search_box = _first_present(page, search_input_candidates, timeout_each=5000)
+        human_type(search_box, to_username)
+        human_wait(0.5, 1.2)
+        page.keyboard.press("Enter")
+        human_wait(0.4, 1.0)
+
+        next_btn_candidates = [
+            "div[role='dialog'] button:has-text('Siguiente')",
+            "div[role='dialog'] button:has-text('Next')",
+        ]
+        next_btn = _first_present(page, next_btn_candidates, timeout_each=6000)
+        next_btn.click()
+
+        page.wait_for_selector("textarea, div[contenteditable='true']", timeout=15000)
+        box = _find_message_box(page)
+        human_type(box, message)
+        send_btn_candidates = [
+            "button[type='submit']",
+            "button:has-text('Enviar')",
+            "button[aria-label*='Send']",
+        ]
+        try:
+            _first_present(page, send_btn_candidates, timeout_each=4000).click()
+        except PWTimeoutError:
+            page.keyboard.press("Enter")
+
+        human_wait(0.8, 1.6)
+
+    except Exception:
+        try:
+            os.makedirs("screenshots", exist_ok=True)
+            page.screenshot(path="screenshots/dm_debug.png", full_page=True)
+        except Exception:
+            pass
+        raise
+    finally:
+        shutdown(pw, ctx)
