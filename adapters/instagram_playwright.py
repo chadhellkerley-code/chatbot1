@@ -27,8 +27,7 @@ class InstagramPlaywrightClient(BaseInstagramClient):
     def __init__(self, *, account: Optional[dict] = None) -> None:
         super().__init__(account=account)
         self.logger = logging.getLogger(self.__class__.__name__)
-        # Use headless sender for background operations
-        self._sender = HumanInstagramSender(headless=True)
+        # No creamos sender aquí, lo crearemos en cada operación
 
     def close(self) -> None:
         # Sender opens/closes per call; nothing persistent to close.
@@ -55,10 +54,12 @@ class InstagramPlaywrightClient(BaseInstagramClient):
 
     def send_direct_message(self, target_username: str, message: str) -> bool:
         # Uses Playwright storage_state.json already persisted.
+        # IMPORTANTE: Creamos sender con headless=True para envíos en segundo plano
         acct = dict(self.account or {})
         if self._username and not acct.get("username"):
             acct["username"] = self._username
-        return bool(self._sender.send_message_like_human(acct, target_username, message))
+        sender = HumanInstagramSender(headless=True)
+        return bool(sender.send_message_like_human(acct, target_username, message))
 
     def reply_to_unread(self, *, limit: int = 10, strategy: Optional[dict] = None) -> List[Dict[str, Any]]:
         # This is handled by responder.py / src/opt_in in other menu flows.
