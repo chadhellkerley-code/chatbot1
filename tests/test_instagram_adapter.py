@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from adapters.base import BaseInstagramClient
-from instagram_adapter import InstagramClientAdapter, prompt_two_factor_code
+from src.instagram_adapter import InstagramClientAdapter, prompt_two_factor_code
 
 
 class RecorderClient(BaseInstagramClient):
@@ -43,7 +43,7 @@ class RecorderClient(BaseInstagramClient):
 def test_do_login_uses_totp_when_available(monkeypatch):
     recorder = RecorderClient()
     adapter = InstagramClientAdapter(client_factory=lambda: recorder)
-    monkeypatch.setattr("instagram_adapter.generate_totp_code", lambda username: "654321")
+    monkeypatch.setattr("src.instagram_adapter.generate_totp_code", lambda username: "654321")
 
     adapter.do_login("tester", "secret")
 
@@ -63,7 +63,7 @@ def test_finish_2fa_rejects_invalid_codes():
 
 def test_prompt_two_factor_code_sanitizes_input(monkeypatch):
     monkeypatch.setattr(
-        "instagram_adapter._read_input_with_timeout",
+        "src.instagram_adapter._read_input_with_timeout",
         lambda prompt, timeout: " 12-34 ",
     )
     code = prompt_two_factor_code("tester", "sms", 1)

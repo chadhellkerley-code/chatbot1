@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 from config import SETTINGS
 from client_factory import get_instagram_client
 from adapters.base import TwoFARequired, TwoFactorCodeRejected
-from instagram_adapter import prompt_two_factor_code
+from src.instagram_adapter import prompt_two_factor_code
 
 try:
     from src.auth.onboarding import (

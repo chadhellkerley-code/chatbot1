@@ -57,3 +57,11 @@ dist/
 # Specific files
 bool`
 dict
+
+# Archivos archivados
+_archive/
+_old_venvs/
+
+# Archivos de análisis
+analyze_project.py
+reorganize.ps1
