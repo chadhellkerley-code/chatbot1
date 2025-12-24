@@ -24,7 +24,13 @@ from urllib.parse import urlparse
 from config import SETTINGS
 from client_factory import get_instagram_client
 from adapters.base import TwoFARequired, TwoFactorCodeRejected
-from src.instagram_adapter import prompt_two_factor_code
+# Función temporal hasta que se migre correctamente
+def prompt_two_factor_code(username: str, method: str, attempt: int):
+    """Stub temporal - solicita código 2FA manualmente"""
+    import getpass
+    prompt = f"Ingrese el código recibido por {method} para {username}: "
+    code = getpass.getpass(prompt) if method.lower() == 'totp' else input(prompt)
+    return code.strip().replace("-", "").replace(" ", "") if code else None
 
 try:
     from src.auth.onboarding import (
