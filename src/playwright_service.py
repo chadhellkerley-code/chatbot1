@@ -71,7 +71,7 @@ class PlaywrightService:
         self._base_profiles.mkdir(parents=True, exist_ok=True)
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
-            headless=False,  # visible para depurar (luego lo podés volver a True)
+            headless=self._headless,
             slow_mo=120,
             args=DEFAULT_ARGS,
         )

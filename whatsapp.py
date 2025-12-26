@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import atexit
 import csv
 import json
 import random
-import time
 import shutil
 import textwrap
+import threading
+import time
 import uuid
 import webbrowser
 from datetime import datetime, timedelta
@@ -221,19 +223,25 @@ def _default_state() -> dict[str, Any]:
 class WhatsAppDataStore:
     """Persistencia simple en disco para el módulo de WhatsApp."""
 
+    _io_lock = threading.RLock()
+
     def __init__(self, path: Path = DATA_FILE):
         self.path = path
         self.state = self._load()
 
     # ------------------------------------------------------------------
     def _load(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return _default_state()
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
-            return _default_state()
-        return self._merge_defaults(data)
+        with self._io_lock:
+            if not self.path.exists():
+                return _default_state()
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:
+                return _default_state()
+            return self._merge_defaults(data)
+
+    def reload(self) -> None:
+        self.state = self._load()
 
     # ------------------------------------------------------------------
     def _merge_defaults(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -519,7 +527,10 @@ class WhatsAppDataStore:
     # ------------------------------------------------------------------
     def save(self) -> None:
         serialized = json.dumps(self.state, ensure_ascii=False, indent=2)
-        self.path.write_text(serialized, encoding="utf-8")
+        tmp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
+        with self._io_lock:
+            tmp_path.write_text(serialized, encoding="utf-8")
+            tmp_path.replace(self.path)
 
     # ------------------------------------------------------------------
     # Helper methods ----------------------------------------------------
@@ -558,12 +569,95 @@ def _format_delay(delay: dict[str, float]) -> str:
 
 
 # ----------------------------------------------------------------------
+# Runner de envios en segundo plano
+
+_MESSAGE_RUNNER: _MessageRunner | None = None
+_MESSAGE_RUNNER_MIN_SLEEP = 2.0
+_MESSAGE_RUNNER_MAX_SLEEP = 8.0
+_MESSAGE_RUNNER_IDLE_SLEEP = 20.0
+
+
+class _MessageRunner:
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name="whatsapp-message-runner", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            sleep_for = _MESSAGE_RUNNER_IDLE_SLEEP
+            try:
+                store = WhatsAppDataStore()
+                _reconcile_runs(store)
+                sleep_for = _message_runner_sleep(store)
+            except Exception:
+                sleep_for = _MESSAGE_RUNNER_IDLE_SLEEP
+            self._stop.wait(sleep_for)
+
+
+def _message_runner_sleep(store: WhatsAppDataStore) -> float:
+    next_runs: list[datetime] = []
+    for run in store.state.get("message_runs", []):
+        status = (run.get("status") or "").lower()
+        if status in {"completado", "cancelado"}:
+            continue
+        if run.get("paused"):
+            continue
+        next_at = _parse_iso(run.get("next_run_at"))
+        if next_at:
+            next_runs.append(next_at)
+    if not next_runs:
+        return _MESSAGE_RUNNER_IDLE_SLEEP
+    next_at = min(next_runs)
+    delta = (next_at - _now()).total_seconds()
+    if delta <= 0:
+        return _MESSAGE_RUNNER_MIN_SLEEP
+    return min(max(delta, _MESSAGE_RUNNER_MIN_SLEEP), _MESSAGE_RUNNER_MAX_SLEEP)
+
+
+def _ensure_message_runner() -> None:
+    global _MESSAGE_RUNNER
+    if _MESSAGE_RUNNER is None:
+        _MESSAGE_RUNNER = _MessageRunner()
+        atexit.register(_MESSAGE_RUNNER.stop)
+    _MESSAGE_RUNNER.start()
+
+
+def _message_runner_active() -> bool:
+    return bool(_MESSAGE_RUNNER and _MESSAGE_RUNNER.is_running())
+
+
+def _sync_message_runs(store: WhatsAppDataStore) -> None:
+    if _message_runner_active():
+        store.reload()
+    else:
+        _reconcile_runs(store)
+
+
+# ----------------------------------------------------------------------
 # Menú principal del módulo
 
 def menu_whatsapp() -> None:
     store = WhatsAppDataStore()
+    _ensure_message_runner()
     while True:
-        _reconcile_runs(store)
+        _sync_message_runs(store)
         banner()
         title("Automatización por WhatsApp")
         print(_line())
@@ -1347,7 +1441,7 @@ def _send_messages(store: WhatsAppDataStore) -> None:
         return
 
     while True:
-        _reconcile_runs(store)
+        _sync_message_runs(store)
         banner()
         title("Programación de envíos por WhatsApp")
         print(_line())
@@ -1616,7 +1710,7 @@ def _show_run_detail(store: WhatsAppDataStore) -> None:
     )
     if not run:
         return
-    _reconcile_runs(store)
+    _sync_message_runs(store)
     banner()
     title("Detalle del envío por WhatsApp")
     print(_line())

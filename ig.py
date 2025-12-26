@@ -57,6 +57,7 @@ from storage import (
 )
 from ui import Fore, LiveTable, banner, full_line, highlight, style_text
 from utils import ask, ask_int, enable_quiet_mode, press_enter, warn
+from src.playwright_service import BASE_PROFILES
 from src.transport.human_instagram_sender import HumanInstagramSender
 
 # Optional adapter: import inside functions to keep import-time inexpensive
@@ -193,6 +194,13 @@ def _ensure_session(username: str) -> bool:
         return False
 
 
+def _has_playwright_session(username: str) -> bool:
+    if not username:
+        return False
+    storage_state = Path(BASE_PROFILES) / username / "storage_state.json"
+    return storage_state.exists()
+
+
 def _send_dm(cl, to_username: str, message: str) -> bool:
     try:
         cl.send_direct_message(to_username, message)
@@ -200,6 +208,82 @@ def _send_dm(cl, to_username: str, message: str) -> bool:
     except Exception as exc:
         logger.debug("Error enviando DM a @%s: %s", to_username, exc, exc_info=False)
         return False
+
+
+def _resolve_account_password(account: Dict) -> str:
+    password = (account.get("password") or "").strip()
+    if password:
+        return password
+    try:
+        from accounts import _account_password as _lookup_password  # type: ignore
+    except Exception:
+        return ""
+    try:
+        return (_lookup_password(account) or "").strip()
+    except Exception:
+        return ""
+
+
+def _proxy_payload_from_account(account: Dict) -> Optional[Dict]:
+    proxy = account.get("proxy")
+    if proxy:
+        return proxy
+    proxy_url = (account.get("proxy_url") or "").strip()
+    if not proxy_url:
+        return None
+    payload = {"url": proxy_url}
+    proxy_user = (account.get("proxy_user") or "").strip()
+    proxy_pass = (account.get("proxy_pass") or "").strip()
+    if proxy_user:
+        payload["username"] = proxy_user
+    if proxy_pass:
+        payload["password"] = proxy_pass
+    try:
+        from src.auth.onboarding import build_proxy as _build_proxy  # type: ignore
+    except Exception:
+        return payload
+    try:
+        return _build_proxy(payload)
+    except Exception:
+        return payload
+
+
+def _enqueue_background_send(
+    account: Dict,
+    lead: str,
+    message: str,
+    delay_seconds: float,
+) -> tuple[bool, str]:
+    try:
+        from src.jobs.send_message_job import send_dm  # type: ignore
+    except Exception as exc:
+        return False, f"background unavailable: {exc}"
+    username = (account.get("username") or "").strip()
+    if not username:
+        return False, "missing_username"
+    password = _resolve_account_password(account)
+    proxy = _proxy_payload_from_account(account)
+    try:
+        task = send_dm.apply_async(
+            kwargs={
+                "username": username,
+                "password": password,
+                "proxy": proxy,
+                "target_user": lead,
+                "message_text": message,
+                "human_delay": False,
+            },
+            countdown=max(0.0, float(delay_seconds)),
+        )
+    except Exception as exc:
+        logger.info(
+            "Background enqueue failed for @%s -> @%s: %s",
+            username,
+            lead,
+            exc,
+        )
+        return False, f"background enqueue failed: {exc}"
+    return True, f"Encolado en segundo plano (task={task.id})"
 
 
 def _diagnose_exception(exc: Exception) -> str | None:
@@ -510,7 +594,7 @@ def _handle_event(
     if event.success:
         account_error_streaks.pop(username, None)
         success[username] += 1
-        detail = ""
+        detail = event.detail or ""
         live_table.complete(username, True, detail)
         log_sent(username, event.lead, True, detail)
         with _LIVE_LOCK:
@@ -647,6 +731,9 @@ def _build_accounts_for_alias(alias: str) -> list[Dict]:
     needing_login: list[tuple[Dict, str]] = []
     for account in all_acc:
         username = account["username"]
+        if _has_playwright_session(username):
+            verified.append(account)
+            continue
         if not has_session(username):
             needing_login.append((account, "sin sesión guardada"))
             continue
@@ -833,6 +920,7 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
 
     account_caps = {a["username"]: _account_cap(a) for a in accounts}
     account_delays = {a["username"]: _account_delay_range(a) for a in accounts}
+    account_next_at: Dict[str, float] = {}
 
     if any(a.get("low_profile") for a in accounts):
         delay_multiplier = max(1.0, getattr(SETTINGS, "low_profile_delay_factor", 150) / 100.0)
@@ -889,6 +977,23 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
         # classified and returned to the caller.
         while not STOP_EVENT.is_set():
             try:
+                base_delay = delay_min_target + random.uniform(0, jitter_window)
+                now_ts = time.time()
+                next_at = account_next_at.get(username, now_ts)
+                scheduled_at = max(now_ts, next_at) + base_delay
+                delay_seconds = max(0.0, scheduled_at - now_ts)
+                queued, info = _enqueue_background_send(
+                    account,
+                    lead,
+                    message,
+                    delay_seconds,
+                )
+                if queued:
+                    account_next_at[username] = scheduled_at
+                    success_flag = True
+                    detail = info or "Encolado en segundo plano"
+                    break
+
                 # try adapter import lazily so import-time remains cheap
                 try:
                     from integraciones.adapter import send_message as _adapter_send  # type: ignore
@@ -919,7 +1024,9 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                     success_flag, info = send_result
                 else:
                     success_flag, info = send_result, None
-                if not success_flag:
+                if success_flag:
+                    detail = info or "Enviado en modo humano"
+                else:
                     detail = info or "envío falló (modo humano)"
                     normalized_info = (info or "").lower()
                     if "cancel" in normalized_info:

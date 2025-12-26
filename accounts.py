@@ -1001,11 +1001,22 @@ def _login_and_save_session(
             )
             return False
 
+    adapter = None
     try:
-        adapter = get_instagram_client(account=account)
+        adapter = get_instagram_client(account=account, engine="instagrapi")
     except Exception as exc:
-        logger.debug("No se pudo inicializar el cliente de Instagram para @%s: %s", username, exc)
-        return False
+        logger.debug(
+            "Instagrapi no disponible para login de @%s: %s", username, exc
+        )
+        try:
+            adapter = get_instagram_client(account=account)
+        except Exception as exc2:
+            logger.debug(
+                "No se pudo inicializar el cliente de Instagram para @%s: %s",
+                username,
+                exc2,
+            )
+            return False
 
     try:
         load_into(adapter, username)
@@ -2485,6 +2496,31 @@ def menu_accounts():
         if op == "1":
             if not _onboarding_backend_ready():
                 _print_onboarding_backend_help()
+                fallback = (
+                    ask("Agregar cuenta sin Playwright y usar login clasico? (s/N): ")
+                    .strip()
+                    .lower()
+                )
+                if fallback != "s":
+                    press_enter()
+                    continue
+                u = ask("Username (sin @): ").strip().lstrip("@")
+                if not u:
+                    continue
+                if get_account(u):
+                    warn("Ya existe.")
+                    press_enter()
+                    continue
+                proxy_data = _prompt_proxy_settings()
+                totp_saved = _prompt_totp(u)
+                if add_account(u, alias, proxy_data):
+                    if not totp_saved:
+                        remove_totp_secret(u)
+                    ok("Cuenta agregada. Iniciando login clasico...")
+                    prompt_login(u, interactive=True)
+                else:
+                    if totp_saved:
+                        remove_totp_secret(u)
                 press_enter()
                 continue
             u = ask("Username (sin @): ").strip().lstrip("@")

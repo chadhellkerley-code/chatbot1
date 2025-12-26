@@ -22,6 +22,8 @@ ENV/
 browser_sessions/
 accounts/
 profiles/
+.session_key
+*_automation.json
 
 # Logs
 *.log

@@ -4,7 +4,12 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from adapters import BaseInstagramClient, InstagramStubClient, InstagramPlaywrightClient
+from adapters import (
+    BaseInstagramClient,
+    InstagramInstagrapiClient,
+    InstagramPlaywrightClient,
+    InstagramStubClient,
+)
 
 _DEFAULT_ENGINE = os.environ.get("INSTAGRAM_ENGINE", "stub").strip().lower() or "stub"
 
@@ -20,6 +25,8 @@ def get_instagram_client(*, account: Optional[dict] = None, engine: Optional[str
     # If OPTIN_ENABLE is on, default to Playwright unless the caller overrides engine
     if os.environ.get("OPTIN_ENABLE", "0") == "1" and selected in {"stub", ""}:
         selected = "playwright"
+    if selected == "instagrapi":
+        return InstagramInstagrapiClient(account=account)
     if selected == "playwright":
         return InstagramPlaywrightClient(account=account)
     # default fallback

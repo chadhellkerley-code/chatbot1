@@ -104,6 +104,7 @@ DEFAULT_PROMPT = "Respondé cordial, breve y como humano."
 PROMPT_KEY = "autoresponder_system_prompt"
 ACTIVE_ALIAS: str | None = None
 MAX_SYSTEM_PROMPT_CHARS = 50000
+_AUTORESPONDER_STUB_WARNED = False
 
 
 def _safe_parse_datetime(*args, **kwargs) -> Optional[datetime]:
@@ -983,6 +984,54 @@ def _normalize_text_for_match(value: str) -> str:
     return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
 
 
+def _safe_unread_count(thread: object) -> Optional[int]:
+    unread = getattr(thread, "unread_count", None)
+    if unread is None:
+        return None
+    try:
+        return int(unread)
+    except Exception:
+        return None
+
+
+def _message_timestamp(msg: object) -> Optional[float]:
+    ts_obj = getattr(msg, "timestamp", None)
+    if isinstance(ts_obj, datetime):
+        return ts_obj.timestamp()
+    try:
+        return float(ts_obj)
+    except Exception:
+        return None
+
+
+def _latest_inbound_message(messages: List[object], client_user_id: object) -> Optional[object]:
+    candidates = [msg for msg in messages if getattr(msg, "user_id", None) != client_user_id]
+    if not candidates:
+        return None
+    scored = []
+    for idx, msg in enumerate(candidates):
+        scored.append((_message_timestamp(msg), idx, msg))
+    if any(score[0] is not None for score in scored):
+        scored.sort(key=lambda item: ((item[0] is not None), item[0] or 0, item[1]))
+        return scored[-1][2]
+    return candidates[-1]
+
+
+def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
+    try:
+        threads = client.direct_threads(selected_filter="unread", amount=amount)
+        if threads:
+            return threads
+    except TypeError:
+        pass
+    except Exception:
+        pass
+    try:
+        return client.direct_threads(amount=amount)
+    except Exception:
+        return []
+
+
 def _contains_token(text: str, token: str) -> bool:
     token = token.strip()
     if not token:
@@ -1059,8 +1108,26 @@ class BotStats:
 
 
 def _client_for(username: str):
+    global _AUTORESPONDER_STUB_WARNED
     account = get_account(username)
-    cl = get_instagram_client(account=account)
+    try:
+        cl = get_instagram_client(account=account, engine="instagrapi")
+    except Exception as exc:
+        logger.warning(
+            "Instagrapi no disponible para auto-responder; usando engine default: %s",
+            exc,
+            exc_info=False,
+        )
+        cl = get_instagram_client(account=account)
+    if (
+        cl.__class__.__name__ == "InstagramStubClient"
+        and not _AUTORESPONDER_STUB_WARNED
+    ):
+        _AUTORESPONDER_STUB_WARNED = True
+        warn(
+            "Auto-responder en modo stub: no se enviaran mensajes reales. "
+            "Configura INSTAGRAM_ENGINE=instagrapi y guarda sesion."
+        )
     binding = None
     try:
         binding = apply_proxy_to_client(cl, username, account, reason="autoresponder")
@@ -3934,22 +4001,26 @@ def _process_inbox(
     system_prompt: str,
     stats: BotStats,
 ) -> None:
-    inbox = client.direct_threads(selected_filter="unread", amount=10)
+    inbox = _fetch_inbox_threads(client, amount=10)
     if not inbox:
         return
     state.setdefault(user, {})
     for thread in inbox:
         if STOP_EVENT.is_set():
             break
-        thread_id = thread.id
+        thread_id = getattr(thread, "id", None) or getattr(thread, "pk", None)
         messages = client.direct_messages(thread_id, amount=10)
         if not messages:
             continue
-        last = messages[0]
-        if last.user_id == client.user_id:
+        unread_count = _safe_unread_count(thread)
+        if unread_count is not None and unread_count <= 0:
+            continue
+        last = _latest_inbound_message(messages, client.user_id)
+        if not last:
             continue
         last_seen = state[user].get(thread_id)
-        if last_seen == last.id:
+        last_id = getattr(last, "id", None)
+        if last_id and last_seen == last_id:
             continue
         convo = "\n".join(
             [
@@ -4000,7 +4071,8 @@ def _process_inbox(
             setattr(exc, "_autoresponder_recipient", recipient_username)
             setattr(exc, "_autoresponder_message_attempt", True)
             raise
-        state[user][thread_id] = last.id
+        if last_id:
+            state[user][thread_id] = last_id
         save_auto_state(state)
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s", user, thread_id)

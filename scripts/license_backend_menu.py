@@ -7,8 +7,11 @@ Se integra con el sistema de menús existente.
 
 from __future__ import annotations
 
+import json
 import os
+import textwrap
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from backend_license_client import LicenseBackendClient
@@ -29,7 +32,70 @@ def _print_license_details(data: dict, title: str = "Detalles de la licencia") -
     print(full_line(color=Fore.GREEN))
     print(style_text(title, color=Fore.GREEN, bold=True))
     print(full_line(color=Fore.GREEN))
-    
+
+
+def _safe_client_folder(name: str) -> str:
+    cleaned = [c if c.isalnum() or c in {" ", "-", "_"} else "_" for c in name]
+    result = "".join(cleaned).strip()
+    return result or "Cliente"
+
+
+def _delivery_root() -> Path:
+    env_override = os.environ.get("DELIVERY_ROOT") or os.environ.get("DESKTOP_DIR")
+    if env_override:
+        candidate = Path(env_override).expanduser()
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    desktop = Path.home() / "Desktop"
+    try:
+        desktop.mkdir(parents=True, exist_ok=True)
+        return desktop
+    except Exception:
+        return Path.home()
+
+
+def _write_license_files(client_name: str, data: dict, backend_url: str) -> Optional[Path]:
+    license_key = str(data.get("license_key") or "").strip()
+    if not license_key:
+        return None
+
+    folder = _delivery_root() / "Clientes" / _safe_client_folder(client_name)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "license_key": license_key,
+        "client_name": client_name,
+        "expires_at": data.get("expires_at"),
+        "customer_id": data.get("customer_id"),
+        "backend_url": backend_url,
+        "mode": "backend",
+    }
+    license_path = folder / "license.json"
+    license_path.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
+    )
+
+    expires = data.get("expires_at") or "-"
+    instructions = textwrap.dedent(
+        f"""
+        Cliente: {client_name}
+        License Key: {license_key}
+        Expira: {expires}
+
+        Como usar:
+        1) Copia el ejecutable unico a una carpeta.
+        2) Copia este archivo license.json en la misma carpeta.
+        3) Abre el ejecutable. Si pide la licencia, ingresa la clave.
+
+        Requiere internet para validar con el backend:
+        {backend_url}
+        """
+    ).strip()
+    instructions_path = folder / "INSTRUCCIONES.txt"
+    instructions_path.write_text(instructions + "\n", encoding="utf-8")
+
+    return folder
+
     if "license_key" in data:
         print(f"{style_text('License Key:', color=Fore.CYAN)} {style_text(data['license_key'], color=Fore.YELLOW, bold=True)}")
     
@@ -151,6 +217,13 @@ def menu_create_license() -> None:
         print(style_text("⚠️  IMPORTANTE: Guardá esta license key de forma segura", color=Fore.YELLOW, bold=True))
         print(style_text("   No se podrá recuperar después", color=Fore.YELLOW))
         print()
+        generate_files = ask("Generar archivo de licencia para el cliente? (s/N): ").strip().lower()
+        if generate_files == "s":
+            folder = _write_license_files(name, data, backend_url)
+            if folder:
+                ok(f"Archivos generados en: {folder}")
+            else:
+                warn("No se pudo generar el archivo de licencia.")
     else:
         print()
         warn(f"Error al crear licencia: {error}")

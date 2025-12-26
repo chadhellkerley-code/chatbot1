@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 def _initial_app_root() -> Path:
@@ -58,6 +58,7 @@ from licensekit import validate_license_payload
 from ui import Fore, banner, full_line, style_text
 
 PAYLOAD_NAME = "storage/license_payload.json"
+_ALT_PAYLOAD_NAME = "license.json"
 
 SESSION_PATTERNS = [
     "session_*.json",
@@ -83,7 +84,51 @@ def _resource_path(relative: str) -> Path:
     return Path(__file__).resolve().parent / relative
 
 
+def _is_truthy(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _remote_only_enabled() -> bool:
+    return _is_truthy(os.environ.get("LICENSE_REMOTE_ONLY"))
+
+
+def _payload_candidates() -> List[Path]:
+    candidates: List[Path] = []
+    env_path = (os.environ.get("LICENSE_FILE") or "").strip()
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    app_root = _get_app_root()
+    candidates.extend(
+        [
+            app_root / _ALT_PAYLOAD_NAME,
+            app_root / "license_payload.json",
+            app_root / PAYLOAD_NAME,
+            app_root / "storage" / _ALT_PAYLOAD_NAME,
+        ]
+    )
+
+    data_root = Path(os.environ.get("APP_DATA_ROOT", str(app_root)))
+    candidates.extend(
+        [
+            data_root / _ALT_PAYLOAD_NAME,
+            data_root / PAYLOAD_NAME,
+            data_root / "storage" / _ALT_PAYLOAD_NAME,
+        ]
+    )
+    return candidates
+
+
 def _load_payload() -> Dict[str, str]:
+    for path in _payload_candidates():
+        if not path.is_file():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
     path = _resource_path(PAYLOAD_NAME)
     if not path.exists():
         return {}
@@ -91,6 +136,35 @@ def _load_payload() -> Dict[str, str]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _resolve_backend_url(payload: Dict[str, str]) -> str:
+    payload_url = str(payload.get("backend_url") or "").strip()
+    if payload_url:
+        return payload_url
+    return str(os.environ.get("BACKEND_URL") or "").strip()
+
+
+def _prompt_license_key(default_key: str) -> str:
+    if default_key:
+        provided = input(
+            "Ingrese su codigo de licencia (Enter para usar el guardado): "
+        ).strip()
+        return provided or default_key
+    return input("Ingrese su codigo de licencia: ").strip()
+
+
+def _activate_remote_license(
+    license_key: str, backend_url: str
+) -> Tuple[bool, Dict, str]:
+    try:
+        from backend_license_client import LicenseBackendClient
+    except Exception as exc:
+        return False, {}, f"Backend client no disponible: {exc}"
+
+    client = LicenseBackendClient(backend_url)
+    success, data, error = client.activate_license(license_key)
+    return success, data or {}, error or ""
 
 
 def _print_section(title: str, *, color: str = Fore.CYAN) -> None:
@@ -267,6 +341,53 @@ def _run_client_integrity_check() -> None:
     print()
 
 
+def _verify_playwright_bundle() -> None:
+    print(full_line(color=Fore.CYAN))
+    print(style_text("Verificacion Playwright", color=Fore.CYAN, bold=True))
+    print(full_line(color=Fore.CYAN))
+    try:
+        import playwright  # noqa: F401
+    except Exception as exc:
+        print(style_text("Playwright: NO DISPONIBLE", color=Fore.RED, bold=True))
+        print(style_text(f"Detalle: {exc}", color=Fore.RED))
+        print(full_line(color=Fore.CYAN))
+        print()
+        return
+
+    browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if not browsers_path:
+        print(style_text("Playwright: OK", color=Fore.GREEN, bold=True))
+        print(style_text("Browsers: NO CONFIGURADOS", color=Fore.YELLOW, bold=True))
+        print(full_line(color=Fore.CYAN))
+        print()
+        return
+
+    candidate = Path(browsers_path)
+    if not candidate.exists():
+        print(style_text("Playwright: OK", color=Fore.GREEN, bold=True))
+        print(style_text("Browsers: NO ENCONTRADOS", color=Fore.RED, bold=True))
+        print(style_text(f"Ruta: {candidate}", color=Fore.YELLOW))
+        print(full_line(color=Fore.CYAN))
+        print()
+        return
+
+    try:
+        folders = [p.name for p in candidate.iterdir() if p.is_dir()]
+    except Exception:
+        folders = []
+
+    print(style_text("Playwright: OK", color=Fore.GREEN, bold=True))
+    print(style_text("Browsers: OK", color=Fore.GREEN, bold=True))
+    if folders:
+        preview = ", ".join(folders[:4])
+        if len(folders) > 4:
+            preview += ", ..."
+        print(style_text(f"Detectados: {preview}", color=Fore.WHITE))
+    print(style_text(f"Ruta: {candidate}", color=Fore.WHITE))
+    print(full_line(color=Fore.CYAN))
+    print()
+
+
 def _ensure_account_record(username: str, accounts: List[Dict]) -> Dict | None:
     """Garantiza que exista un registro básico de cuenta para el usuario."""
 
@@ -426,22 +547,79 @@ def _load_sessions_on_boot() -> Tuple[int, int, List[str]]:
 
 def launch_with_license() -> None:
     payload = _load_payload()
+    backend_url = _resolve_backend_url(payload)
+    remote_only = _remote_only_enabled()
+
+    if remote_only or backend_url:
+        _print_section("Validacion de licencia")
+        if not backend_url:
+            _print_error(
+                "BACKEND_URL no configurado. Configure BACKEND_URL o use un"
+                " archivo de licencia con backend_url."
+            )
+            sys.exit(2)
+        license_key = _prompt_license_key(str(payload.get("license_key") or "").strip())
+        if not license_key:
+            _print_error("Falta la licencia.")
+            sys.exit(2)
+        ok_remote, activation, error = _activate_remote_license(
+            license_key, backend_url
+        )
+        if not ok_remote:
+            _print_error(error or "No se pudo validar la licencia.")
+            sys.exit(2)
+        record = dict(payload or {})
+        record["license_key"] = license_key
+        if not record.get("client_name"):
+            record["client_name"] = "Cliente"
+        if "days_left" in activation:
+            record["days_left"] = activation.get("days_left")
+        if activation.get("expires_at") and not record.get("expires_at"):
+            record["expires_at"] = activation.get("expires_at")
+
+        _prepare_client_environment(record)
+        config.refresh_settings()
+        _load_sessions_on_boot()
+
+        _print_section("Licencia validada", color=Fore.GREEN)
+        client = record.get("client_name", "Cliente")
+        print(style_text(f"Licencia valida para {client}", color=Fore.GREEN, bold=True))
+        expires = record.get("expires_at")
+        if expires:
+            print(style_text(f"Vence: {expires}", color=Fore.GREEN))
+        elif "days_left" in record:
+            print(
+                style_text(
+                    f"Dias restantes: {record['days_left']}", color=Fore.GREEN
+                )
+            )
+        print(full_line(color=Fore.GREEN))
+        print()
+
+        _run_client_integrity_check()
+        _verify_playwright_bundle()
+
+        from app import menu  # import tardio para evitar ciclos
+
+        menu()
+        return
+
     if not payload:
-        _print_section("Validación de licencia", color=Fore.RED)
-        _print_error("No se encontró la licencia incluida en el paquete.")
+        _print_section("Validacion de licencia", color=Fore.RED)
+        _print_error("No se encontro la licencia incluida en el paquete.")
         sys.exit(2)
 
     attempts = 3
     record: Dict[str, str] = {}
-    _print_section("Validación de licencia")
-    print(style_text("Ingresá tu código de licencia para continuar.", color=Fore.WHITE))
+    _print_section("Validacion de licencia")
+    print(style_text("Ingrese su codigo de licencia para continuar.", color=Fore.WHITE))
     print()
     for remaining in range(attempts, 0, -1):
-        provided = input("Ingresá tu código de licencia: ").strip()
+        provided = input("Ingrese su codigo de licencia: ").strip()
         ok, message, record = validate_license_payload(provided, payload)
         if ok:
             break
-        _print_error(message or "Licencia inválida.")
+        _print_error(message or "Licencia invalida.")
         if remaining - 1:
             print(style_text(f"Intentos restantes: {remaining - 1}", color=Fore.YELLOW))
             print()
@@ -454,7 +632,7 @@ def launch_with_license() -> None:
 
     _print_section("Licencia validada", color=Fore.GREEN)
     client = record.get("client_name", "Cliente")
-    print(style_text(f"Licencia válida para {client}", color=Fore.GREEN, bold=True))
+    print(style_text(f"Licencia valida para {client}", color=Fore.GREEN, bold=True))
     expires = record.get("expires_at")
     if expires:
         print(style_text(f"Vence: {expires}", color=Fore.GREEN))
@@ -462,12 +640,11 @@ def launch_with_license() -> None:
     print()
 
     _run_client_integrity_check()
+    _verify_playwright_bundle()
 
-    from app import menu  # import tardío para evitar ciclos
+    from app import menu  # import tardio para evitar ciclos
 
     menu()
 
-
 if __name__ == "__main__":
     launch_with_license()
-
