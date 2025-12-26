@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""FastAPI backend for license creation and activation."""
+"""FastAPI backend for license creation and activation (Postgres)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import secrets
 import string
 from typing import Any, Dict, Optional
 
-import requests
+import psycopg2
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -31,103 +31,74 @@ class ActivateIn(BaseModel):
     client_fingerprint: Optional[str] = None
 
 
-def _get_supabase_credentials() -> tuple[str, str]:
-    url = os.environ.get("SUPABASE_URL", "").strip()
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-    if not key:
-        key = os.environ.get("SUPABASE_KEY", "").strip()
-    if not url or not key:
-        raise HTTPException(status_code=500, detail="Supabase credentials missing.")
-    return url, key
+SCHEMA_SQL = [
+    "CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";",
+    "CREATE TABLE IF NOT EXISTS customers ("
+    "    id uuid primary key default gen_random_uuid(),"
+    "    name text not null,"
+    "    email text null,"
+    "    created_at timestamptz not null default now(),"
+    "    constraint customers_email_unique unique (email)"
+    " );",
+    "CREATE TABLE IF NOT EXISTS licenses ("
+    "    id uuid primary key default gen_random_uuid(),"
+    "    customer_id uuid not null references customers (id) on delete cascade,"
+    "    license_key_hash text not null unique,"
+    "    is_active boolean not null default true,"
+    "    created_at timestamptz not null default now(),"
+    "    expires_at timestamptz not null,"
+    "    last_seen_at timestamptz null,"
+    "    notes text null"
+    " );",
+    "CREATE TABLE IF NOT EXISTS license_activations ("
+    "    id uuid primary key default gen_random_uuid(),"
+    "    license_id uuid not null references licenses (id) on delete cascade,"
+    "    activated_at timestamptz not null default now(),"
+    "    client_fingerprint text null,"
+    "    ip text null,"
+    "    user_agent text null"
+    " );",
+]
 
 
-def _hash_license_key(license_key: str, secret: str) -> str:
-    payload = f"{secret}:{license_key}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+def _database_url() -> str:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise HTTPException(status_code=500, detail="Database not configured.")
+    return url
+
+
+def _get_conn():
+    try:
+        return psycopg2.connect(_database_url())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _ensure_schema() -> None:
+    conn = _get_conn()
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            for stmt in SCHEMA_SQL:
+                cur.execute(stmt)
+    finally:
+        conn.close()
 
 
 def _license_secret() -> str:
     secret = os.environ.get("LICENSE_HASH_SECRET", "").strip()
     if secret:
         return secret
-    _, key = _get_supabase_credentials()
-    return key
+    admin_token = os.environ.get("ADMIN_TOKEN", "").strip()
+    if admin_token:
+        return admin_token
+    raise HTTPException(status_code=500, detail="LICENSE_HASH_SECRET missing.")
 
 
-def _supabase_request(
-    method: str,
-    url: str,
-    key: str,
-    endpoint: str,
-    *,
-    params: Optional[Dict[str, str]] = None,
-    payload: Optional[Dict[str, Any]] = None,
-    prefer_return: bool = False,
-) -> Any:
-    base = url.rstrip("/") + "/rest/v1/"
-    headers = {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Accept": "application/json",
-    }
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-    if prefer_return:
-        headers["Prefer"] = "return=representation"
-
-    try:
-        response = requests.request(
-            method,
-            base + endpoint.lstrip("/"),
-            headers=headers,
-            params=params,
-            json=payload,
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    if response.status_code >= 400:
-        try:
-            detail = response.json()
-        except Exception:
-            detail = response.text
-        raise HTTPException(
-            status_code=500, detail=f"Supabase error {response.status_code}: {detail}"
-        )
-
-    if not response.text:
-        return None
-    try:
-        return response.json()
-    except Exception:
-        return response.text
-
-
-def _select_one(
-    table: str, filters: Dict[str, str], *, select: str = "*"
-) -> Optional[Dict[str, Any]]:
-    url, key = _get_supabase_credentials()
-    params = {"select": select, **filters, "limit": "1"}
-    data = _supabase_request("GET", url, key, table, params=params)
-    if isinstance(data, list) and data:
-        return data[0]
-    return None
-
-
-def _insert_row(table: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    url, key = _get_supabase_credentials()
-    data = _supabase_request(
-        "POST", url, key, table, payload=payload, prefer_return=True
-    )
-    if isinstance(data, list) and data:
-        return data[0]
-    return None
-
-
-def _update_rows(table: str, filters: Dict[str, str], payload: Dict[str, Any]) -> None:
-    url, key = _get_supabase_credentials()
-    _supabase_request("PATCH", url, key, table, params=filters, payload=payload)
+def _hash_license_key(license_key: str, secret: str) -> str:
+    payload = f"{secret}:{license_key}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _generate_license_key(length: int = 20) -> str:
@@ -140,6 +111,18 @@ def _parse_iso(value: str) -> Optional[dt.datetime]:
         return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def _is_expired(expires_at: Optional[str]) -> bool:
+    if not expires_at:
+        return False
+    parsed = _parse_iso(expires_at)
+    if not parsed:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    now = dt.datetime.now(dt.timezone.utc)
+    return parsed < now
 
 
 def _days_left(expires_at: Optional[str]) -> int:
@@ -155,62 +138,67 @@ def _days_left(expires_at: Optional[str]) -> int:
     return max(0, int(delta.total_seconds() // 86400))
 
 
-def _is_expired(expires_at: Optional[str]) -> bool:
-    if not expires_at:
-        return False
-    parsed = _parse_iso(expires_at)
-    if not parsed:
-        return False
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    now = dt.datetime.now(dt.timezone.utc)
-    return parsed < now
+def _fetchone(cur) -> Optional[Dict[str, Any]]:
+    row = cur.fetchone()
+    if not row:
+        return None
+    columns = [desc[0] for desc in cur.description]
+    return dict(zip(columns, row))
 
 
-def _get_or_create_customer(name: str, email: Optional[str]) -> str:
-    if email:
-        existing = _select_one("customers", {"email": f"eq.{email}"}, select="id")
-        if existing and existing.get("id"):
-            return str(existing["id"])
+def _get_or_create_customer(conn, name: str, email: Optional[str]) -> str:
+    with conn.cursor() as cur:
+        if email:
+            cur.execute("SELECT id FROM customers WHERE email = %s LIMIT 1", (email,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0])
+        cur.execute("INSERT INTO customers (name, email) VALUES (%s, %s) RETURNING id", (name, email))
+        new_id = cur.fetchone()[0]
+        return str(new_id)
 
-    payload: Dict[str, Any] = {"name": name}
-    if email:
-        payload["email"] = email
-    row = _insert_row("customers", payload)
-    if not row or not row.get("id"):
-        raise HTTPException(status_code=500, detail="Failed to create customer.")
-    return str(row["id"])
+
+@app.on_event("startup")
+def _startup() -> None:
+    _ensure_schema()
 
 
 @app.get("/health")
-def health() -> Dict[str, bool]:
-    return {"ok": True}
+def health() -> Dict[str, str]:
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+    finally:
+        conn.close()
+    return {"status": "ok", "backend": "postgres", "version": "no-supabase"}
 
 
 @app.post("/admin/licenses")
-def create_license(
-    payload: CreateLicenseIn, x_admin_token: Optional[str] = Header(default=None)
-) -> Dict[str, Any]:
+def create_license(payload: CreateLicenseIn, x_admin_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     admin_token = os.environ.get("ADMIN_TOKEN", "").strip()
     if not admin_token or x_admin_token != admin_token:
         raise HTTPException(status_code=403, detail="Invalid admin token.")
 
     issued = dt.datetime.now(dt.timezone.utc)
     expires_at = issued + dt.timedelta(days=payload.days)
-
     license_key = _generate_license_key()
     license_hash = _hash_license_key(license_key, _license_secret())
-    customer_id = _get_or_create_customer(payload.name, payload.email)
 
-    _insert_row(
-        "licenses",
-        {
-            "customer_id": customer_id,
-            "license_key_hash": license_hash,
-            "is_active": True,
-            "expires_at": expires_at.isoformat(),
-        },
-    )
+    conn = _get_conn()
+    try:
+        with conn:
+            customer_id = _get_or_create_customer(conn, payload.name, payload.email)
+            with conn.cursor() as cur:
+                cur.execute("
+                    INSERT INTO licenses (customer_id, license_key_hash, is_active, expires_at)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                ", (customer_id, license_hash, True, expires_at.isoformat()))
+                cur.fetchone()
+    finally:
+        conn.close()
 
     return {
         "license_key": license_key,
@@ -226,40 +214,42 @@ def activate_license(payload: ActivateIn, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="License key required.")
 
     license_hash = _hash_license_key(license_key, _license_secret())
-    record = _select_one(
-        "licenses",
-        {"license_key_hash": f"eq.{license_hash}"},
-        select="id,customer_id,is_active,expires_at",
-    )
-    if not record:
-        raise HTTPException(status_code=403, detail="Invalid license.")
-    if not record.get("is_active", True):
-        raise HTTPException(status_code=403, detail="License inactive.")
 
-    expires_at = record.get("expires_at")
-    if _is_expired(expires_at):
-        raise HTTPException(status_code=403, detail="License expired.")
+    conn = _get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("
+                    SELECT id, customer_id, is_active, expires_at
+                    FROM licenses
+                    WHERE license_key_hash = %s
+                    LIMIT 1
+                ", (license_hash,))
+                record = _fetchone(cur)
+                if not record:
+                    raise HTTPException(status_code=403, detail="Invalid license.")
+                if not record.get("is_active", True):
+                    raise HTTPException(status_code=403, detail="License inactive.")
+                expires_at = record.get("expires_at")
+                if _is_expired(expires_at):
+                    raise HTTPException(status_code=403, detail="License expired.")
 
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    _update_rows(
-        "licenses",
-        {"license_key_hash": f"eq.{license_hash}"},
-        {"last_seen_at": now},
-    )
+                cur.execute("UPDATE licenses SET last_seen_at = %s WHERE id = %s", (dt.datetime.now(dt.timezone.utc), record.get("id")))
+                cur.execute("
+                    INSERT INTO license_activations (license_id, client_fingerprint, ip, user_agent)
+                    VALUES (%s, %s, %s, %s)
+                ", (
+                    record.get("id"),
+                    payload.client_fingerprint,
+                    request.client.host if request.client else None,
+                    request.headers.get("user-agent"),
+                ))
 
-    _insert_row(
-        "license_activations",
-        {
-            "license_id": record.get("id"),
-            "client_fingerprint": payload.client_fingerprint,
-            "ip": request.client.host if request.client else None,
-            "user_agent": request.headers.get("user-agent"),
-        },
-    )
-
-    return {
-        "ok": True,
-        "days_left": _days_left(expires_at),
-        "customer_id": record.get("customer_id"),
-        "expires_at": expires_at,
-    }
+                return {
+                    "ok": True,
+                    "days_left": _days_left(expires_at),
+                    "customer_id": record.get("customer_id"),
+                    "expires_at": expires_at,
+                }
+    finally:
+        conn.close()
