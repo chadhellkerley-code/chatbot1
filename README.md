@@ -11,6 +11,9 @@ Sistema de automatizaciÃ³n para Instagram con gestiÃ³n de cuentas, leads, me
 # 2. Instalar dependencias
 pip install -r requirements.txt
 
+# Solo para generar el ejecutable en tu PC (no usar en Railway)
+pip install -r requirements_build.txt
+
 # 3. Ejecutar aplicaciÃ³n
 python app.py
 ```
