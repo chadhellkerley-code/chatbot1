@@ -102,7 +102,7 @@ class LicenseBackendClient:
                 timeout=self.timeout
             )
             
-            if response.status_code == 200:
+            if response.status_code in (200, 201):
                 data = response.json()
                 return True, data, None
             
