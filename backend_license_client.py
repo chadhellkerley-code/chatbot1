@@ -35,11 +35,21 @@ class LicenseBackendClient:
         self.backend_url = (backend_url or os.getenv("BACKEND_URL", "http://localhost:8000")).rstrip("/")
         self.admin_token = admin_token or os.getenv("ADMIN_TOKEN")
         self.timeout = 15
+
+    def _response_detail(self, response: requests.Response) -> str:
+        text = (response.text or "").strip()
+        if text:
+            return text
+        try:
+            payload = response.json()
+        except ValueError:
+            return ""
+        return str(payload)
     
     def health_check(self) -> Tuple[bool, Optional[str]]:
         """
-        Verifica que el backend esté disponible.
-        
+        Verifica que el backend este disponible.
+
         Returns:
             (success, error_message)
         """
@@ -48,18 +58,31 @@ class LicenseBackendClient:
                 f"{self.backend_url}/health",
                 timeout=self.timeout
             )
-            
+
             if response.status_code == 200:
-                data = response.json()
-                if data.get("ok"):
+                try:
+                    data = response.json()
+                except ValueError:
+                    return False, f"Respuesta invalida (no JSON). Status 200: {response.text}"
+                is_ok = False
+                if isinstance(data, dict):
+                    status_value = str(data.get("status", "")).lower()
+                    is_ok = bool(data.get("ok")) or status_value == "ok"
+                if is_ok:
                     return True, None
-                return False, "Backend respondió pero no está OK"
-            
-            return False, f"Backend respondió con código {response.status_code}"
-            
+                detail = data.get("detail") if isinstance(data, dict) else data
+                return False, f"Backend respondio pero no esta OK: {detail}"
+
+            detail = self._response_detail(response)
+            return False, f"Backend respondio con codigo {response.status_code}: {detail}"
+
+        except requests.Timeout:
+            return False, "Error de conexion: timeout"
+        except requests.ConnectionError:
+            return False, "Error de conexion: no se pudo conectar"
         except requests.RequestException as e:
-            return False, f"Error de conexión: {str(e)}"
-    
+            return False, f"Error de conexion: {str(e)}"
+
     def create_license(
         self,
         name: str,
@@ -68,29 +91,29 @@ class LicenseBackendClient:
     ) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """
         Crea una nueva licencia (requiere permisos de admin).
-        
+
         Args:
             name: Nombre del cliente
-            days: Días de validez (mínimo 30)
+            days: Dias de validez (minimo 30)
             email: Email del cliente (opcional)
-        
+
         Returns:
             (success, license_data, error_message)
         """
         if not self.admin_token:
             return False, None, "ADMIN_TOKEN no configurado"
-        
+
         if days < 30:
-            return False, None, "La duración mínima es 30 días"
-        
+            return False, None, "La duracion minima es 30 dias"
+
         payload = {
             "name": name,
             "days": days
         }
-        
+
         if email:
             payload["email"] = email
-        
+
         try:
             response = requests.post(
                 f"{self.backend_url}/admin/licenses",
@@ -101,23 +124,34 @@ class LicenseBackendClient:
                 },
                 timeout=self.timeout
             )
-            
+
             if response.status_code in (200, 201):
-                data = response.json()
+                try:
+                    data = response.json()
+                except ValueError:
+                    return False, None, (
+                        f"Respuesta invalida (no JSON). "
+                        f"Status {response.status_code}: {response.text}"
+                    )
                 return True, data, None
-            
-            error_detail = response.text
-            try:
-                error_json = response.json()
-                error_detail = error_json.get("detail", error_detail)
-            except:
-                pass
-            
-            return False, None, f"Error {response.status_code}: {error_detail}"
-            
+
+            status = response.status_code
+            detail = self._response_detail(response)
+            if status in (401, 403):
+                return False, None, f"Token invalido (Error {status}): {detail}"
+            if status == 422:
+                return False, None, f"Payload invalido (Error 422): {detail}"
+            if status >= 500:
+                return False, None, f"Error del servidor (Error {status}): {detail}"
+            return False, None, f"Error {status}: {detail}"
+
+        except requests.Timeout:
+            return False, None, "Error de conexion: timeout"
+        except requests.ConnectionError:
+            return False, None, "Error de conexion: no se pudo conectar"
         except requests.RequestException as e:
-            return False, None, f"Error de conexión: {str(e)}"
-    
+            return False, None, f"Error de conexion: {str(e)}"
+
     def activate_license(
         self,
         license_key: str,

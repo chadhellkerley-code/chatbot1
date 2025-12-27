@@ -1089,7 +1089,7 @@ def _create_backend_license_and_files() -> None:
     print(style_text("Creando licencia...", color=Fore.CYAN))
     success, data, error = client.create_license(name, days, email)
     if not success or not data:
-        warn(f"Error al crear licencia: {error or 'sin detalle'}")
+        warn(f"Error backend: {error or 'sin detalle'}")
         press_enter()
         return
 
