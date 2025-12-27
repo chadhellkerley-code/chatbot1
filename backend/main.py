@@ -32,32 +32,40 @@ class ActivateIn(BaseModel):
 
 
 SCHEMA_SQL = [
-    "CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";",
-    "CREATE TABLE IF NOT EXISTS customers ("
-    "    id uuid primary key default gen_random_uuid(),"
-    "    name text not null,"
-    "    email text null,"
-    "    created_at timestamptz not null default now(),"
-    "    constraint customers_email_unique unique (email)"
-    " );",
-    "CREATE TABLE IF NOT EXISTS licenses ("
-    "    id uuid primary key default gen_random_uuid(),"
-    "    customer_id uuid not null references customers (id) on delete cascade,"
-    "    license_key_hash text not null unique,"
-    "    is_active boolean not null default true,"
-    "    created_at timestamptz not null default now(),"
-    "    expires_at timestamptz not null,"
-    "    last_seen_at timestamptz null,"
-    "    notes text null"
-    " );",
-    "CREATE TABLE IF NOT EXISTS license_activations ("
-    "    id uuid primary key default gen_random_uuid(),"
-    "    license_id uuid not null references licenses (id) on delete cascade,"
-    "    activated_at timestamptz not null default now(),"
-    "    client_fingerprint text null,"
-    "    ip text null,"
-    "    user_agent text null"
-    " );",
+    """
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    """.strip(),
+    """
+    CREATE TABLE IF NOT EXISTS customers (
+        id uuid primary key default gen_random_uuid(),
+        name text not null,
+        email text null,
+        created_at timestamptz not null default now(),
+        constraint customers_email_unique unique (email)
+    );
+    """.strip(),
+    """
+    CREATE TABLE IF NOT EXISTS licenses (
+        id uuid primary key default gen_random_uuid(),
+        customer_id uuid not null references customers (id) on delete cascade,
+        license_key_hash text not null unique,
+        is_active boolean not null default true,
+        created_at timestamptz not null default now(),
+        expires_at timestamptz not null,
+        last_seen_at timestamptz null,
+        notes text null
+    );
+    """.strip(),
+    """
+    CREATE TABLE IF NOT EXISTS license_activations (
+        id uuid primary key default gen_random_uuid(),
+        license_id uuid not null references licenses (id) on delete cascade,
+        activated_at timestamptz not null default now(),
+        client_fingerprint text null,
+        ip text null,
+        user_agent text null
+    );
+    """.strip(),
 ]
 
 
@@ -191,11 +199,14 @@ def create_license(payload: CreateLicenseIn, x_admin_token: Optional[str] = Head
         with conn:
             customer_id = _get_or_create_customer(conn, payload.name, payload.email)
             with conn.cursor() as cur:
-                cur.execute("
+                cur.execute(
+                    """
                     INSERT INTO licenses (customer_id, license_key_hash, is_active, expires_at)
                     VALUES (%s, %s, %s, %s)
                     RETURNING id
-                ", (customer_id, license_hash, True, expires_at.isoformat()))
+                    """,
+                    (customer_id, license_hash, True, expires_at.isoformat()),
+                )
                 cur.fetchone()
     finally:
         conn.close()
@@ -219,12 +230,15 @@ def activate_license(payload: ActivateIn, request: Request) -> Dict[str, Any]:
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("
+                cur.execute(
+                    """
                     SELECT id, customer_id, is_active, expires_at
                     FROM licenses
                     WHERE license_key_hash = %s
                     LIMIT 1
-                ", (license_hash,))
+                    """,
+                    (license_hash,),
+                )
                 record = _fetchone(cur)
                 if not record:
                     raise HTTPException(status_code=403, detail="Invalid license.")
@@ -235,15 +249,18 @@ def activate_license(payload: ActivateIn, request: Request) -> Dict[str, Any]:
                     raise HTTPException(status_code=403, detail="License expired.")
 
                 cur.execute("UPDATE licenses SET last_seen_at = %s WHERE id = %s", (dt.datetime.now(dt.timezone.utc), record.get("id")))
-                cur.execute("
+                cur.execute(
+                    """
                     INSERT INTO license_activations (license_id, client_fingerprint, ip, user_agent)
                     VALUES (%s, %s, %s, %s)
-                ", (
-                    record.get("id"),
-                    payload.client_fingerprint,
-                    request.client.host if request.client else None,
-                    request.headers.get("user-agent"),
-                ))
+                    """,
+                    (
+                        record.get("id"),
+                        payload.client_fingerprint,
+                        request.client.host if request.client else None,
+                        request.headers.get("user-agent"),
+                    ),
+                )
 
                 return {
                     "ok": True,
