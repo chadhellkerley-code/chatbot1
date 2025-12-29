@@ -27,6 +27,10 @@ except Exception as e:
     print("Instala dependencias: pip install playwright pyotp && playwright install")
     print("Verifica que existan los archivos src/__init__.py y src/auth/__init__.py")
 
+IMPORT_ERRORS = {}
+
+
+
 # --- BEGIN OPT-IN HOOK ---
 
 
@@ -122,9 +126,23 @@ def _safe_import(name, handler=None):
     except Exception as e:
         warn(f"Modulo no disponible o con error: {name} ({e})")
         print(f"[IMPORT] module={name} handler={handler}")
-        print(traceback.format_exc())
+        tb = traceback.format_exc()
+        print(tb)
+        IMPORT_ERRORS[name] = {"handler": handler, "error": str(e), "traceback": tb}
         return None
 
+
+
+OPTION_MODULE_MAP = {
+    "1": ("accounts", "menu_accounts"),
+    "2": ("leads", "menu_leads"),
+    "3": ("ig", "menu_send_rotating"),
+    "4": ("storage", "menu_logs"),
+    "5": ("responder", "menu_autoresponder"),
+    "6": ("state_view", "menu_conversation_state"),
+    "7": ("whatsapp", "menu_whatsapp"),
+    "8": ("licensekit", "menu_deliver"),
+}
 
 
 accounts = _safe_import("accounts", "menu_accounts")
@@ -237,8 +255,16 @@ def menu():
             time.sleep(0.3)
             break
         else:
-            warn("Opción inválida o módulo faltante.")
+            warn("Opcion invalida o modulo faltante.")
+            info = OPTION_MODULE_MAP.get(op)
+            if info:
+                mod_name, handler = info
+                detail = IMPORT_ERRORS.get(mod_name)
+                if detail:
+                    print(f"[IMPORT] module={mod_name} handler={handler}")
+                    print(detail.get("traceback", ""))
             press_enter()
+
 
 
 if __name__ == "__main__":
