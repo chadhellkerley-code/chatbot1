@@ -5,8 +5,7 @@ from pathlib import Path
 from paths import runtime_base
 from typing import Optional, Tuple, Union
 
-from playwright.async_api import BrowserContext as AsyncBrowserContext, Page as AsyncPage, async_playwright
-from playwright.sync_api import Browser, BrowserContext, Playwright, sync_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 # Carpeta donde se guardan las sesiones persistentes (cookies, localStorage, etc.)
 # IMPORTANTE: cuando la app se ejecuta desde un ejecutable o script empaquetado,
@@ -14,6 +13,10 @@ from playwright.sync_api import Browser, BrowserContext, Playwright, sync_playwr
 # relativamente a un directorio base configurable (APP_DATA_ROOT) o, en su defecto,
 # al directorio del proyecto para garantizar la persistencia.
 _BASE_ROOT = runtime_base(Path(__file__).resolve().parent.parent)
+if not os.getenv("PLAYWRIGHT_BROWSERS_PATH"):
+    local_browsers = _BASE_ROOT / "ms-playwright"
+    if local_browsers.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(local_browsers)
 _profiles_env = os.getenv("PROFILES_DIR")
 if _profiles_env:
     _profiles_path = Path(_profiles_env).expanduser()
@@ -64,20 +67,20 @@ class PlaywrightService:
     def playwright(self) -> Optional[Playwright]:
         return self._playwright
 
-    def start(self) -> "PlaywrightService":
+    async def start(self) -> "PlaywrightService":
         if self._playwright is not None:
             return self
 
         self._base_profiles.mkdir(parents=True, exist_ok=True)
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(
             headless=self._headless,
             slow_mo=120,
             args=DEFAULT_ARGS,
         )
         return self
 
-    def new_context_for_account(
+    async def new_context_for_account(
         self,
         profile_dir: Union[str, Path],
         storage_state: Optional[Union[str, Path]] = None,
@@ -93,7 +96,7 @@ class PlaywrightService:
         if storage_state:
             storage_state_path = str(storage_state)
 
-        ctx = self._browser.new_context(
+        ctx = await self._browser.new_context(
             storage_state=storage_state_path,
             proxy=proxy or None,
             viewport=DEFAULT_VIEWPORT,
@@ -106,29 +109,29 @@ class PlaywrightService:
         ctx.set_default_timeout(30_000)
         return ctx
 
-    def save_storage_state(
+    async def save_storage_state(
         self,
         ctx: BrowserContext,
         destination: Union[str, Path],
     ) -> Path:
         dest = Path(destination)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        ctx.storage_state(path=str(dest))
+        await ctx.storage_state(path=str(dest))
         return dest
 
-    def close(self) -> None:
+    async def close(self) -> None:
         browser, playwright = self._browser, self._playwright
         self._browser = None
         self._playwright = None
         try:
             if browser is not None:
-                browser.close()
+                await browser.close()
         finally:
             if playwright is not None:
-                playwright.stop()
+                await playwright.stop()
 
 
-def launch_persistent(
+async def launch_persistent(
     account_id: str,
     proxy: Optional[dict] = None,
     headful: Optional[bool] = None,
@@ -146,8 +149,8 @@ def launch_persistent(
     if headful is None:
         headful = os.getenv("HUMAN_HEADFUL", "true").lower() == "true"
 
-    pw = sync_playwright().start()
-    ctx = pw.chromium.launch_persistent_context(
+    pw = await async_playwright().start()
+    ctx = await pw.chromium.launch_persistent_context(
         user_data_dir=str(user_data_dir),
         headless=not headful,
         proxy=proxy or None,
@@ -162,9 +165,9 @@ def launch_persistent(
     return pw, ctx
 
 
-def get_page(ctx: BrowserContext):
+async def get_page(ctx: BrowserContext) -> Page:
     """Devuelve la primera página abierta o crea una nueva."""
-    return ctx.pages[0] if ctx.pages else ctx.new_page()
+    return ctx.pages[0] if ctx.pages else await ctx.new_page()
 
 
 async def ensure_context(
@@ -173,7 +176,7 @@ async def ensure_context(
     headful: bool = True,
     lang: Optional[str] = None,
     proxy: Optional[dict] = None,
-) -> Tuple[AsyncBrowserHandle, AsyncBrowserContext, AsyncPage]:
+) -> Tuple[AsyncBrowserHandle, BrowserContext, Page]:
     """
     Crea (o reutiliza) un perfil persistente para la cuenta y devuelve browser/context/page async.
     """
@@ -185,7 +188,7 @@ async def ensure_context(
     args = [arg for arg in DEFAULT_ARGS if not arg.startswith("--lang=")]
     args.append(f"--lang={locale}")
 
-    context: AsyncBrowserContext = await runtime.chromium.launch_persistent_context(
+    context: BrowserContext = await runtime.chromium.launch_persistent_context(
         user_data_dir=str(profile_dir),
         headless=not headful,
         proxy=proxy,
@@ -196,22 +199,22 @@ async def ensure_context(
         args=args,
     )
     context.set_default_timeout(30_000)
-    page: AsyncPage = context.pages[0] if context.pages else await context.new_page()
+    page: Page = context.pages[0] if context.pages else await context.new_page()
     return AsyncBrowserHandle(runtime), context, page
 
 
-def shutdown(pw_or_service: Union[Playwright, PlaywrightService], ctx: Optional[BrowserContext]):
+async def shutdown(pw_or_service: Union[Playwright, PlaywrightService], ctx: Optional[BrowserContext]):
     """
     Cierra el contexto y el runtime de Playwright con seguridad.
     Acepta tanto la API vieja (Playwright) como la nueva (PlaywrightService).
     """
     if ctx is not None:
         try:
-            ctx.close()
+            await ctx.close()
         except Exception:
             pass
 
     if isinstance(pw_or_service, PlaywrightService):
-        pw_or_service.close()
+        await pw_or_service.close()
     else:
-        pw_or_service.stop()
+        await pw_or_service.stop()

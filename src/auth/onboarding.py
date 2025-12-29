@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import csv
 import getpass
 import io
@@ -46,6 +47,14 @@ EXPECTED_ORDER = [
     "proxy_user",
     "proxy_pass",
 ]
+
+
+def _run_async(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("login_and_persist requiere contexto sync; usa login_and_persist_async.")
 
 
 def smart_open_csv(csv_path: Union[str, Path]) -> str:
@@ -258,7 +267,7 @@ def _profile_path_for(username: str, profile_root: Union[str, Path]) -> Path:
     return root / username / "storage_state.json"
 
 
-def login_and_persist(
+async def login_and_persist_async(
     account: AccountPayload,
     *,
     headless: bool = True,
@@ -322,13 +331,13 @@ def login_and_persist(
     svc: Optional[PlaywrightService] = None
     ctx = page = None
     try:
-        svc, ctx, page = ensure_logged_in(
+        svc, ctx, page = await ensure_logged_in(
             payload,
             headless=headless,
             profile_root=profile_root,
             proxy=proxy_payload,
         )
-        if is_logged_in(page):
+        if await is_logged_in(page):
             storage_path = str(_profile_path_for(username, profile_root))
             return {
                 "username": username,
@@ -359,7 +368,25 @@ def login_and_persist(
         }
     finally:
         if svc:
-            shutdown(svc, ctx)
+            await shutdown(svc, ctx)
+
+
+def login_and_persist(
+    account: AccountPayload,
+    *,
+    headless: bool = True,
+    profile_root: Union[str, Path] = _DEFAULT_PROFILE_ROOT,
+) -> Dict[str, str]:
+    """
+    Wrapper sync para login_and_persist_async (evita usar Playwright sync API).
+    """
+    return _run_async(
+        login_and_persist_async(
+            account,
+            headless=headless,
+            profile_root=profile_root,
+        )
+    )
 
 
 def _write_results_file(rows: List[OnboardingResult]) -> None:
@@ -483,5 +510,6 @@ __all__ = [
     "build_proxy",
     "code_provider_prompt",
     "login_and_persist",
+    "login_and_persist_async",
     "onboard_accounts_from_csv",
 ]

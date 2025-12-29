@@ -7,7 +7,7 @@ import logging
 import random
 import hashlib
 from typing import Dict, Any, Optional
-from playwright.sync_api import BrowserContext, Page
+from playwright.async_api import BrowserContext, Page
 from pathlib import Path
 import json
 
@@ -107,7 +107,7 @@ class FingerprintManager:
         }
 
 
-def apply_stealth(context: BrowserContext, fingerprint: Dict[str, Any]) -> None:
+async def apply_stealth(context: BrowserContext, fingerprint: Dict[str, Any]) -> None:
     """
     Aplica técnicas de stealth al contexto de Playwright.
     
@@ -121,7 +121,7 @@ def apply_stealth(context: BrowserContext, fingerprint: Dict[str, Any]) -> None:
     """
     
     # Inyectar scripts de stealth en cada página nueva
-    context.add_init_script("""
+    await context.add_init_script("""
         // Ocultar webdriver
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined
@@ -167,7 +167,7 @@ def apply_stealth(context: BrowserContext, fingerprint: Dict[str, Any]) -> None:
             return getParameter.apply(this, arguments);
         }};
     """
-    context.add_init_script(webgl_script)
+    await context.add_init_script(webgl_script)
     
     # Canvas fingerprinting (básico)
     canvas_script = """
@@ -186,10 +186,10 @@ def apply_stealth(context: BrowserContext, fingerprint: Dict[str, Any]) -> None:
             return originalToDataURL.apply(this, arguments);
         };
     """
-    context.add_init_script(canvas_script)
+    await context.add_init_script(canvas_script)
     
     # Battery API (evitar detección)
-    context.add_init_script("""
+    await context.add_init_script("""
         if ('getBattery' in navigator) {
             navigator.getBattery = () => Promise.resolve({
                 charging: true,
@@ -199,12 +199,12 @@ def apply_stealth(context: BrowserContext, fingerprint: Dict[str, Any]) -> None:
             });
         }
     """
-)
+    )
     
     logger.debug(f"Stealth applied: {fingerprint.get('user_agent', 'unknown')}")
 
 
-def configure_browser_context(
+async def configure_browser_context(
     context: BrowserContext,
     username: str,
     proxy: Optional[Dict] = None,
@@ -222,10 +222,10 @@ def configure_browser_context(
     fingerprint = fp_manager.load_or_create(username)
     
     # Aplicar stealth
-    apply_stealth(context, fingerprint)
+    await apply_stealth(context, fingerprint)
     
     # Configurar permisos
-    context.grant_permissions(['notifications', 'geolocation'])
+    await context.grant_permissions(['notifications', 'geolocation'])
     
     # Configurar geolocation (basado en timezone)
     # Coordenadas aproximadas según timezone
@@ -240,10 +240,10 @@ def configure_browser_context(
     timezone = fingerprint.get('timezone', 'America/Argentina/Buenos_Aires')
     coords = geo_coords.get(timezone, geo_coords['America/Argentina/Buenos_Aires'])
     
-    context.set_geolocation(coords)
+    await context.set_geolocation(coords)
     
     # Configurar extra headers (anti-fingerprinting)
-    context.set_extra_http_headers({
+    await context.set_extra_http_headers({
         'Accept-Language': f"{fingerprint.get('locale', 'es-AR')},es;q=0.9,en;q=0.8",
         'Accept-Encoding': 'gzip, deflate, br',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -255,7 +255,7 @@ def configure_browser_context(
     logger.info(f"Browser context configured for @{username} with fingerprint")
 
 
-def add_human_behavior(page: Page) -> None:
+async def add_human_behavior(page: Page) -> None:
     """
     Añade comportamientos humanos a la página.
     - Mouse movements aleatorios
@@ -264,7 +264,7 @@ def add_human_behavior(page: Page) -> None:
     """
     
     # Script para movimientos de mouse aleatorios
-    page.evaluate("""
+    await page.evaluate("""
         () => {
             let mouseX = 0;
             let mouseY = 0;

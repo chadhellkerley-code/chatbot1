@@ -7,7 +7,8 @@ import sys
 from typing import Iterable, Optional
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import TimeoutError as PWTimeoutError
+
+PWTimeoutError = PlaywrightTimeoutError
 
 # ensure imports resolve when executing module directly
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -24,7 +25,7 @@ from src.actions.direct_helpers import (
     _snap,
 )
 from src.auth.persistent_login import ensure_logged_in
-from src.humanizer import type_text, random_wait, human_type, human_click, human_wait
+from src.humanizer import human_type, human_wait, type_text, random_wait
 from src.playwright_service import shutdown
 
 logger = logging.getLogger(__name__)
@@ -135,35 +136,36 @@ async def send_dm_to_user(
 
 
 # --------------------------------------------------------------------------- #
-# Legacy sync helper (preserved for backwards compatibility)                  #
+# Compatibility helper (async)                                                #
 # --------------------------------------------------------------------------- #
 
-def _find_message_box(page):
+async def _find_message_box(page):
     composer_selector = SELECTORS["composer"]
     locator = page.locator(composer_selector)
-    if locator.count():
+    if await locator.count():
         return locator
-    if page.locator("textarea").count():
+    if await page.locator("textarea").count():
         return page.locator("textarea")
     return page.locator("div[contenteditable='true']")
 
 
-def _first_present(page, selectors: list[str], timeout_each=5000):
+async def _first_present(page, selectors: list[str], timeout_each=5000):
     """Devuelve el primer locator que aparece de la lista."""
     for sel in selectors:
         try:
-            page.wait_for_selector(sel, timeout=timeout_each)
+            await page.wait_for_selector(sel, timeout=timeout_each)
             return page.locator(sel)
-        except PWTimeoutError:
+        except PlaywrightTimeoutError:
             continue
     raise PWTimeoutError(f"Ninguno de los selectores apareció: {selectors}")
 
 
-def send_message(account: dict, to_username: str, message: str, headful: Optional[bool] = None) -> None:
-    """Legacy synchronous helper still used by adapter flows."""
-    pw, ctx, page = ensure_logged_in(account)
+async def send_message(account: dict, to_username: str, message: str, headful: Optional[bool] = None) -> None:
+    """Compat async helper still used by adapter flows."""
+    headless = False if headful is None else not headful
+    pw, ctx, page = await ensure_logged_in(account, headless=headless)
     try:
-        page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded")
+        await page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded")
         new_btn_candidates = [
             "a[href='/direct/new/']",
             "div[role='button']:has-text('Nuevo mensaje')",
@@ -175,18 +177,18 @@ def send_message(account: dict, to_username: str, message: str, headful: Optiona
             "svg[aria-label*='New message']",
             "svg[aria-label*='Mensaje nuevo']",
         ]
-        dialog_open = page.locator("div[role='dialog']").count() > 0
+        dialog_open = await page.locator("div[role='dialog']").count() > 0
         if not dialog_open:
             try:
-                new_btn = _first_present(page, new_btn_candidates, timeout_each=4000)
+                new_btn = await _first_present(page, new_btn_candidates, timeout_each=4000)
                 try:
-                    new_btn.click()
+                    await new_btn.click()
                 except Exception:
-                    new_btn.locator("xpath=ancestor-or-self::*[self::button or self::div or self::a]").first.click()
-            except PWTimeoutError:
-                page.goto("https://www.instagram.com/direct/new/", wait_until="domcontentloaded")
+                    await new_btn.locator("xpath=ancestor-or-self::*[self::button or self::div or self::a]").first.click()
+            except PlaywrightTimeoutError:
+                await page.goto("https://www.instagram.com/direct/new/", wait_until="domcontentloaded")
 
-        page.wait_for_selector("div[role='dialog']", timeout=15000)
+        await page.wait_for_selector("div[role='dialog']", timeout=15000)
         search_input_candidates = [
             "div[role='dialog'] input[name='queryBox']",
             "div[role='dialog'] input[placeholder*='Search']",
@@ -195,40 +197,47 @@ def send_message(account: dict, to_username: str, message: str, headful: Optiona
             "div[role='dialog'] input[aria-label*='Buscar']",
             "div[role='dialog'] input[type='text']",
         ]
-        search_box = _first_present(page, search_input_candidates, timeout_each=5000)
-        human_type(search_box, to_username)
-        human_wait(0.5, 1.2)
-        page.keyboard.press("Enter")
-        human_wait(0.4, 1.0)
+        search_box = await _first_present(page, search_input_candidates, timeout_each=5000)
+        await human_type(search_box, to_username)
+        await human_wait(0.5, 1.2)
+        await page.keyboard.press("Enter")
+        await human_wait(0.4, 1.0)
 
         next_btn_candidates = [
             "div[role='dialog'] button:has-text('Siguiente')",
             "div[role='dialog'] button:has-text('Next')",
         ]
-        next_btn = _first_present(page, next_btn_candidates, timeout_each=6000)
-        next_btn.click()
+        next_btn = await _first_present(page, next_btn_candidates, timeout_each=6000)
+        await next_btn.click()
 
-        page.wait_for_selector("textarea, div[contenteditable='true']", timeout=15000)
-        box = _find_message_box(page)
-        human_type(box, message)
+        await page.wait_for_selector("textarea, div[contenteditable='true']", timeout=15000)
+        box = await _find_message_box(page)
+        await human_type(box, message)
         send_btn_candidates = [
             "button[type='submit']",
             "button:has-text('Enviar')",
             "button[aria-label*='Send']",
         ]
         try:
-            _first_present(page, send_btn_candidates, timeout_each=4000).click()
-        except PWTimeoutError:
-            page.keyboard.press("Enter")
+            await (await _first_present(page, send_btn_candidates, timeout_each=4000)).click()
+        except PlaywrightTimeoutError:
+            await page.keyboard.press("Enter")
 
-        human_wait(0.8, 1.6)
+        await human_wait(0.8, 1.6)
+        sent = await wait_own_bubble(page, timeout_ms=9_000)
+        if not sent:
+            toast = await last_error_toast(page)
+            raise RuntimeError(f"send_failed:{toast}" if toast else "send_failed")
+        toast = await last_error_toast(page)
+        if toast:
+            raise RuntimeError(f"send_failed:{toast}")
 
     except Exception:
         try:
             os.makedirs("screenshots", exist_ok=True)
-            page.screenshot(path="screenshots/dm_debug.png", full_page=True)
+            await page.screenshot(path="screenshots/dm_debug.png", full_page=True)
         except Exception:
             pass
         raise
     finally:
-        shutdown(pw, ctx)
+        await shutdown(pw, ctx)
