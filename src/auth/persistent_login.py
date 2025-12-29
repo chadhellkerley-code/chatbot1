@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -25,7 +26,7 @@ def _storage_state_path(username: str, profile_root: Optional[Union[str, Path]] 
     return base / username / STORAGE_FILENAME
 
 
-async def ensure_logged_in(
+async def ensure_logged_in_async(
     account: dict,
     headless: bool = False,
     profile_root: Optional[Union[str, Path]] = None,
@@ -131,6 +132,29 @@ async def ensure_logged_in(
         return svc, ctx, page
 
     raise await _raise_login_failure(page, username, profile_root_path)
+
+
+def ensure_logged_in(
+    account: dict,
+    headless: bool = False,
+    profile_root: Optional[Union[str, Path]] = None,
+    proxy: Optional[dict] = None,
+) -> Tuple[PlaywrightService, BrowserContext, Page]:
+    """
+    Wrapper sync para ensure_logged_in_async. Evita usar Playwright sync API.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            ensure_logged_in_async(
+                account,
+                headless=headless,
+                profile_root=profile_root,
+                proxy=proxy,
+            )
+        )
+    raise RuntimeError("ensure_logged_in requiere contexto sync; usa ensure_logged_in_async.")
 
 
 async def _load_home(page: Page) -> None:

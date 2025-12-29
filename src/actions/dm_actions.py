@@ -24,7 +24,7 @@ from src.actions.direct_helpers import (
     last_error_toast,
     _snap,
 )
-from src.auth.persistent_login import ensure_logged_in
+from src.auth.persistent_login import ensure_logged_in_async
 from src.humanizer import human_type, human_wait, type_text, random_wait
 from src.playwright_service import shutdown
 
@@ -163,7 +163,7 @@ async def _first_present(page, selectors: list[str], timeout_each=5000):
 async def send_message(account: dict, to_username: str, message: str, headful: Optional[bool] = None) -> None:
     """Compat async helper still used by adapter flows."""
     headless = False if headful is None else not headful
-    pw, ctx, page = await ensure_logged_in(account, headless=headless)
+    pw, ctx, page = await ensure_logged_in_async(account, headless=headless)
     try:
         await page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded")
         new_btn_candidates = [

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
-from src.auth.persistent_login import ensure_logged_in
+from src.auth.persistent_login import ensure_logged_in_async
 from src.instagram_adapter import is_logged_in
 from src.playwright_service import BASE_PROFILES, PlaywrightService, shutdown
 
@@ -331,7 +331,7 @@ async def login_and_persist_async(
     svc: Optional[PlaywrightService] = None
     ctx = page = None
     try:
-        svc, ctx, page = await ensure_logged_in(
+        svc, ctx, page = await ensure_logged_in_async(
             payload,
             headless=headless,
             profile_root=profile_root,

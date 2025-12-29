@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 from playwright.async_api import Locator, Page, TimeoutError as PwTimeoutError
 
-from src.auth.persistent_login import ensure_logged_in
+from src.auth.persistent_login import ensure_logged_in_async
 from src.humanizer import random_wait
 from src.playwright_service import BASE_PROFILES, PlaywrightService
 
@@ -483,7 +483,7 @@ class HumanInstagramSender:
             await self._type_and_send(page, text)
 
         try:
-            svc, ctx, page = await ensure_logged_in(
+            svc, ctx, page = await ensure_logged_in_async(
                 account,
                 headless=self.headless,
                 proxy=proxy or account.get("proxy"),

@@ -943,10 +943,19 @@ async def human_login(
     logger.info("Login humano para @%s %s", username, "OK" if success else "FALLO")
     return success
 
-async def ensure_logged_in(account: dict):
+async def ensure_logged_in_async(account: dict):
     """
-    Compatibilidad hacia atras: delega en auth.persistent_login.ensure_logged_in.
+    Compatibilidad async: delega en auth.persistent_login.ensure_logged_in_async.
+    """
+    from src.auth.persistent_login import ensure_logged_in_async as ensure_persistent_login
+
+    return await ensure_persistent_login(account)
+
+
+def ensure_logged_in(account: dict):
+    """
+    Wrapper sync para compatibilidad: delega en auth.persistent_login.ensure_logged_in.
     """
     from src.auth.persistent_login import ensure_logged_in as ensure_persistent_login
 
-    return await ensure_persistent_login(account)
+    return ensure_persistent_login(account)
