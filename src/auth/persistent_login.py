@@ -154,7 +154,12 @@ def ensure_logged_in(
                 proxy=proxy,
             )
         )
-    raise RuntimeError("ensure_logged_in requiere contexto sync; usa ensure_logged_in_async.")
+    return ensure_logged_in_async(
+        account,
+        headless=headless,
+        profile_root=profile_root,
+        proxy=proxy,
+    )
 
 
 async def _load_home(page: Page) -> None:
