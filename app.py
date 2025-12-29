@@ -1,8 +1,9 @@
-# app.py
+﻿# app.py
 # -*- coding: utf-8 -*-
 import importlib
 import os
 import time
+import traceback
 
 from config import SETTINGS
 from storage import sent_totals_today
@@ -21,6 +22,8 @@ try:
     from src.auth.onboarding import onboard_accounts_from_csv as _onboarding_csv  # noqa: F401
 except Exception as e:
     print("[ERROR] Backend de onboarding no disponible:", e)
+    print("[IMPORT] module=src.auth.onboarding handler=login_and_persist/onboard_accounts_from_csv")
+    print(traceback.format_exc())
     print("Instala dependencias: pip install playwright pyotp && playwright install")
     print("Verifica que existan los archivos src/__init__.py y src/auth/__init__.py")
 
@@ -110,22 +113,28 @@ def handle_choice_optin(choice: str) -> bool:
 # --- END OPT-IN HOOK ---
 
 
-def _safe_import(name):
+def _safe_import(name, handler=None):
     try:
-        return importlib.import_module(name)
+        module = importlib.import_module(name)
+        if handler:
+            getattr(module, handler)
+        return module
     except Exception as e:
-        warn(f"Módulo no disponible o con error: {name} ({e})")
+        warn(f"Modulo no disponible o con error: {name} ({e})")
+        print(f"[IMPORT] module={name} handler={handler}")
+        print(traceback.format_exc())
         return None
 
 
-accounts = _safe_import("accounts")
-leads = _safe_import("leads")
-ig = _safe_import("ig")
-storage = _safe_import("storage")
-responder = _safe_import("responder")
-licensekit = _safe_import("licensekit")
-state_view = _safe_import("state_view")
-whatsapp = _safe_import("whatsapp")
+
+accounts = _safe_import("accounts", "menu_accounts")
+leads = _safe_import("leads", "menu_leads")
+ig = _safe_import("ig", "menu_send_rotating")
+storage = _safe_import("storage", "menu_logs")
+responder = _safe_import("responder", "menu_autoresponder")
+licensekit = _safe_import("licensekit", "menu_deliver")
+state_view = _safe_import("state_view", "menu_conversation_state")
+whatsapp = _safe_import("whatsapp", "menu_whatsapp")
 
 
 def _counts():
@@ -169,7 +178,7 @@ def _print_dashboard() -> None:
 def current_menu_option_labels() -> list[str]:
     options = [
         f"1) {em('🔐')} Gestionar cuentas  ",
-        f"2) {em('🗂️')} Gestionar leads (crear / importar CSV)  ",
+        f"2) {em('🗂️')} Gestionar leads / plantillas  ",
         f"3) {em('💬')} Enviar mensajes (rotando cuentas activas)  ",
         f"4) {em('📜')} Ver registros de envíos  ",
         f"5) {em('🤖')} Auto-responder con OpenAI  ",
