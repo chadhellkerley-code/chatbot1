@@ -388,6 +388,24 @@ async def login_and_persist_async(
             await shutdown(svc, ctx)
 
 
+def login_and_persist(
+    account: AccountPayload,
+    *,
+    headless: bool = True,
+    profile_root: Union[str, Path] = _DEFAULT_PROFILE_ROOT,
+) -> Dict[str, str]:
+    """
+    Wrapper sync para login_and_persist_async (evita usar Playwright sync API).
+    """
+    return _run_async(
+        login_and_persist_async(
+            account,
+            headless=headless,
+            profile_root=profile_root,
+        )
+    )
+
+
 def _write_results_file(rows: List[OnboardingResult]) -> None:
     if not rows:
         return
