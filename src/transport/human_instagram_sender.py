@@ -554,9 +554,17 @@ class HumanInstagramSender:
             stay_open = False
             try:
                 current_url = page.url if page else ""
-                stay_open = current_url and (
-                    "accounts/suspended" in current_url or "two_factor" in current_url
-                )
+                if current_url:
+                    stay_open = any(
+                        token in current_url
+                        for token in (
+                            "accounts/suspended",
+                            "two_factor",
+                            "challenge",
+                            "checkpoint",
+                            "accounts/confirm_email",
+                        )
+                    )
             except Exception:
                 stay_open = False
 

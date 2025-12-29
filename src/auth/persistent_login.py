@@ -1,7 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -20,10 +22,105 @@ logger = logging.getLogger(__name__)
 LOGIN_FAILED_DIRNAME = "login_failed_screenshots"
 STORAGE_FILENAME = "storage_state.json"
 
+_EMAIL_CHALLENGE_URL_PARTS = (
+    "challenge",
+    "checkpoint",
+    "accounts/confirm_email",
+)
+_CHALLENGE_URL_PARTS = _EMAIL_CHALLENGE_URL_PARTS + ("two_factor", "accounts/suspended")
+_EMAIL_CHALLENGE_TEXT_PATTERNS = [
+    re.compile(r"we can send you an email", re.I),
+    re.compile(r"confirm (it'?s|its) you", re.I),
+    re.compile(r"send security code", re.I),
+    re.compile(r"enter security code", re.I),
+    re.compile(r"check your email", re.I),
+    re.compile(r"we sent you an email", re.I),
+    re.compile(r"send email", re.I),
+    re.compile(r"codigo de seguridad", re.I),
+    re.compile(r"enviar codigo", re.I),
+    re.compile(r"revisa tu correo", re.I),
+    re.compile(r"confirmar tu identidad", re.I),
+]
+
+
+class ChallengeRequired(RuntimeError):
+    pass
+
+
+def _owner_debug_enabled() -> bool:
+    return os.getenv("OWNER_DEBUG", "").strip() == "1"
+
+
+def _debug_log(message: str, *args: object) -> None:
+    if _owner_debug_enabled():
+        logger.info(message, *args)
+
 
 def _storage_state_path(username: str, profile_root: Optional[Union[str, Path]] = None) -> Path:
     base = Path(profile_root or BASE_PROFILES)
     return base / username / STORAGE_FILENAME
+
+
+def _is_challenge_url(url: str) -> bool:
+    normalized = (url or "").lower()
+    return any(part in normalized for part in _CHALLENGE_URL_PARTS)
+
+
+def _is_email_challenge_url(url: str) -> bool:
+    normalized = (url or "").lower()
+    return any(part in normalized for part in _EMAIL_CHALLENGE_URL_PARTS)
+
+
+async def _has_email_challenge_text(page: Page) -> bool:
+    for pattern in _EMAIL_CHALLENGE_TEXT_PATTERNS:
+        try:
+            locator = page.get_by_text(pattern, exact=False)
+            if await locator.count():
+                _debug_log("Email challenge text matched: %s", pattern.pattern)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _is_email_challenge(page: Page) -> bool:
+    current_url = page.url or ""
+    if _is_email_challenge_url(current_url):
+        _debug_log("Email challenge URL detected: %s", current_url)
+        return True
+    return await _has_email_challenge_text(page)
+
+
+async def _await_manual_email_challenge(page: Page, username: str) -> bool:
+    prompt = (
+        "Instagram requiere verificación por email.\n"
+        "1) Elegí \"Send email\" en el navegador\n"
+        "2) Revisá tu correo y pegá el código en Instagram\n"
+        "3) NO cierres el navegador\n"
+        "Presioná ENTER cuando termines"
+    )
+    first = True
+    while True:
+        if first:
+            print(prompt)
+            first = False
+        else:
+            print("Todavía falta completar la verificación por email.")
+            print("Presioná ENTER para reintentar o escribí 'q' para abortar.")
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if answer in {"q", "quit", "salir", "abort"}:
+            return False
+        try:
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        if await is_logged_in(page):
+            return True
+        if not await _is_email_challenge(page):
+            return False
 
 
 async def ensure_logged_in_async(
@@ -120,10 +217,22 @@ async def ensure_logged_in_async(
         logger.info("Login exitoso para @%s. storage_state guardado en %s", username, storage_state)
         return svc, ctx, page
 
+    if await _is_email_challenge(page):
+        resolved = await _await_manual_email_challenge(page, username)
+        if resolved and await is_logged_in(page):
+            await svc.save_storage_state(ctx, str(storage_state))
+            logger.info("Login confirmado tras verificacion manual para @%s", username)
+            return svc, ctx, page
+        logger.warning(
+            "Verificacion por email pendiente para @%s. Dejando navegador abierto.",
+            username,
+        )
+        raise ChallengeRequired("challenge_required")
+
     # Si quedó en captcha/suspensión o en two_factor, dejar el navegador abierto
     # para intervención manual en lugar de cerrarlo.
     current_url = page.url or ""
-    if "accounts/suspended" in current_url or "two_factor" in current_url:
+    if _is_challenge_url(current_url):
         logger.warning(
             "Login incompleto para @%s (URL: %s). Dejando navegador abierto para resolver manualmente.",
             username,

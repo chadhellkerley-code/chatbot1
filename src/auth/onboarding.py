@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
-from src.auth.persistent_login import ensure_logged_in_async
+from src.auth.persistent_login import ChallengeRequired, ensure_logged_in_async
 from src.instagram_adapter import is_logged_in
 from src.playwright_service import BASE_PROFILES, PlaywrightService, shutdown
 
@@ -330,6 +330,7 @@ async def login_and_persist_async(
 
     svc: Optional[PlaywrightService] = None
     ctx = page = None
+    close_browser = True
     try:
         svc, ctx, page = await ensure_logged_in_async(
             payload,
@@ -345,21 +346,37 @@ async def login_and_persist_async(
                 "message": "Login completado.",
                 "profile_path": storage_path,
             }
-        status = "need_code" if need_code["value"] else "failed"
-        message = "Se requiere cÃ³digo de verificaciÃ³n." if status == "need_code" else "No se pudo confirmar la sesiÃ³n."
+        status = "challenge_required" if need_code["value"] else "error"
+        message = (
+            "Se requiere verificacion por email."
+            if status == "challenge_required"
+            else "No se pudo confirmar la sesion."
+        )
+        if status == "challenge_required":
+            close_browser = False
         return {
             "username": username,
             "status": status,
             "message": message,
             "profile_path": "",
         }
+    except ChallengeRequired:  # pragma: no cover - depende de Playwright
+        close_browser = False
+        return {
+            "username": username,
+            "status": "challenge_required",
+            "message": "Se requiere verificacion por email.",
+            "profile_path": "",
+        }
     except Exception as exc:  # pragma: no cover - depende de Playwright
-        status = "need_code" if need_code["value"] else "failed"
+        status = "challenge_required" if need_code["value"] else "error"
         message = (
-            "Se requiere cÃ³digo de verificaciÃ³n."
-            if status == "need_code"
+            "Se requiere verificacion por email."
+            if status == "challenge_required"
             else str(exc)
         )
+        if status == "challenge_required":
+            close_browser = False
         return {
             "username": username,
             "status": status,
@@ -367,26 +384,8 @@ async def login_and_persist_async(
             "profile_path": "",
         }
     finally:
-        if svc:
+        if svc and close_browser:
             await shutdown(svc, ctx)
-
-
-def login_and_persist(
-    account: AccountPayload,
-    *,
-    headless: bool = True,
-    profile_root: Union[str, Path] = _DEFAULT_PROFILE_ROOT,
-) -> Dict[str, str]:
-    """
-    Wrapper sync para login_and_persist_async (evita usar Playwright sync API).
-    """
-    return _run_async(
-        login_and_persist_async(
-            account,
-            headless=headless,
-            profile_root=profile_root,
-        )
-    )
 
 
 def _write_results_file(rows: List[OnboardingResult]) -> None:

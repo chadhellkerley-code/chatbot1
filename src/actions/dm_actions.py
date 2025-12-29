@@ -163,8 +163,9 @@ async def _first_present(page, selectors: list[str], timeout_each=5000):
 async def send_message(account: dict, to_username: str, message: str, headful: Optional[bool] = None) -> None:
     """Compat async helper still used by adapter flows."""
     headless = False if headful is None else not headful
-    pw, ctx, page = await ensure_logged_in_async(account, headless=headless)
+    pw = ctx = page = None
     try:
+        pw, ctx, page = await ensure_logged_in_async(account, headless=headless)
         await page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded")
         new_btn_candidates = [
             "a[href='/direct/new/']",
@@ -240,4 +241,21 @@ async def send_message(account: dict, to_username: str, message: str, headful: O
             pass
         raise
     finally:
-        await shutdown(pw, ctx)
+        stay_open = False
+        try:
+            current_url = page.url if page else ""
+            if current_url:
+                stay_open = any(
+                    token in current_url
+                    for token in (
+                        "accounts/suspended",
+                        "two_factor",
+                        "challenge",
+                        "checkpoint",
+                        "accounts/confirm_email",
+                    )
+                )
+        except Exception:
+            stay_open = False
+        if not stay_open:
+            await shutdown(pw, ctx)

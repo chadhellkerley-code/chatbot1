@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import base64
@@ -542,20 +542,8 @@ async def _handle_light_challenge(
     if "/challenge/" not in (page.url or ""):
         return
 
-    logger.info("Challenge detectado para @%s. Intentando resolverlo.", username)
-    await _click_if_present(page, CHALLENGE_SEND_CODE_SELECTORS)
-
-    code_locator = page.locator("input[type='text'], input[type='tel'], input[name*='code']")
-    if await code_locator.count():
-        code_input = code_locator.first
-        code = _resolve_challenge_code(code_provider)
-        if code:
-            await _human_type(code_input, code)
-            await _click_if_present(page, CHALLENGE_SUBMIT_SELECTORS)
-        else:
-            logger.info("Challenge requiere codigo manual para @%s; esperando intervencion humana.", username)
-
-    await _wait_for_challenge_resolution(page)
+    logger.info("Challenge detectado para @%s. Requiere verificacion manual.", username)
+    return
 
 
 def _resolve_challenge_code(code_provider: Optional[CodeProvider]) -> Optional[str]:
@@ -871,9 +859,7 @@ async def human_login(
         await _handle_suspended_flow(page)
 
         if "/challenge/" in (page.url or ""):
-             await _wait_for_challenge_resolution(page)
-             if await is_logged_in(page):
-                 return "ok"
+             return "challenge"
 
         return await _after_submit_outcome(page)
 
