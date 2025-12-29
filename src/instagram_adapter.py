@@ -921,11 +921,11 @@ async def human_login(
         except: pass
 
     if outcome == "bad_creds":
-        _capture_login_failure(page, username)
+        await _capture_login_failure(page, username)
         raise RuntimeError("Instagram rechazó las credenciales proporcionadas.")
 
     if outcome == "still_login":
-        _capture_login_failure(page, username)
+        await _capture_login_failure(page, username)
         raise RuntimeError("Instagram devolvió nuevamente el formulario de login.")
 
     # Eliminada navegacion final a BASE_URL para evitar perder el estado del Inbox
@@ -939,7 +939,7 @@ async def human_login(
 
     success = await is_logged_in(page)
     if not success and outcome != "challenge":
-        _capture_login_failure(page, username)
+        await _capture_login_failure(page, username)
     logger.info("Login humano para @%s %s", username, "OK" if success else "FALLO")
     return success
 
