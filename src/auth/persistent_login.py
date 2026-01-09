@@ -4,12 +4,14 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
 from playwright.async_api import BrowserContext, Page
 from src.instagram_adapter import (
     BASE_URL,
+    check_logged_in,
     get_login_errors,
     human_login,
     is_logged_in,
@@ -45,6 +47,43 @@ _EMAIL_CHALLENGE_TEXT_PATTERNS = [
 
 class ChallengeRequired(RuntimeError):
     pass
+
+
+def _overnight_enabled() -> bool:
+    return os.getenv("IG_OVERNIGHT", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _safe_stat_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except Exception:
+        return 0
+
+
+def _session_log_root(profile_root: Optional[Union[str, Path]]) -> Path:
+    override = os.environ.get("APP_DATA_ROOT")
+    if override:
+        return Path(override)
+    base = Path(profile_root or BASE_PROFILES)
+    if base.name == "profiles":
+        return base.parent
+    return base
+
+
+def _session_log_path(profile_root: Optional[Union[str, Path]]) -> Path:
+    root = _session_log_root(profile_root)
+    return root / "storage" / "session_debug.log"
+
+
+def _session_log(profile_root: Optional[Union[str, Path]], message: str) -> None:
+    try:
+        path = _session_log_path(profile_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        with path.open("a", encoding="utf-8", errors="ignore") as handle:
+            handle.write(f"{timestamp} {message}\n")
+    except Exception:
+        return
 
 
 def _owner_debug_enabled() -> bool:
@@ -92,6 +131,9 @@ async def _is_email_challenge(page: Page) -> bool:
 
 
 async def _await_manual_email_challenge(page: Page, username: str) -> bool:
+    if _overnight_enabled():
+        logger.warning("Overnight activo: se omite prompt manual para @%s.", username)
+        return False
     prompt = (
         "Instagram requiere verificación por email.\n"
         "1) Elegí \"Send email\" en el navegador\n"
@@ -152,6 +194,8 @@ async def ensure_logged_in_async(
     account_profile = storage_state.parent
     proxy_payload = derived_proxy or account.get("proxy")
 
+    _session_log(profile_root_path, f"login_start username={username} headless={headless}")
+
     svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
     await svc.start()
 
@@ -173,12 +217,22 @@ async def ensure_logged_in_async(
     page: Optional[Page] = None
 
     if storage_state.exists():
+        _session_log(
+            profile_root_path,
+            f"session_loaded path={storage_state} size={_safe_stat_size(storage_state)}",
+        )
         ctx, page = await _new_context(use_storage=True)
         await _load_home(page)
-        if await is_logged_in(page):
-            logger.info("Sesión existente reutilizada para @%s", username)
+        ok, reason = await check_logged_in(page)
+        if ok:
+            _session_log(profile_root_path, f"session_check_ok reason={reason}")
+            logger.info("Sesi?n existente reutilizada para @%s", username)
             return svc, ctx, page
-        logger.info("storage_state inválido para @%s. Se intentará nuevo login.", username)
+        _session_log(
+            profile_root_path,
+            f"session_check_fail stage=load reason={reason} url={page.url}",
+        )
+        logger.info("storage_state inv?lido para @%s. Se intentar? nuevo login.", username)
         try:
             await ctx.close()
         except Exception:
@@ -212,15 +266,31 @@ async def ensure_logged_in_async(
     except Exception as exc:
         raise await _raise_login_failure(page, username, profile_root_path, exc) from exc
 
-    if login_ok and await is_logged_in(page):
-        await svc.save_storage_state(ctx, str(storage_state))
-        logger.info("Login exitoso para @%s. storage_state guardado en %s", username, storage_state)
-        return svc, ctx, page
+    if login_ok:
+        ok, reason = await check_logged_in(page)
+        if ok:
+            _session_log(profile_root_path, f"session_check_ok reason={reason}")
+            _session_log(profile_root_path, f"login_success_condition_met condition={reason}")
+            await svc.save_storage_state(ctx, str(storage_state))
+            _session_log(
+                profile_root_path,
+                f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
+            )
+            logger.info("Login exitoso para @%s. storage_state guardado en %s", username, storage_state)
+            return svc, ctx, page
+        _session_log(
+            profile_root_path,
+            f"session_check_fail stage=post_login reason={reason} url={page.url}",
+        )
 
     if await _is_email_challenge(page):
         resolved = await _await_manual_email_challenge(page, username)
         if resolved and await is_logged_in(page):
             await svc.save_storage_state(ctx, str(storage_state))
+            _session_log(
+                profile_root_path,
+                f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
+            )
             logger.info("Login confirmado tras verificacion manual para @%s", username)
             return svc, ctx, page
         logger.warning(
@@ -268,6 +338,91 @@ def ensure_logged_in(
         headless=headless,
         profile_root=profile_root,
         proxy=proxy,
+    )
+
+
+async def check_session_async(
+    username: str,
+    *,
+    profile_root: Optional[Union[str, Path]] = None,
+    proxy: Optional[dict] = None,
+    headless: bool = True,
+) -> tuple[bool, str]:
+    if not username:
+        raise ValueError("username requerido para verificar sesion.")
+
+    profile_root_path = Path(profile_root or BASE_PROFILES)
+    storage_state = _storage_state_path(username, profile_root_path)
+    if not storage_state.exists():
+        _session_log(
+            profile_root_path,
+            f"session_check_fail stage=missing username={username} path={storage_state}",
+        )
+        return False, "storage_state_missing"
+
+    _session_log(profile_root_path, f"session_check_start username={username} headless={headless}")
+
+    svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
+    await svc.start()
+    ctx: Optional[BrowserContext] = None
+    page: Optional[Page] = None
+    try:
+        ctx = await svc.new_context_for_account(
+            profile_dir=storage_state.parent,
+            storage_state=str(storage_state),
+            proxy=proxy,
+        )
+        page = await get_page(ctx)
+        try:
+            page.set_default_timeout(10_000)
+            page.set_default_navigation_timeout(20_000)
+        except Exception:
+            pass
+        await _load_home(page)
+        ok, reason = await check_logged_in(page)
+        _session_log(
+            profile_root_path,
+            f"session_check_{'ok' if ok else 'fail'} reason={reason} url={page.url}",
+        )
+        return ok, reason
+    except Exception as exc:
+        _session_log(
+            profile_root_path,
+            f"session_check_fail stage=exception username={username} error={exc}",
+        )
+        return False, f"exception:{exc}"
+    finally:
+        if ctx is not None:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        await svc.close()
+
+
+def check_session(
+    username: str,
+    *,
+    profile_root: Optional[Union[str, Path]] = None,
+    proxy: Optional[dict] = None,
+    headless: bool = True,
+) -> tuple[bool, str]:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            check_session_async(
+                username,
+                profile_root=profile_root,
+                proxy=proxy,
+                headless=headless,
+            )
+        )
+    return check_session_async(
+        username,
+        profile_root=profile_root,
+        proxy=proxy,
+        headless=headless,
     )
 
 

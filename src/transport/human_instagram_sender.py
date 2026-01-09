@@ -59,7 +59,27 @@ COMPOSERS = (
     "div[data-testid='message-input']",
     "textarea"
 )
-SEND_BUTTONS = "div[role='button']:has-text('Send'), div[role='button']:has-text('Enviar')"
+SEND_BUTTONS = (
+    "div[role='button']:has-text('Send'), "
+    "div[role='button']:has-text('Enviar'), "
+    "button:has-text('Send'), "
+    "button:has-text('Enviar'), "
+    "button[aria-label*='Send'], "
+    "button[aria-label*='Enviar'], "
+    "div[role='button'][aria-label*='Send'], "
+    "div[role='button'][aria-label*='Enviar'], "
+    "[data-testid='send'], "
+    "[data-testid*='send'], "
+    "button[type='submit'], "
+    "form button[type='submit']"
+)
+VERIFY_TIMEOUT_S = float(os.getenv("HUMAN_DM_VERIFY_TIMEOUT", "10.0"))
+ALLOW_UNVERIFIED = os.getenv("HUMAN_DM_ALLOW_UNVERIFIED", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
 
 
 class HumanInstagramSender:
@@ -71,6 +91,38 @@ class HumanInstagramSender:
 
     def _normalize_username(self, username: str) -> str:
         return username.strip().lstrip("@").split("?", 1)[0]
+
+    def send_message_like_human_sync(
+        self,
+        account: Dict,
+        target_username: str,
+        text: str,
+        *,
+        base_delay_seconds: float = 0,
+        jitter_seconds: float = 0,
+        proxy: Optional[Dict] = None,
+        return_detail: bool = False,
+        return_payload: bool = False,
+    ) -> Union[
+        bool,
+        Tuple[bool, Optional[str]],
+        Tuple[bool, Optional[str], Dict[str, Any]],
+    ]:
+        coro = self.send_message_like_human(
+            account,
+            target_username,
+            text,
+            base_delay_seconds=base_delay_seconds,
+            jitter_seconds=jitter_seconds,
+            proxy=proxy,
+            return_detail=return_detail,
+            return_payload=return_payload,
+        )
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        raise RuntimeError("send_message_like_human_sync requiere contexto sync.")
 
 
     async def _goto_inbox(self, page: Page) -> None:
@@ -278,7 +330,21 @@ class HumanInstagramSender:
 
     async def _composer(self, page: Page) -> Optional[Locator]:
         locator = page.locator(", ".join(COMPOSERS))
-        return locator.first if await locator.count() else None
+        try:
+            count = await locator.count()
+        except Exception:
+            count = 0
+        if count <= 0:
+            return None
+        for idx in range(count):
+            candidate = locator.nth(idx)
+            try:
+                if not await candidate.is_visible():
+                    continue
+            except Exception:
+                continue
+            return candidate
+        return None
 
     async def _type_text(self, composer: Locator, text: str) -> None:
         await composer.click()
@@ -298,7 +364,7 @@ class HumanInstagramSender:
                 await composer.type(ch, delay=random.randint(30, 120))
             await self._sleep(0.05, 0.2)
 
-    async def _type_and_send(self, page: Page, text: str) -> None:
+    async def _type_and_send(self, page: Page, text: str) -> str:
         try:
             await page.wait_for_selector(", ".join(COMPOSERS), timeout=20_000)
         except Exception:
@@ -314,17 +380,84 @@ class HumanInstagramSender:
             SEND_BUTTONS,
             "button[aria-label*='Send']",
             "button[aria-label*='Enviar']",
+            "div[role='button'][aria-label*='Send']",
+            "div[role='button'][aria-label*='Enviar']",
         ]
         clicked = False
         for sel in send_candidates:
             btn = page.locator(sel)
-            if await btn.count():
-                await btn.first.click()
-                clicked = True
+            try:
+                count = await btn.count()
+            except Exception:
+                count = 0
+            if count <= 0:
+                continue
+            for idx in range(min(count, 3)):
+                candidate = btn.nth(idx)
+                try:
+                    if not await candidate.is_visible():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    await candidate.click()
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+            if clicked:
                 break
         if not clicked:
             await composer.press("Enter")
+            await self._sleep(0.25, 0.6)
+            try:
+                composer_text = await self._composer_text(composer)
+            except Exception:
+                composer_text = ""
+            if composer_text:
+                try:
+                    await composer.press("Control+Enter")
+                except Exception:
+                    pass
+                await self._sleep(0.25, 0.6)
+                for sel in send_candidates:
+                    btn = page.locator(sel)
+                    try:
+                        count = await btn.count()
+                    except Exception:
+                        count = 0
+                    if count <= 0:
+                        continue
+                    try:
+                        await btn.first.click()
+                        break
+                    except Exception:
+                        continue
+                return "enter_ctrl_fallback"
+            return "enter_fallback"
         await self._sleep(0.3, 1.0)
+        return "click"
+
+    async def _composer_text(self, composer: Locator) -> str:
+        try:
+            value = await composer.input_value()
+            if isinstance(value, str):
+                return value.strip()
+        except Exception:
+            pass
+        try:
+            text = await composer.inner_text()
+            if isinstance(text, str):
+                return text.strip()
+        except Exception:
+            pass
+        try:
+            text = await composer.text_content()
+            if isinstance(text, str):
+                return text.strip()
+        except Exception:
+            pass
+        return ""
 
     def _message_snippet(self, text: str, limit: int = 48) -> str:
         for line in (text or "").splitlines():
@@ -333,34 +466,72 @@ class HumanInstagramSender:
                 return cleaned[:limit]
         return (text or "").strip()[:limit]
 
-    async def _confirm_message_sent(self, page: Page, text: str) -> bool:
+    async def _confirm_message_sent(
+        self,
+        page: Page,
+        text: str,
+        composer: Optional[Locator] = None,
+    ) -> tuple[bool, str]:
         snippet = self._message_snippet(text)
         if not snippet:
-            return False
-        try:
-            await page.wait_for_timeout(1500)
-        except Exception:
-            pass
-        bubble_selectors = [
-            "[data-testid='message-bubble'] [data-testid='own']",
-            "[data-testid='message-bubble'][data-testid='own']",
+            return False, "snippet_empty"
+
+        current_url = page.url or ""
+        if "accounts/login" in current_url:
+            return False, "login_lost"
+        if any(token in current_url for token in ("challenge", "checkpoint", "accounts/confirm_email", "two_factor")):
+            return False, "challenge_detected"
+
+        message_selectors = [
+            "div[role='list'] div[role='listitem']",
+            "div[role='list'] div[role='row']",
+            "div[role='log'] div[role='listitem']",
+            "div[role='log'] div[role='row']",
+            "div[role='main'] div[role='listitem']",
+            "div[role='main'] div[role='row']",
+            "div[role='row']",
+            "[data-testid='message-bubble']",
         ]
-        try:
-            for sel in bubble_selectors:
-                bubble = page.locator(sel).filter(has_text=snippet)
-                if await bubble.count() > 0:
-                    return True
-        except Exception:
-            pass
-        try:
-            container = page.locator("div[role='main']")
-            if await container.count() > 0:
-                locator = container.first.get_by_text(snippet, exact=False)
-            else:
-                locator = page.get_by_text(snippet, exact=False)
-            return await locator.count() > 0
-        except Exception:
-            return False
+
+        def _contains_snippet(value: str) -> bool:
+            return snippet.lower() in (value or "").lower()
+
+        deadline = time.time() + VERIFY_TIMEOUT_S
+        while time.time() < deadline:
+            try:
+                await page.wait_for_timeout(500)
+            except Exception:
+                pass
+            if composer is not None:
+                try:
+                    if _contains_snippet(await self._composer_text(composer)):
+                        continue
+                except Exception:
+                    pass
+            for sel in message_selectors:
+                try:
+                    items = page.locator(sel)
+                    if await items.count() > 0:
+                        last = items.last
+                        try:
+                            text_value = await last.inner_text()
+                        except Exception:
+                            text_value = await last.text_content() or ""
+                        if _contains_snippet(text_value):
+                            return True, "message_present"
+                        matches = items.filter(has_text=snippet)
+                        if await matches.count() > 0:
+                            return True, "message_present"
+                except Exception:
+                    continue
+
+        if composer is not None:
+            try:
+                if _contains_snippet(await self._composer_text(composer)):
+                    return False, "composer_not_cleared"
+            except Exception:
+                pass
+        return False, "message_not_present_after_send"
 
     async def _capture_success(self, page: Optional[Page], username: str, target: str) -> Optional[str]:
         if page is None:
@@ -421,7 +592,7 @@ class HumanInstagramSender:
         if strategy not in {"profile", "direct_new", "auto"}:
             strategy = "profile"
 
-        async def _send_via_profile() -> None:
+        async def _send_via_profile() -> str:
             if page is None:
                 raise RuntimeError("Pagina no inicializada.")
 
@@ -460,9 +631,9 @@ class HumanInstagramSender:
             except Exception:
                 raise RuntimeError("No aparecio la caja de texto del chat tras clickear 'Enviar mensaje'.")
 
-            await self._type_and_send(page, text)
+            return await self._type_and_send(page, text)
 
-        async def _send_via_direct_new() -> None:
+        async def _send_via_direct_new() -> str:
             if page is None:
                 raise RuntimeError("Pagina no inicializada.")
 
@@ -480,7 +651,7 @@ class HumanInstagramSender:
             except Exception:
                 raise RuntimeError("No aparecio la caja de texto del chat tras abrir el dialogo.")
 
-            await self._type_and_send(page, text)
+            return await self._type_and_send(page, text)
 
         try:
             svc, ctx, page = await ensure_logged_in_async(
@@ -491,11 +662,11 @@ class HumanInstagramSender:
 
             used_strategy = "profile"
             if strategy == "direct_new":
-                await _send_via_direct_new()
+                send_method = await _send_via_direct_new()
                 used_strategy = "direct_new"
             elif strategy == "auto":
                 try:
-                    await _send_via_direct_new()
+                    send_method = await _send_via_direct_new()
                     used_strategy = "direct_new"
                 except Exception as exc:
                     logger.warning(
@@ -504,14 +675,48 @@ class HumanInstagramSender:
                         normalized_target,
                         exc,
                     )
-                    await _send_via_profile()
+                    send_method = await _send_via_profile()
                     used_strategy = "profile"
             else:
-                await _send_via_profile()
+                send_method = await _send_via_profile()
                 used_strategy = "profile"
 
-            if not await self._confirm_message_sent(page, text):
-                raise RuntimeError("No se pudo confirmar el envio en la interfaz.")
+            composer = await self._composer(page)
+            ok, reason = await self._confirm_message_sent(page, text, composer=composer)
+            payload["verified"] = bool(ok)
+            if not ok and reason in {"message_not_present_after_send", "composer_not_cleared"}:
+                try:
+                    composer_text = await self._composer_text(composer) if composer else ""
+                except Exception:
+                    composer_text = ""
+                if composer_text:
+                    try:
+                        await composer.press("Control+Enter")
+                        await self._sleep(0.25, 0.6)
+                    except Exception:
+                        pass
+                ok_retry, reason_retry = await self._confirm_message_sent(
+                    page,
+                    text,
+                    composer=composer,
+                )
+                if ok_retry:
+                    ok = True
+                    reason = reason_retry
+                    payload["verified"] = True
+            if not ok:
+                if reason in {"message_not_present_after_send", "composer_not_cleared"}:
+                    current_url = page.url if page else ""
+                    detail = "sent_request" if "/direct/requests" in (current_url or "") else "sent_unverified"
+                    payload["verification_reason"] = reason
+                    payload["detail"] = detail
+                    if detail != "sent_request" and not ALLOW_UNVERIFIED:
+                        await self._capture_debug(page, username, normalized_target, detail)
+                        raise RuntimeError(detail)
+                    if return_payload:
+                        return True, detail, payload
+                    return (True, detail) if return_detail else True
+                raise RuntimeError(reason)
 
             storage_path = Path(BASE_PROFILES) / username / "storage_state.json"
             try:
@@ -523,6 +728,8 @@ class HumanInstagramSender:
                     "engine": "playwright_async",
                     "url": page.url if page else "",
                     "strategy": used_strategy,
+                    "send_method": send_method,
+                    "verified": payload.get("verified", True),
                 }
             )
             screenshot = await self._capture_success(page, username, normalized_target)
@@ -535,8 +742,8 @@ class HumanInstagramSender:
                 normalized_target,
             )
             if return_payload:
-                return True, None, payload
-            return (True, None) if return_detail else True
+                return True, payload.get("detail"), payload
+            return (True, payload.get("detail")) if return_detail else True
         except Exception as exc:
             detail = str(exc)
             await self._capture_debug(page, username, normalized_target, detail)
@@ -590,5 +797,11 @@ class HumanInstagramSender:
             safe_reason = re.sub(r"[^a-z0-9]+", "_", (reason or "error").lower()).strip("_") or "error"
             ts = int(time.time())
             await page.screenshot(path=str(folder / f"{safe_target}_{safe_reason}_{ts}.png"))
+            try:
+                html = await page.content()
+                html_path = folder / f"{safe_target}_{safe_reason}_{ts}.html"
+                html_path.write_text(html, encoding="utf-8")
+            except Exception:
+                pass
         except Exception:
             pass

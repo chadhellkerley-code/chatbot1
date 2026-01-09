@@ -7,10 +7,12 @@ Permite crear y activar licencias desde la CLI.
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import os
 import platform
 import socket
+import sys
 import uuid
 from datetime import datetime
 from typing import Dict, Optional, Tuple
@@ -155,7 +157,8 @@ class LicenseBackendClient:
     def activate_license(
         self,
         license_key: str,
-        client_fingerprint: Optional[str] = None
+        client_fingerprint: Optional[str] = None,
+        machine_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """
         Activa una licencia.
@@ -170,13 +173,23 @@ class LicenseBackendClient:
         if not license_key or not license_key.strip():
             return False, None, "License key requerida"
         
+        if client_fingerprint:
+            client_fingerprint = client_fingerprint.strip()
+        if machine_id:
+            machine_id = machine_id.strip()
+
         # Generar fingerprint si no se provee
-        if not client_fingerprint:
+        if not client_fingerprint and not machine_id:
             client_fingerprint = self._generate_fingerprint()
-        
+        if not client_fingerprint and machine_id:
+            client_fingerprint = machine_id
+        if not machine_id and client_fingerprint:
+            machine_id = client_fingerprint
+
         payload = {
             "license_key": license_key.strip(),
-            "client_fingerprint": client_fingerprint
+            "client_fingerprint": client_fingerprint,
+            "machine": machine_id,
         }
         
         try:
@@ -226,12 +239,48 @@ class LicenseBackendClient:
         except:
             pass
         
-        # Crear hash
-        fingerprint_str = "|".join(components)
-        fingerprint_hash = hashlib.sha256(fingerprint_str.encode()).hexdigest()
-        
-        return f"fp-{fingerprint_hash[:16]}"
+        fingerprint = self._hash_components(components)
+        if fingerprint:
+            return fingerprint
+
+        fallback = [
+            platform.node(),
+            getpass.getuser(),
+            self._windows_volume_serial(),
+        ]
+        fingerprint = self._hash_components(fallback)
+        if fingerprint:
+            return fingerprint
+
+        return f"fp-{uuid.uuid4().hex[:16]}"
     
+    def _hash_components(self, components) -> Optional[str]:
+        clean = [value.strip() for value in components if value and str(value).strip()]
+        if not clean:
+            return None
+        fingerprint_str = "|".join(clean)
+        fingerprint_hash = hashlib.sha256(fingerprint_str.encode()).hexdigest()
+        return f"fp-{fingerprint_hash[:16]}"
+
+    def _windows_volume_serial(self) -> str:
+        if not sys.platform.startswith("win"):
+            return ""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            drive = os.environ.get("SystemDrive", "C:")
+            root = drive.rstrip("\\") + "\\"
+            serial = wintypes.DWORD()
+            result = ctypes.windll.kernel32.GetVolumeInformationW(
+                root, None, 0, ctypes.byref(serial), None, None, None, 0
+            )
+            if result:
+                return f"{serial.value:08X}"
+        except Exception:
+            return ""
+        return ""
+
     def _get_user_agent(self) -> str:
         """
         Genera un User-Agent descriptivo.
@@ -270,7 +319,8 @@ def create_license(
 def activate_license(
     license_key: str,
     client_fingerprint: Optional[str] = None,
-    backend_url: Optional[str] = None
+    machine_id: Optional[str] = None,
+    backend_url: Optional[str] = None,
 ) -> Tuple[bool, Optional[Dict], Optional[str]]:
     """
     Activa una licencia.
@@ -284,7 +334,7 @@ def activate_license(
         (success, activation_data, error_message)
     """
     client = LicenseBackendClient(backend_url)
-    return client.activate_license(license_key, client_fingerprint)
+    return client.activate_license(license_key, client_fingerprint, machine_id)
 
 
 def check_backend_health(backend_url: Optional[str] = None) -> Tuple[bool, Optional[str]]:

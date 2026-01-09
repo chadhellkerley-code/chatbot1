@@ -98,7 +98,7 @@ def send_dm(
         }
 
         sender = HumanInstagramSender(headless=True)
-        success, detail = sender.send_message_like_human(
+        success, detail = sender.send_message_like_human_sync(
             account_payload,
             target_user,
             message_text,

@@ -25,6 +25,7 @@ from accounts import (
 from paths import runtime_base
 from proxy_manager import apply_proxy_to_client, record_proxy_failure, should_retry_proxy
 from session_store import has_session, load_into
+from templates_store import load_templates, save_templates
 from client_factory import get_instagram_client
 from utils import (
     ask,
@@ -92,6 +93,118 @@ def delete_list(name:str):
     if p.exists(): p.unlink(); ok("Eliminada.")
     else: warn("No existe.")
 
+
+def _template_preview(text: str, limit: int = 60) -> str:
+    cleaned = " ".join((text or "").splitlines()).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)] + "..."
+
+
+def _list_templates() -> List[Dict[str, str]]:
+    templates = load_templates()
+    if not templates:
+        warn("No hay plantillas guardadas.")
+        return []
+    for idx, item in enumerate(templates, start=1):
+        preview = _template_preview(item.get("text", ""))
+        print(f" {idx}) {item.get('name', '')} - {preview}")
+    return templates
+
+
+def _select_template_index(templates: List[Dict[str, str]]) -> Optional[int]:
+    if not templates:
+        return None
+    choice = ask("Selecciona numero de plantilla (Enter para cancelar): ").strip()
+    if not choice:
+        return None
+    if not choice.isdigit():
+        warn("Seleccion invalida.")
+        return None
+    idx = int(choice)
+    if 1 <= idx <= len(templates):
+        return idx - 1
+    warn("Seleccion fuera de rango.")
+    return None
+
+
+def menu_templates() -> None:
+    while True:
+        banner()
+        title("Plantillas")
+        templates = load_templates()
+        print(f"Plantillas guardadas: {len(templates)}")
+        print("\n1) Crear plantilla")
+        print("2) Listar plantillas")
+        print("3) Editar plantilla")
+        print("4) Eliminar plantilla")
+        print("5) Volver\n")
+        op = ask("Opcion: ").strip()
+        if op == "1":
+            name = ask("Nombre de la plantilla: ").strip()
+            if not name:
+                warn("Nombre requerido.")
+                press_enter()
+                continue
+            text = ask_multiline("Texto de la plantilla:")
+            if not text:
+                warn("Texto requerido.")
+                press_enter()
+                continue
+            templates = load_templates()
+            templates.append({"name": name, "text": text})
+            save_templates(templates)
+            ok("Plantilla guardada.")
+            press_enter()
+        elif op == "2":
+            banner()
+            title("Listado de plantillas")
+            _list_templates()
+            press_enter()
+        elif op == "3":
+            banner()
+            title("Editar plantilla")
+            templates = _list_templates()
+            idx = _select_template_index(templates)
+            if idx is None:
+                press_enter()
+                continue
+            current = templates[idx]
+            print("\nTexto actual:\n")
+            print(current.get("text", ""))
+            new_name = ask(f"Nombre ({current.get('name', '')}): ").strip()
+            new_text = ask_multiline("Nuevo texto (vacio para mantener):")
+            if new_name:
+                current["name"] = new_name
+            if new_text:
+                current["text"] = new_text
+            templates[idx] = current
+            save_templates(templates)
+            ok("Plantilla actualizada.")
+            press_enter()
+        elif op == "4":
+            banner()
+            title("Eliminar plantilla")
+            templates = _list_templates()
+            idx = _select_template_index(templates)
+            if idx is None:
+                press_enter()
+                continue
+            target = templates[idx]
+            confirm = ask(f"Eliminar '{target.get('name', '')}'? (s/N): ").strip().lower()
+            if confirm == "s":
+                templates.pop(idx)
+                save_templates(templates)
+                ok("Plantilla eliminada.")
+            else:
+                warn("Sin cambios.")
+            press_enter()
+        elif op == "5":
+            break
+        else:
+            warn("Opcion invalida.")
+            press_enter()
+
 def menu_leads():
     while True:
         banner()
@@ -103,9 +216,10 @@ def menu_leads():
         print("2) Importar CSV a una lista")
         print("3) Ver lista")
         print("4) Eliminar lista")
-        print("5) Scraping automático de perfiles")
-        print("6) Volver\n")
-        op=ask("Opción: ").strip()
+        print("5) Gestionar plantillas")
+        print("6) Scraping automatico de perfiles")
+        print("7) Volver\n")
+        op=ask("Opcion: ").strip()
         if op=="1":
             name=ask("Nombre de la lista: ").strip() or "default"
             print("Pegá usernames (uno por línea). Línea vacía para terminar:")
@@ -126,8 +240,10 @@ def menu_leads():
             name=ask("Nombre de la lista: ").strip()
             delete_list(name); press_enter()
         elif op=="5":
-            _scrape_menu()
+            menu_templates()
         elif op=="6":
+            _scrape_menu()
+        elif op=="7":
             break
         else:
             warn("Opción inválida."); press_enter()

@@ -20,7 +20,7 @@ from src.actions.direct_helpers import (
     wait_own_bubble,
     last_error_toast,
     wait_thread_open,
-    SELECTORS,
+    SELECTORS_JOINED,
 )
 from src.actions.dm_actions import pick_random_message
 from src.humanizer import type_text, random_wait
@@ -94,7 +94,7 @@ async def send_once(page, username: str, template: str, typing_cfg: dict) -> dic
 
     if not await focus_composer(page):
         return {"ok": False, "error": "composer_not_found"}
-    composer = page.locator(SELECTORS["composer"]).first
+    composer = page.locator(SELECTORS_JOINED["composer"]).first
 
     personalized = template.format(username=username)
     print("4/5 Escribiendo mensaje")

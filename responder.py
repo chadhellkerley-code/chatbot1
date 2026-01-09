@@ -1,8 +1,10 @@
+# -*- coding: cp1252 -*-
 import base64
 import importlib
 import json
 import logging
 import re
+import random
 import subprocess
 import sys
 import time
@@ -15,6 +17,32 @@ from datetime import datetime, timedelta, time as dt_time, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
+
+
+# ===================== CONVERSATION ENGINE (SAFE) =====================
+from pathlib import Path
+import json, time
+
+_ENGINE_PATH = Path(__file__).parent / "storage" / "conversation_engine.json"
+
+def engine_load():
+    if not _ENGINE_PATH.exists():
+        _ENGINE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _ENGINE_PATH.write_text(json.dumps({
+            "version": "engine-safe-1.0",
+            "started_ts": int(time.time()),
+            "conversations": {}
+        }, indent=2), encoding="utf-8")
+    return json.loads(_ENGINE_PATH.read_text(encoding="utf-8"))
+
+def engine_touch(conv_id, payload):
+    data = engine_load()
+    conv = data["conversations"].get(conv_id, {})
+    conv.update(payload)
+    data["conversations"][conv_id] = conv
+    _ENGINE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+# =================== END CONVERSATION ENGINE =====================
+
 
 from accounts import (
     auto_login_with_saved_password,
@@ -58,7 +86,7 @@ def _load_zoneinfo_class():
     global _ZONEINFO_CLASS
     if _ZONEINFO_CLASS is _ZONEINFO_CLASS_SENTINEL:
         zoneinfo_class = None
-        try:  # pragma: no cover - depende de la versión de Python
+        try:  # pragma: no cover - depende de la versi+n de Python
             from zoneinfo import ZoneInfo as builtin_zoneinfo  # type: ignore[attr-defined]
             zoneinfo_class = builtin_zoneinfo
         except Exception:
@@ -80,7 +108,7 @@ except Exception:  # pragma: no cover - fallback si falta dependencia
 try:  # pragma: no cover - depende de dependencia opcional
     import requests
     from requests import RequestException
-except Exception:  # pragma: no cover - fallback si requests no está
+except Exception:  # pragma: no cover - fallback si requests no est+
     requests = None  # type: ignore
     RequestException = Exception  # type: ignore
 
@@ -100,7 +128,7 @@ except Exception:  # pragma: no cover - si falta dependencia opcional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROMPT = "Respondé cordial, breve y como humano."
+DEFAULT_PROMPT = "Respond+ cordial, breve y como humano."
 PROMPT_KEY = "autoresponder_system_prompt"
 ACTIVE_ALIAS: str | None = None
 MAX_SYSTEM_PROMPT_CHARS = 50000
@@ -108,7 +136,7 @@ _AUTORESPONDER_STUB_WARNED = False
 
 
 def _safe_parse_datetime(*args, **kwargs) -> Optional[datetime]:
-    """Parsea una fecha utilizando dateutil si está disponible."""
+    """Parsea una fecha utilizando dateutil si est+ disponible."""
     if date_parser is None:
         return None
     try:
@@ -122,10 +150,10 @@ _PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
 _EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 _GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 _DEFAULT_GOHIGHLEVEL_PROMPT = (
-    "Sos un asistente que evalúa conversaciones de Instagram y determina si un lead está "
-    "calificado para enviarse automáticamente al CRM GoHighLevel. Respondé únicamente "
+    "Sos un asistente que eval+a conversaciones de Instagram y determina si un lead est+ "
+    "calificado para enviarse autom+ticamente al CRM GoHighLevel. Respond+ +nicamente "
     "con 'SI' cuando corresponda enviarlo y 'NO' cuando no cumpla con los criterios. "
-    "Considerá el contexto, el interés real del lead y si el equipo comercial debería "
+    "Consider+ el contexto, el inter+s real del lead y si el equipo comercial deber+a "
     "contactarlo."
 )
 
@@ -211,11 +239,11 @@ _WEEKDAY_KEYWORDS = {
     "lunes": 0,
     "martes": 1,
     "miercoles": 2,
-    "miércoles": 2,
+    "mi+rcoles": 2,
     "jueves": 3,
     "viernes": 4,
     "sabado": 5,
-    "sábado": 5,
+    "s+bado": 5,
     "domingo": 6,
 }
 
@@ -254,11 +282,11 @@ _WEEKDAY_KEYWORDS = {
     "lunes": 0,
     "martes": 1,
     "miercoles": 2,
-    "miércoles": 2,
+    "mi+rcoles": 2,
     "jueves": 3,
     "viernes": 4,
     "sabado": 5,
-    "sábado": 5,
+    "s+bado": 5,
     "domingo": 6,
 }
 
@@ -267,10 +295,10 @@ _FOLLOWUP_FILE = (
 )
 _FOLLOWUP_STATE: Dict[str, dict] | None = None
 _DEFAULT_FOLLOWUP_PROMPT = (
-    "Diseñá un plan de seguimiento amable para leads de Instagram. "
-    "Enviá el primer recordatorio cuando hayan pasado al menos 6 horas sin respuesta. "
-    "Si después de 12 horas más no responden, enviá un segundo y último mensaje. "
-    "No envíes más de dos seguimientos y evitá sonar insistente."
+    "Dise++ un plan de seguimiento amable para leads de Instagram. "
+    "Envi+ el primer recordatorio cuando hayan pasado al menos 6 horas sin respuesta. "
+    "Si despu+s de 12 horas m+s no responden, envi+ un segundo y +ltimo mensaje. "
+    "No env+es m+s de dos seguimientos y evit+ sonar insistente."
 )
 _FOLLOWUP_MIN_INTERVAL = 300
 _FOLLOWUP_HISTORY_MAX_AGE = 14 * 24 * 3600
@@ -345,7 +373,7 @@ def _get_followup_entry(alias: str) -> Dict[str, object]:
 def _set_followup_entry(alias: str, updates: Dict[str, object]) -> None:
     alias = alias.strip()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inv+lido.")
         return
     state = _read_followup_state()
     aliases: Dict[str, dict] = state.setdefault("aliases", {})
@@ -408,7 +436,7 @@ def _followup_status_lines() -> List[str]:
         prompt_preview = _preview_prompt(str(entry.get("prompt") or ""))
         status_label = "Activo" if enabled else "Inactivo"
         rows.append(
-            f" - {alias_label}: {status_label} • Cuentas: {accounts_label} • Prompt: {prompt_preview}"
+            f" - {alias_label}: {status_label}  Cuentas: {accounts_label}  Prompt: {prompt_preview}"
         )
     return rows
 
@@ -461,9 +489,25 @@ def _followup_enabled_entry_for(username: str) -> tuple[Optional[str], Dict[str,
     return None, {}
 
 
+def _followup_allowed_thread_ids(user: str) -> set[str]:
+    alias, entry = _followup_enabled_entry_for(user)
+    if not alias or not entry or not entry.get('enabled'):
+        return set()
+    history_source = entry.get('history')
+    history = history_source if isinstance(history_source, dict) else {}
+    account_norm = _normalize_username(user)
+    allowed: set[str] = set()
+    prefix = f'{account_norm}|'
+    for key in history.keys():
+        if not isinstance(key, str):
+            continue
+        if key.startswith(prefix):
+            allowed.add(key.split('|', 1)[1])
+    return allowed
+
 def _followup_configure_accounts() -> None:
     banner()
-    print(style_text("Seguimiento automático • Cuentas", color=Fore.CYAN, bold=True))
+    print(style_text("Seguimiento autom+tico  Cuentas", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _followup_status_lines():
         print(line)
@@ -479,14 +523,14 @@ def _followup_configure_accounts() -> None:
     entry = _get_followup_entry(alias)
     stored_accounts = set(entry.get("accounts") or [])
     use_all = entry.get("enabled") and not stored_accounts
-    print("Seleccioná las cuentas que usarán seguimiento automático:")
+    print("Seleccion+ las cuentas que usar+n seguimiento autom+tico:")
     for idx, account in enumerate(available, start=1):
         selected = use_all or account in stored_accounts
         marker = "[x]" if selected else "[ ]"
         print(f" {idx:>2}) {marker} @{account}")
     print("  0) Todas las cuentas del alias")
     choice = ask(
-        "Números separados por coma (vacío cancela, 0 = todas): "
+        "N+meros separados por coma (vac+o cancela, 0 = todas): "
     ).strip()
     if not choice:
         warn("No se realizaron cambios.")
@@ -509,7 +553,7 @@ def _followup_configure_accounts() -> None:
             if idx not in indices:
                 indices.append(idx)
     if not indices:
-        warn("No se seleccionaron cuentas válidas.")
+        warn("No se seleccionaron cuentas v+lidas.")
         press_enter()
         return
     selected_accounts = [available[i - 1] for i in indices]
@@ -520,7 +564,7 @@ def _followup_configure_accounts() -> None:
 
 def _followup_configure_prompt() -> None:
     banner()
-    print(style_text("Seguimiento automático • Prompt", color=Fore.CYAN, bold=True))
+    print(style_text("Seguimiento autom+tico  Prompt", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _followup_status_lines():
         print(line)
@@ -533,33 +577,33 @@ def _followup_configure_prompt() -> None:
     print(style_text("Prompt actual:", color=Fore.BLUE))
     print(current_prompt.strip() or "(sin definir)")
     print(full_line(color=Fore.BLUE))
-    print("Elegí una opción:")
+    print("Eleg+ una opci+n:")
     print("  E) Editar prompt")
     print("  D) Restaurar valor predeterminado")
     print("  Enter) Cancelar")
-    action = ask("Acción: ").strip().lower()
+    action = ask("Acci+n: ").strip().lower()
     if not action:
         warn("No se realizaron cambios.")
         press_enter()
         return
     if action in {"d", "default", "predeterminado"}:
         _set_followup_entry(alias, {"prompt": _DEFAULT_FOLLOWUP_PROMPT})
-        ok("Se restauró el prompt predeterminado de seguimiento.")
+        ok("Se restaur+ el prompt predeterminado de seguimiento.")
         press_enter()
         return
     if action not in {"e", "editar"}:
-        warn("Opción inválida.")
+        warn("Opci+n inv+lida.")
         press_enter()
         return
     print(
         style_text(
-            "Pegá el nuevo prompt y finalizá con una línea que diga <<<END>>>.",
+            "Peg+ el nuevo prompt y finaliz+ con una l+nea que diga <<<END>>>.",
             color=Fore.CYAN,
         )
     )
     lines: List[str] = []
     while True:
-        line = ask("› ")
+        line = ask("Ǧ ")
         if line.strip() == "<<<END>>>":
             break
         lines.append(line.replace("\r", ""))
@@ -568,13 +612,13 @@ def _followup_configure_prompt() -> None:
     if new_prompt:
         ok(f"Prompt actualizado. Longitud: {len(new_prompt)} caracteres.")
     else:
-        ok("Se eliminó el prompt personalizado. Se usará el valor predeterminado.")
+        ok("Se elimin+ el prompt personalizado. Se usar+ el valor predeterminado.")
     press_enter()
 
 
 def _followup_disable() -> None:
     banner()
-    print(style_text("Seguimiento automático • Desactivar", color=Fore.CYAN, bold=True))
+    print(style_text("Seguimiento autom+tico  Desactivar", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _followup_status_lines():
         print(line)
@@ -584,7 +628,7 @@ def _followup_disable() -> None:
         return
     entry = _get_followup_entry(alias)
     if not entry or not entry.get("enabled"):
-        warn("El seguimiento ya está inactivo para ese alias.")
+        warn("El seguimiento ya est+ inactivo para ese alias.")
         press_enter()
         return
     _set_followup_entry(alias, {"enabled": False, "history": {}})
@@ -595,7 +639,7 @@ def _followup_disable() -> None:
 def _followup_menu() -> None:
     while True:
         banner()
-        print(style_text("Seguimiento automático", color=Fore.CYAN, bold=True))
+        print(style_text("Seguimiento autom+tico", color=Fore.CYAN, bold=True))
         print(full_line(color=Fore.BLUE))
         for line in _followup_status_lines():
             print(line)
@@ -604,7 +648,7 @@ def _followup_menu() -> None:
         print("2) Configurar prompt de seguimiento")
         print("3) Desactivar seguimiento para un alias")
         print("4) Volver")
-        choice = ask("Opción: ").strip()
+        choice = ask("Opci+n: ").strip()
         if choice == "1":
             _followup_configure_accounts()
         elif choice == "2":
@@ -614,7 +658,7 @@ def _followup_menu() -> None:
         elif choice == "4":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opci+n inv+lida.")
             press_enter()
 
 
@@ -646,15 +690,15 @@ def _followup_decision(
 
     system_prompt = (
         "Sos un asistente que decide si enviar un mensaje de seguimiento en Instagram. "
-        "Debés seguir estrictamente las reglas provistas y responder SOLO con un objeto "
-        "JSON con las claves 'enviar' (booleano), 'mensaje' (texto) y 'etapa' (número entero). "
-        "Si no corresponde enviar, devolvé enviar=false, mensaje=\"\" y usá la etapa actual."
+        "Deb+s seguir estrictamente las reglas provistas y responder SOLO con un objeto "
+        "JSON con las claves 'enviar' (booleano), 'mensaje' (texto) y 'etapa' (n+mero entero). "
+        "Si no corresponde enviar, devolv+ enviar=false, mensaje=\"\" y us+ la etapa actual."
     )
     context_lines = ["Prompt de seguimiento personalizado:", prompt_text, "", "Contexto:"]
     for key, value in metadata.items():
         context_lines.append(f"- {key}: {value}")
     context_lines.append("")
-    context_lines.append("Conversación completa (orden cronológico):")
+    context_lines.append("Conversaci+n completa (orden cronol+gico):")
     context_lines.append(conversation)
     user_content = "\n".join(context_lines)
 
@@ -690,7 +734,7 @@ def _followup_decision(
         return None
     enviar = data.get("enviar")
     if isinstance(enviar, str):
-        enviar = enviar.strip().lower() in {"true", "1", "si", "sí", "yes"}
+        enviar = enviar.strip().lower() in {"true", "1", "si", "s+", "yes"}
     if not enviar:
         return None
     message = str(data.get("mensaje") or "").strip()
@@ -705,7 +749,15 @@ def _followup_decision(
     return message, etapa_int
 
 
-def _process_followups(client, user: str, api_key: str) -> None:
+def _process_followups(
+    client,
+
+    user: str,
+    api_key: str,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+) -> None:
     alias, entry = _followup_enabled_entry_for(user)
     if not alias or not entry or not entry.get("enabled"):
         return
@@ -725,6 +777,7 @@ def _process_followups(client, user: str, api_key: str) -> None:
         )
         return
     now_ts = time.time()
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     account_norm = _normalize_username(user)
     updated = False
     for thread in threads:
@@ -764,6 +817,14 @@ def _process_followups(client, user: str, api_key: str) -> None:
             continue
         if not messages:
             continue
+        latest_ts = None
+        for msg in messages:
+            msg_ts = _message_timestamp(msg)
+            if msg_ts is None:
+                continue
+            latest_ts = msg_ts if latest_ts is None else max(latest_ts, msg_ts)
+        if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
+            continue
         last_message = messages[0]
         if last_message.user_id != client.user_id:
             continue
@@ -781,17 +842,28 @@ def _process_followups(client, user: str, api_key: str) -> None:
         if last_outbound_ts and now_ts - last_outbound_ts < 60:
             continue
 
+        # Identify all inbound messages (i.e. sent by the lead) that contain text.
         inbound_messages = [
             msg
             for msg in messages
             if msg.user_id != client.user_id and isinstance(getattr(msg, "text", None), str)
         ]
-        if not inbound_messages:
-            continue
-        last_inbound = inbound_messages[0]
-        last_inbound_ts = _msg_ts(last_inbound)
-        if last_inbound_ts and now_ts - last_inbound_ts < 60:
-            continue
+        # Determine whether there are any inbound messages.  Historically the follow-up logic
+        # required at least one inbound message to proceed.  However, to allow outbound-only
+        # follow-ups (where the lead has not yet responded), we no longer short-circuit when
+        # there are no inbound messages.  Instead we track whether there is inbound
+        # interaction and handle timing accordingly.
+        has_inbound = bool(inbound_messages)
+        # Capture the most recent inbound message (if any) and its timestamp.
+        last_inbound = inbound_messages[0] if has_inbound else None
+        last_inbound_ts = _msg_ts(last_inbound) if last_inbound else None
+        if has_inbound:
+            # If the last inbound message is very recent (<60 seconds), skip follow-up and
+            # allow more time for the conversation to evolve.  When there are no inbound
+            # messages the follow-up decision can still be evaluated based solely on
+            # outbound context.
+            if last_inbound_ts and now_ts - last_inbound_ts < 60:
+                continue
 
         history_key = f"{account_norm}|{thread_id}"
         record = history.get(history_key, {})
@@ -812,9 +884,9 @@ def _process_followups(client, user: str, api_key: str) -> None:
 
         conversation_lines: List[str] = []
         for msg in reversed(messages[:40]):
-            text = getattr(msg, "text", "") or ""
+            text_value = getattr(msg, "text", "") or ""
             prefix = "YO" if msg.user_id == client.user_id else "ELLOS"
-            conversation_lines.append(f"{prefix}: {text}")
+            conversation_lines.append(f"{prefix}: {text_value}")
         conversation_text = "\n".join(conversation_lines[-40:])
 
         metadata = {
@@ -839,12 +911,13 @@ def _process_followups(client, user: str, api_key: str) -> None:
             updated = True
             continue
         message_text, stage = decision
+        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
         try:
             dm = client.direct_send(message_text, [recipient_id])
             message_id = getattr(dm, "id", "")
         except Exception as exc:  # pragma: no cover - depende de SDK externo
             logger.warning(
-                "No se pudo enviar seguimiento automático a %s desde @%s: %s",
+                "No se pudo enviar seguimiento automatico a %s desde @%s: %s",
                 recipient_username or recipient_id,
                 user,
                 exc,
@@ -862,7 +935,7 @@ def _process_followups(client, user: str, api_key: str) -> None:
         updated = True
         print(
             style_text(
-                f"[Seguimiento] @{user} → @{recipient_username}: mensaje etapa {stage}",
+                f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage}",
                 color=Fore.MAGENTA,
             )
         )
@@ -884,13 +957,13 @@ _NEGATIVE_KEYWORDS = (
 _INFO_KEYWORDS = (
     "info",
     "informacion",
-    "información",
+    "informaci+n",
     "detalle",
     "detalles",
     "precio",
     "costo",
     "mas info",
-    "más info",
+    "m+s info",
 )
 _CALL_KEYWORDS = (
     "agenda",
@@ -900,7 +973,7 @@ _CALL_KEYWORDS = (
     "cita",
     "call",
     "reunion",
-    "reunión",
+    "reuni+n",
 )
 _DEFAULT_LEAD_TAG = "Lead sin clasificar"
 
@@ -949,7 +1022,7 @@ def _safe_timezone(label: str):
 def _print_response_summary(
     index: int, sender: str, recipient: str, success: bool, extra: Optional[str] = None
 ) -> None:
-    icon = "✔️" if success else "❌"
+    icon = "ԣ" if success else ""
     status = "OK" if success else "ERROR"
     print(
         f"[{icon}] Respuesta {index} | Emisor: {_format_handle(sender)} | "
@@ -1003,6 +1076,30 @@ def _message_timestamp(msg: object) -> Optional[float]:
     except Exception:
         return None
 
+
+def _random_delay_seconds(delay_min: float, delay_max: float) -> float:
+    try:
+        min_value = float(delay_min)
+    except Exception:
+        min_value = 0.0
+    try:
+        max_value = float(delay_max)
+    except Exception:
+        max_value = min_value
+    if max_value < min_value:
+        max_value = min_value
+    if max_value <= 0:
+        return 0.0
+    if min_value <= 0:
+        min_value = 0.0
+    return random.uniform(min_value, max_value)
+
+def _sleep_between_replies_sync(delay_min: float, delay_max: float, label: str = 'reply_delay') -> None:
+    delay = _random_delay_seconds(delay_min, delay_max)
+    if delay <= 0:
+        return
+    logger.info('%s sleep=%.1fs', label, delay)
+    sleep_with_stop(delay)
 
 def _latest_inbound_message(messages: List[object], client_user_id: object) -> Optional[object]:
     candidates = [msg for msg in messages if getattr(msg, "user_id", None) != client_user_id]
@@ -1134,14 +1231,14 @@ def _client_for(username: str):
     except Exception as exc:
         if account and account.get("proxy_url"):
             record_proxy_failure(username, exc)
-            raise RuntimeError(f"El proxy de @{username} no respondió: {exc}") from exc
+            raise RuntimeError(f"El proxy de @{username} no respondi+: {exc}") from exc
         logger.warning("Proxy no disponible para @%s: %s", username, exc, exc_info=False)
 
     try:
         load_into(cl, username)
     except FileNotFoundError as exc:
         mark_connected(username, False)
-        raise RuntimeError(f"No hay sesión para {username}.") from exc
+        raise RuntimeError(f"No hay sesi+n para {username}.") from exc
     except Exception as exc:
         if binding and should_retry_proxy(exc):
             record_proxy_failure(username, exc)
@@ -1150,7 +1247,7 @@ def _client_for(username: str):
     if not has_valid_session_settings(cl):
         mark_connected(username, False)
         raise RuntimeError(
-            f"La sesión guardada para {username} no contiene credenciales activas. Iniciá sesión nuevamente."
+            f"La sesi+n guardada para {username} no contiene credenciales activas. Inici+ sesi+n nuevamente."
         )
 
     mark_connected(username, True)
@@ -1179,10 +1276,10 @@ def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
             temperature=0.6,
             max_output_tokens=180,
         )
-        return (msg.output_text or "").strip() or "Gracias por tu mensaje 🙌 ¿Cómo te puedo ayudar?"
+        return (msg.output_text or "").strip() or "Gracias por tu mensaje  -+C+mo te puedo ayudar?"
     except Exception as e:  # pragma: no cover - depende de red externa
         logger.warning("Fallo al generar respuesta con OpenAI: %s", e, exc_info=False)
-        return "Gracias por tu mensaje 🙌 ¿Cómo te puedo ayudar?"
+        return "Gracias por tu mensaje  -+C+mo te puedo ayudar?"
 
 
 def _choose_targets(alias: str) -> list[str]:
@@ -1222,10 +1319,10 @@ def _filter_valid_sessions(targets: list[str]) -> list[str]:
     needing_login: list[tuple[str, str]] = []
     for user in targets:
         if not has_session(user):
-            needing_login.append((user, "sin sesión guardada"))
+            needing_login.append((user, "sin sesi+n guardada"))
             continue
         if not _ensure_session(user):
-            needing_login.append((user, "sesión expirada"))
+            needing_login.append((user, "sesi+n expirada"))
             continue
         verified.append(user)
 
@@ -1239,10 +1336,10 @@ def _filter_valid_sessions(targets: list[str]) -> list[str]:
                 remaining.append((user, reason))
 
         if remaining:
-            print("\nLas siguientes cuentas necesitan volver a iniciar sesión:")
+            print("\nLas siguientes cuentas necesitan volver a iniciar sesi+n:")
             for user, reason in remaining:
                 print(f" - @{user}: {reason}")
-            if ask("¿Iniciar sesión ahora? (s/N): ").strip().lower() == "s":
+            if ask("-+Iniciar sesi+n ahora? (s/N): ").strip().lower() == "s":
                 for user, _ in remaining:
                     if auto_login_with_saved_password(user) and _ensure_session(user):
                         if user not in verified:
@@ -1252,7 +1349,7 @@ def _filter_valid_sessions(targets: list[str]) -> list[str]:
                         if user not in verified:
                             verified.append(user)
             else:
-                warn("Se omitieron las cuentas sin sesión válida.")
+                warn("Se omitieron las cuentas sin sesi+n v+lida.")
     return verified
 
 
@@ -1261,8 +1358,8 @@ def _mask_key(value: str) -> str:
     if not value:
         return ""
     if len(value) <= 6:
-        return value[:2] + "…"
-    return f"{value[:4]}…{value[-2:]}"
+        return value[:2] + "Ǫ"
+    return f"{value[:4]}Ǫ{value[-2:]}"
 
 
 def _system_prompt_file(alias: str | None = None) -> Path:
@@ -1426,7 +1523,7 @@ def _get_gohighlevel_entry(alias: str) -> Dict[str, dict]:
 def _set_gohighlevel_entry(alias: str, updates: Dict[str, object]) -> None:
     alias = alias.strip()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inv+lido.")
         return
     state = _read_gohighlevel_state()
     aliases: Dict[str, dict] = state.setdefault("aliases", {})
@@ -1455,7 +1552,7 @@ def _get_google_calendar_entry(alias: str) -> Dict[str, object]:
     if isinstance(entry, dict):
         entry.setdefault("alias", alias.strip())
         entry.setdefault("scheduled", {})
-        entry.setdefault("event_name", "{{username}} - Sistema de adquisición con IA")
+        entry.setdefault("event_name", "{{username}} - Sistema de adquisici+n con IA")
         entry.setdefault("duration_minutes", 30)
         entry.setdefault("timezone", _default_timezone_label())
         entry.setdefault("auto_meet", True)
@@ -1467,7 +1564,7 @@ def _get_google_calendar_entry(alias: str) -> Dict[str, object]:
 def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
     alias = alias.strip()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inv+lido.")
         return
     state = _read_google_calendar_state()
     aliases: Dict[str, dict] = state.setdefault("aliases", {})
@@ -1475,7 +1572,7 @@ def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
     entry = aliases.get(key, {})
     entry.setdefault("alias", alias)
     entry.setdefault("scheduled", {})
-    entry.setdefault("event_name", "{{username}} - Sistema de adquisición con IA")
+    entry.setdefault("event_name", "{{username}} - Sistema de adquisici+n con IA")
     entry.setdefault("duration_minutes", 30)
     entry.setdefault("timezone", _default_timezone_label())
     entry.setdefault("auto_meet", True)
@@ -1495,7 +1592,7 @@ def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
                 _ = _safe_timezone(tz_value)
                 normalized_updates[key_name] = tz_value
             except Exception:
-                warn("Zona horaria inválida; se mantiene el valor previo.")
+                warn("Zona horaria inv+lida; se mantiene el valor previo.")
                 continue
         elif key_name == "schedule_prompt":
             normalized_updates[key_name] = str(value)
@@ -1509,10 +1606,10 @@ def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
 def _mask_google_calendar_status(entry: Dict[str, object]) -> str:
     connected = bool(entry.get("connected"))
     enabled = bool(entry.get("enabled"))
-    status = "🟢 Activo" if connected and enabled else "🟡 Conectado" if connected else "⚪ Inactivo"
+    status = " Activo" if connected and enabled else " Conectado" if connected else "ܬ Inactivo"
     summary = entry.get("event_name") or "(sin nombre)"
     tz_label = entry.get("timezone") or "UTC"
-    return f"{status} • Evento: {summary} • TZ: {tz_label}"
+    return f"{status}  Evento: {summary}  TZ: {tz_label}"
 
 
 def _google_calendar_status_lines() -> List[str]:
@@ -1787,7 +1884,7 @@ def _google_calendar_credentials_from_entry(
             client_secret=str(entry.get("client_secret") or "") or None,
             scopes=[_GOOGLE_SCOPE],
         )
-    except Exception as exc:  # pragma: no cover - depende de librerías externas
+    except Exception as exc:  # pragma: no cover - depende de librer+as externas
         logger.warning(
             "No se pudieron preparar credenciales de Google Calendar: %s",
             exc,
@@ -1822,7 +1919,7 @@ def _google_calendar_create_event_via_service(
         return None
     try:
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         logger.warning(
             "No se pudo inicializar el cliente de Google Calendar: %s",
             exc,
@@ -1838,7 +1935,7 @@ def _google_calendar_create_event_via_service(
             .insert(calendarId="primary", body=payload, **kwargs)
             .execute()
         )
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         logger.warning(
             "Error al crear evento de Google Calendar mediante googleapiclient: %s",
             exc,
@@ -1927,7 +2024,7 @@ def _google_calendar_fetch_event_via_service(
         return None
     try:
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         logger.warning(
             "No se pudo inicializar el cliente de Google Calendar para leer evento: %s",
             exc,
@@ -1940,7 +2037,7 @@ def _google_calendar_fetch_event_via_service(
             .get(calendarId="primary", eventId=event_id)
             .execute()
         )
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         logger.warning(
             "Error al obtener evento de Google Calendar mediante googleapiclient: %s",
             exc,
@@ -2058,7 +2155,7 @@ def _google_calendar_update_event_via_service(
         return None
     try:
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         logger.warning(
             "No se pudo inicializar el cliente de Google Calendar para actualizar evento: %s",
             exc,
@@ -2074,7 +2171,7 @@ def _google_calendar_update_event_via_service(
             .patch(calendarId="primary", eventId=event_id, body=payload, **kwargs)
             .execute()
         )
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         logger.warning(
             "Error al actualizar evento de Google Calendar mediante googleapiclient: %s",
             exc,
@@ -2143,7 +2240,7 @@ def _google_calendar_update_event_via_requests(
     if response.status_code not in {200}:  # 200 OK al actualizar
         if response.status_code == 404:
             logger.info(
-                "El evento de Google Calendar no existe; se creará uno nuevo. (%s)",
+                "El evento de Google Calendar no existe; se crear+ uno nuevo. (%s)",
                 event_id,
             )
             return None
@@ -2243,14 +2340,14 @@ def _google_calendar_lead_qualifies(
 
     system_prompt = (
         prompt_text
-        + "\n\nResponde únicamente con 'SI' o 'NO' indicando si se debe crear un evento en Google Calendar."
+        + "\n\nResponde +nicamente con 'SI' o 'NO' indicando si se debe crear un evento en Google Calendar."
     )
     context_lines = [
         f"Estado detectado: {status or 'desconocido'}",
-        "Teléfonos detectados: "
-        + (", ".join(phone_numbers) if phone_numbers else "(sin teléfono)"),
+        "Tel+fonos detectados: "
+        + (", ".join(phone_numbers) if phone_numbers else "(sin tel+fono)"),
         f"Fecha/hora detectada: {meeting_dt.isoformat()}",
-        "Conversación completa:",
+        "Conversaci+n completa:",
         conversation,
     ]
     user_content = "\n".join(context_lines)
@@ -2280,7 +2377,7 @@ def _google_calendar_lead_qualifies(
 def _mask_gohighlevel_status(entry: Dict[str, object]) -> str:
     api_key = str(entry.get("api_key") or "")
     enabled = bool(entry.get("enabled"))
-    status = "🟢 Activo" if enabled else "⚪ Inactivo"
+    status = " Activo" if enabled else "ܬ Inactivo"
     location_ids = _sanitize_location_ids(entry.get("location_ids"))
     locations_text = (
         f"{len(location_ids)} Location ID(s)"
@@ -2288,8 +2385,8 @@ def _mask_gohighlevel_status(entry: Dict[str, object]) -> str:
         else "Location IDs: (sin definir)"
     )
     return (
-        f"{status} • API Key: {_mask_key(api_key) or '(sin definir)'}"
-        f" • {locations_text}"
+        f"{status}  API Key: {_mask_key(api_key) or '(sin definir)'}"
+        f"  {locations_text}"
     )
 
 
@@ -2392,13 +2489,13 @@ def _gohighlevel_lead_qualifies(
 
     system_prompt = (
         prompt_text
-        + "\n\nResponde únicamente con 'SI' o 'NO' indicando si se debe enviar el lead a GoHighLevel."
+        + "\n\nResponde +nicamente con 'SI' o 'NO' indicando si se debe enviar el lead a GoHighLevel."
     )
     context_lines = [
         f"Estado detectado: {status or 'desconocido'}",
-        "Teléfonos detectados: "
-        + (", ".join(phone_numbers) if phone_numbers else "(sin teléfono)"),
-        "Conversación completa:",
+        "Tel+fonos detectados: "
+        + (", ".join(phone_numbers) if phone_numbers else "(sin tel+fono)"),
+        "Conversaci+n completa:",
         conversation,
     ]
     user_content = "\n".join(context_lines)
@@ -2427,7 +2524,7 @@ def _gohighlevel_lead_qualifies(
 
 def _require_requests() -> bool:
     if requests is None:  # pragma: no cover - entorno sin dependencia
-        warn("La librería 'requests' no está disponible. Instalála para usar GoHighLevel.")
+        warn("La librer+a 'requests' no est+ disponible. Instal+la para usar GoHighLevel.")
         press_enter()
         return False
     return True
@@ -2436,7 +2533,7 @@ def _require_requests() -> bool:
 def _gohighlevel_select_alias() -> Optional[str]:
     alias = _prompt_alias_selection()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inv+lido.")
         press_enter()
         return None
     return alias
@@ -2444,7 +2541,7 @@ def _gohighlevel_select_alias() -> Optional[str]:
 
 def _gohighlevel_configure_key() -> None:
     banner()
-    print(style_text("GoHighLevel • Configurar API Key", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel  Configurar API Key", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2454,9 +2551,9 @@ def _gohighlevel_configure_key() -> None:
         return
     current = _get_gohighlevel_entry(alias)
     print(f"Actual: {_mask_key(str(current.get('api_key') or '')) or '(sin definir)'}")
-    new_key = ask("Ingresá la API Key de GoHighLevel (vacío para cancelar): ").strip()
+    new_key = ask("Ingres+ la API Key de GoHighLevel (vac+o para cancelar): ").strip()
     if not new_key:
-        warn("No se modificó la API Key de GoHighLevel.")
+        warn("No se modific+ la API Key de GoHighLevel.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"api_key": new_key})
@@ -2466,7 +2563,7 @@ def _gohighlevel_configure_key() -> None:
 
 def _gohighlevel_configure_locations() -> None:
     banner()
-    print(style_text("GoHighLevel • Configurar Location IDs", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel  Configurar Location IDs", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2484,9 +2581,9 @@ def _gohighlevel_configure_locations() -> None:
         print("Actual: (sin definir)")
     print()
     prompt = (
-        "Ingresá uno o más Location IDs (separados por coma o espacio).\n"
-        "Escribí 'eliminar N' para borrar uno específico (usa el número de la lista),\n"
-        "'limpiar' para eliminar todos o dejá vacío para cancelar: "
+        "Ingres+ uno o m+s Location IDs (separados por coma o espacio).\n"
+        "Escrib+ 'eliminar N' para borrar uno espec+fico (usa el n+mero de la lista),\n"
+        "'limpiar' para eliminar todos o dej+ vac+o para cancelar: "
     )
     raw = ask(prompt).strip()
     if not raw:
@@ -2500,7 +2597,7 @@ def _gohighlevel_configure_locations() -> None:
             return
         indexes = [token for token in re.split(r"[^0-9]+", raw) if token.isdigit()]
         if not indexes:
-            warn("Indicá el número del Location ID a eliminar.")
+            warn("Indic+ el n+mero del Location ID a eliminar.")
             press_enter()
             return
         to_remove: set[int] = set()
@@ -2512,7 +2609,7 @@ def _gohighlevel_configure_locations() -> None:
             if 1 <= idx <= len(current_ids):
                 to_remove.add(idx - 1)
         if not to_remove:
-            warn("Los números indicados no coinciden con Location IDs existentes.")
+            warn("Los n+meros indicados no coinciden con Location IDs existentes.")
             press_enter()
             return
         remaining = [value for idx, value in enumerate(current_ids) if idx not in to_remove]
@@ -2530,7 +2627,7 @@ def _gohighlevel_configure_locations() -> None:
         return
     location_ids = _sanitize_location_ids(raw)
     if not location_ids:
-        warn("No se detectaron Location IDs válidos.")
+        warn("No se detectaron Location IDs v+lidos.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"location_ids": location_ids})
@@ -2540,7 +2637,7 @@ def _gohighlevel_configure_locations() -> None:
 
 def _gohighlevel_configure_prompt() -> None:
     banner()
-    print(style_text("GoHighLevel • Criterios de envío", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel  Criterios de env+o", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2553,40 +2650,40 @@ def _gohighlevel_configure_prompt() -> None:
     print(style_text("Prompt actual:", color=Fore.BLUE))
     print(current_prompt or "(sin definir)")
     print(full_line(color=Fore.BLUE))
-    print("Elegí una opción:")
+    print("Eleg+ una opci+n:")
     print("  E) Editar prompt")
     print("  D) Restaurar prompt predeterminado")
     print("  Enter) Cancelar")
-    action = ask("Acción: ").strip().lower()
+    action = ask("Acci+n: ").strip().lower()
     if not action:
-        warn("No se modificó el prompt de calificación.")
+        warn("No se modific+ el prompt de calificaci+n.")
         press_enter()
         return
     if action in {"d", "default", "predeterminado"}:
         _set_gohighlevel_entry(alias, {"qualify_prompt": _DEFAULT_GOHIGHLEVEL_PROMPT})
-        ok("Se restauró el prompt predeterminado para GoHighLevel.")
+        ok("Se restaur+ el prompt predeterminado para GoHighLevel.")
         press_enter()
         return
     if action not in {"e", "editar"}:
-        warn("Opción inválida. No se modificó el prompt de calificación.")
+        warn("Opci+n inv+lida. No se modific+ el prompt de calificaci+n.")
         press_enter()
         return
     print(
         style_text(
-            "Pegá el nuevo prompt y finalizá con una línea que diga <<<END>>>."
-            " Dejá vacío para cancelar.",
+            "Peg+ el nuevo prompt y finaliz+ con una l+nea que diga <<<END>>>."
+            " Dej+ vac+o para cancelar.",
             color=Fore.CYAN,
         )
     )
     lines: List[str] = []
     while True:
-        line = ask("› ")
+        line = ask("Ǧ ")
         if line.strip() == "<<<END>>>":
             break
         lines.append(line.replace("\r", ""))
     new_prompt = "\n".join(lines).strip()
     if not new_prompt:
-        warn("No se modificó el prompt de calificación.")
+        warn("No se modific+ el prompt de calificaci+n.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"qualify_prompt": new_prompt})
@@ -2598,7 +2695,7 @@ def _gohighlevel_activate() -> None:
     if not _require_requests():
         return
     banner()
-    print(style_text("GoHighLevel • Activar envío automático", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel  Activar env+o autom+tico", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2609,17 +2706,17 @@ def _gohighlevel_activate() -> None:
     entry = _get_gohighlevel_entry(alias)
     api_key = str(entry.get("api_key") or "")
     if not api_key:
-        warn("Configurá la API Key antes de activar la conexión.")
+        warn("Configur+ la API Key antes de activar la conexi+n.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"enabled": True})
-    ok(f"Conexión GoHighLevel activada para {alias}.")
+    ok(f"Conexi+n GoHighLevel activada para {alias}.")
     press_enter()
 
 
 def _gohighlevel_deactivate() -> None:
     banner()
-    print(style_text("GoHighLevel • Desactivar conexión", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel  Desactivar conexi+n", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2628,7 +2725,7 @@ def _gohighlevel_deactivate() -> None:
     if not alias:
         return
     _set_gohighlevel_entry(alias, {"enabled": False})
-    ok(f"Conexión GoHighLevel desactivada para {alias}.")
+    ok(f"Conexi+n GoHighLevel desactivada para {alias}.")
     press_enter()
 
 
@@ -2642,12 +2739,12 @@ def _gohighlevel_menu() -> None:
         print(full_line(color=Fore.BLUE))
         print("1) Ingresar API Key de GoHighLevel")
         print("2) Configurar Location IDs de GoHighLevel")
-        print("3) Activar el envío automático de leads calificados al CRM de GoHighLevel")
-        print("4) Desactivar conexión")
-        print("5) Configurar criterios de calificación")
-        print("6) Volver al submenú anterior")
+        print("3) Activar el env+o autom+tico de leads calificados al CRM de GoHighLevel")
+        print("4) Desactivar conexi+n")
+        print("5) Configurar criterios de calificaci+n")
+        print("6) Volver al submen+ anterior")
         print(full_line(color=Fore.BLUE))
-        choice = ask("Opción: ").strip()
+        choice = ask("Opci+n: ").strip()
         if choice == "1":
             _gohighlevel_configure_key()
         elif choice == "2":
@@ -2661,14 +2758,14 @@ def _gohighlevel_menu() -> None:
         elif choice == "6":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opci+n inv+lida.")
             press_enter()
 
 
 def _google_calendar_select_alias() -> Optional[str]:
     alias = _prompt_alias_selection()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inv+lido.")
         press_enter()
         return None
     return alias
@@ -2686,7 +2783,7 @@ def _google_calendar_perform_device_flow(
             timeout=15,
         )
     except RequestException as exc:  # pragma: no cover - depende de red externa
-        warn(f"No se pudo iniciar la autorización de Google: {exc}")
+        warn(f"No se pudo iniciar la autorizaci+n de Google: {exc}")
         press_enter()
         return None
     if response.status_code != 200:
@@ -2696,20 +2793,20 @@ def _google_calendar_perform_device_flow(
     payload = response.json()
     device_code = payload.get("device_code")
     if not device_code:
-        warn("Google no devolvió device_code válido.")
+        warn("Google no devolvi+ device_code v+lido.")
         press_enter()
         return None
     verification_url = payload.get("verification_url") or payload.get("verification_uri")
     user_code = payload.get("user_code")
     print(style_text("Para continuar:", color=Fore.CYAN, bold=True))
     if verification_url and user_code:
-        print(f"1. Visitá {verification_url}")
-        print(f"2. Ingresá el código: {user_code}")
+        print(f"1. Visit+ {verification_url}")
+        print(f"2. Ingres+ el c+digo: {user_code}")
     elif user_code:
-        print(f"Ingresá el código: {user_code}")
+        print(f"Ingres+ el c+digo: {user_code}")
     else:
-        print("Abrí la URL indicada por Google y autorizá el acceso.")
-    print("Esperando confirmación...")
+        print("Abr+ la URL indicada por Google y autoriz+ el acceso.")
+    print("Esperando confirmaci+n...")
     interval = int(payload.get("interval", 5))
     expires_at = time.time() + int(payload.get("expires_in", 1800))
     data = {
@@ -2740,13 +2837,13 @@ def _google_calendar_perform_device_flow(
             interval = min(interval + 2, 15)
             continue
         if error_code in {"expired_token", "access_denied"}:
-            warn("La autorización no fue completada.")
+            warn("La autorizaci+n no fue completada.")
             press_enter()
             return None
         warn(f"Error al obtener token de Google: {token_response.text}")
         press_enter()
         return None
-    warn("El código de autorización expiró. Intentá nuevamente.")
+    warn("El c+digo de autorizaci+n expir+. Intent+ nuevamente.")
     press_enter()
     return None
 
@@ -2755,12 +2852,12 @@ def _google_calendar_validate_client_payload(
     payload: Dict[str, object]
 ) -> tuple[Optional[Dict[str, object]], Optional[str]]:
     if not isinstance(payload, dict):
-        return None, "El archivo JSON no contiene una estructura válida."
+        return None, "El archivo JSON no contiene una estructura v+lida."
     installed = payload.get("installed")
     if not isinstance(installed, dict):
         return (
             None,
-            "El archivo JSON debe corresponder a una 'Aplicación de escritorio' generada en Google Cloud Console.",
+            "El archivo JSON debe corresponder a una 'Aplicaci+n de escritorio' generada en Google Cloud Console.",
         )
     redirect_uris = installed.get("redirect_uris")
     normalized_uris: set[str] = set()
@@ -2777,7 +2874,7 @@ def _google_calendar_validate_client_payload(
         )
     client_id = installed.get("client_id")
     if not client_id:
-        return None, "El archivo JSON no contiene un Client ID válido."
+        return None, "El archivo JSON no contiene un Client ID v+lido."
     return installed, None
 
 
@@ -2797,8 +2894,8 @@ def _google_calendar_extract_client_credentials(
 
 def _google_calendar_report_oauth_error(exc: Exception) -> None:
     base_message = (
-        "Error de autenticación. Verificá que el JSON cargado sea válido, "
-        "que estés autorizado como tester y que el proyecto esté correctamente configurado."
+        "Error de autenticaci+n. Verific+ que el JSON cargado sea v+lido, "
+        "que est+s autorizado como tester y que el proyecto est+ correctamente configurado."
     )
     details = str(exc).strip()
     if details:
@@ -2815,20 +2912,20 @@ def _ensure_google_auth_oauthlib() -> bool:
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow as flow_cls  # type: ignore
     except Exception:
-        warn("Esta opción requiere la librería google-auth-oauthlib.")
+        warn("Esta opci+n requiere la librer+a google-auth-oauthlib.")
         confirm = (
-            ask("¿Deseás que la instalemos automáticamente ahora? (s/n): ")
+            ask("-+Dese+s que la instalemos autom+ticamente ahora? (s/n): ")
             .strip()
             .lower()
         )
-        if confirm not in {"s", "si", "sí", "y", "yes"}:
-            warn("Instalación cancelada. Instalá google-auth-oauthlib para continuar.")
+        if confirm not in {"s", "si", "s+", "y", "yes"}:
+            warn("Instalaci+n cancelada. Instal+ google-auth-oauthlib para continuar.")
             press_enter()
             return False
         python_bin = sys.executable or "python3"
         print(
             style_text(
-                "Instalando google-auth-oauthlib, por favor esperá...",
+                "Instalando google-auth-oauthlib, por favor esper+...",
                 color=Fore.YELLOW,
             )
         )
@@ -2837,18 +2934,18 @@ def _ensure_google_auth_oauthlib() -> bool:
                 [python_bin, "-m", "pip", "install", "google-auth-oauthlib"]
             )
         except Exception as exc:
-            warn(f"No se pudo instalar google-auth-oauthlib automáticamente: {exc}")
+            warn(f"No se pudo instalar google-auth-oauthlib autom+ticamente: {exc}")
             press_enter()
             return False
         try:
             from google_auth_oauthlib.flow import InstalledAppFlow as flow_cls  # type: ignore
         except Exception as exc:
-            warn(f"La librería google-auth-oauthlib no pudo cargarse: {exc}")
+            warn(f"La librer+a google-auth-oauthlib no pudo cargarse: {exc}")
             press_enter()
             return False
-        ok("La librería google-auth-oauthlib se instaló correctamente.")
+        ok("La librer+a google-auth-oauthlib se instal+ correctamente.")
     if flow_cls is None:
-        warn("No se pudo cargar la librería google-auth-oauthlib.")
+        warn("No se pudo cargar la librer+a google-auth-oauthlib.")
         press_enter()
         return False
     InstalledAppFlow = flow_cls
@@ -2861,7 +2958,7 @@ def _google_calendar_load_credentials_json() -> None:
     banner()
     print(
         style_text(
-            "Google Calendar • Cargar credenciales JSON",
+            "Google Calendar  Cargar credenciales JSON",
             color=Fore.CYAN,
             bold=True,
         )
@@ -2874,10 +2971,10 @@ def _google_calendar_load_credentials_json() -> None:
     if not alias:
         return
     path_input = ask(
-        "Ruta del archivo JSON de Google (vacío para cancelar): "
+        "Ruta del archivo JSON de Google (vac+o para cancelar): "
     ).strip()
     if not path_input:
-        warn("No se cargó ningún archivo de credenciales.")
+        warn("No se carg+ ning+n archivo de credenciales.")
         press_enter()
         return
     file_path = Path(path_input).expanduser()
@@ -2900,7 +2997,7 @@ def _google_calendar_load_credentials_json() -> None:
     client_secret_value = config.get("client_secret")
     client_secret = str(client_secret_value) if client_secret_value else None
     if not client_id:
-        warn("El archivo JSON no contiene un Client ID válido.")
+        warn("El archivo JSON no contiene un Client ID v+lido.")
         press_enter()
         return
     _set_google_calendar_entry(
@@ -2916,20 +3013,20 @@ def _google_calendar_load_credentials_json() -> None:
         except Exception:
             # Algunos objetos Flow no exponen redirect_uri hasta ejecutar run_*.
             pass
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librer+a externa
         warn(f"No se pudo inicializar el flujo OAuth: {exc}")
         press_enter()
         return
     try:
         credentials = flow.run_local_server(port=0)
-    except Exception as exc_local:  # pragma: no cover - depende de librería externa
+    except Exception as exc_local:  # pragma: no cover - depende de librer+a externa
         logger.debug(
             "Fallo run_local_server para Google OAuth, se intenta modo consola",
             exc_info=exc_local,
         )
         try:
             credentials = flow.run_console()
-        except Exception as exc_console:  # pragma: no cover - depende de librería externa
+        except Exception as exc_console:  # pragma: no cover - depende de librer+a externa
             _google_calendar_report_oauth_error(exc_console)
             press_enter()
             return
@@ -2939,7 +3036,7 @@ def _google_calendar_load_credentials_json() -> None:
     if entry.get("connected"):
         ok(f"Google Calendar conectado para {alias}.")
     else:
-        warn("No se pudo completar la conexión con Google Calendar.")
+        warn("No se pudo completar la conexi+n con Google Calendar.")
     press_enter()
 
 
@@ -2947,7 +3044,7 @@ def _google_calendar_connect() -> None:
     if not _require_requests():
         return
     banner()
-    print(style_text("Google Calendar • Conectar cuenta", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar  Conectar cuenta", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -2959,15 +3056,15 @@ def _google_calendar_connect() -> None:
     current_client_id = str(entry.get("client_id") or "")
     current_client_secret = str(entry.get("client_secret") or "")
     print(f"Client ID actual: {current_client_id or '(sin definir)'}")
-    client_id = ask("Ingresá el Client ID de OAuth (vacío mantiene actual): ").strip()
+    client_id = ask("Ingres+ el Client ID de OAuth (vac+o mantiene actual): ").strip()
     if not client_id:
         client_id = current_client_id
     if not client_id:
-        warn("Se requiere un Client ID válido para continuar.")
+        warn("Se requiere un Client ID v+lido para continuar.")
         press_enter()
         return
     client_secret = ask(
-        "Ingresá el Client Secret (vacío mantiene actual o se omite si no aplica): "
+        "Ingres+ el Client Secret (vac+o mantiene actual o se omite si no aplica): "
     ).strip()
     if not client_secret:
         client_secret = current_client_secret
@@ -2980,13 +3077,13 @@ def _google_calendar_connect() -> None:
     if entry.get("connected"):
         ok(f"Google Calendar conectado para {alias}.")
     else:
-        warn("No se pudo completar la conexión con Google Calendar.")
+        warn("No se pudo completar la conexi+n con Google Calendar.")
     press_enter()
 
 
 def _google_calendar_configure_event() -> None:
     banner()
-    print(style_text("Google Calendar • Configuración de eventos", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar  Configuraci+n de eventos", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -2995,7 +3092,7 @@ def _google_calendar_configure_event() -> None:
     if not alias:
         return
     entry = _get_google_calendar_entry(alias)
-    current_name = str(entry.get("event_name") or "{{username}} - Sistema de adquisición con IA")
+    current_name = str(entry.get("event_name") or "{{username}} - Sistema de adquisici+n con IA")
     current_duration = int(entry.get("duration_minutes") or 30)
     current_timezone = str(entry.get("timezone") or _default_timezone_label())
     current_auto_meet = bool(entry.get("auto_meet", True))
@@ -3005,28 +3102,28 @@ def _google_calendar_configure_event() -> None:
     if new_name:
         updates["event_name"] = new_name
     duration_input = ask(
-        f"Duración en minutos (actual {current_duration}, Enter mantiene): "
+        f"Duraci+n en minutos (actual {current_duration}, Enter mantiene): "
     ).strip()
     if duration_input:
         try:
             updates["duration_minutes"] = max(5, int(duration_input))
         except Exception:
-            warn("Duración inválida; se mantiene el valor actual.")
+            warn("Duraci+n inv+lida; se mantiene el valor actual.")
     tz_input = ask(
         f"Zona horaria (actual {current_timezone}, Enter mantiene): "
     ).strip()
     if tz_input:
         updates["timezone"] = tz_input
     auto_meet_input = ask(
-        f"Generar enlace de Google Meet automáticamente? (S/N, actual {'S' if current_auto_meet else 'N'}): "
+        f"Generar enlace de Google Meet autom+ticamente? (S/N, actual {'S' if current_auto_meet else 'N'}): "
     ).strip().lower()
-    if auto_meet_input in {"s", "si", "sí"}:
+    if auto_meet_input in {"s", "si", "s+"}:
         updates["auto_meet"] = True
     elif auto_meet_input in {"n", "no"}:
         updates["auto_meet"] = False
     if updates:
         _set_google_calendar_entry(alias, updates)
-        ok("Configuración de eventos actualizada.")
+        ok("Configuraci+n de eventos actualizada.")
     else:
         warn("No se realizaron cambios.")
     press_enter()
@@ -3036,7 +3133,7 @@ def _google_calendar_configure_prompt() -> None:
     banner()
     print(
         style_text(
-            "Google Calendar • Criterio para creación de eventos",
+            "Google Calendar  Criterio para creaci+n de eventos",
             color=Fore.CYAN,
             bold=True,
         )
@@ -3053,13 +3150,13 @@ def _google_calendar_configure_prompt() -> None:
     print(style_text("Prompt actual:", color=Fore.BLUE))
     print(current_prompt.strip() or "(sin definir)")
     print(full_line(color=Fore.BLUE))
-    print("Elegí una opción:")
+    print("Eleg+ una opci+n:")
     print("  E) Editar prompt")
     print("  D) Restaurar valor predeterminado")
     print("  Enter) Cancelar")
-    action = ask("Acción: ").strip().lower()
+    action = ask("Acci+n: ").strip().lower()
     if not action:
-        warn("No se modificó el criterio de calendario.")
+        warn("No se modific+ el criterio de calendario.")
         press_enter()
         return
     if action in {"d", "default", "predeterminado"}:
@@ -3067,25 +3164,25 @@ def _google_calendar_configure_prompt() -> None:
             alias,
             {"schedule_prompt": _DEFAULT_GOOGLE_CALENDAR_PROMPT},
         )
-        ok("Se restauró el criterio predeterminado de Google Calendar.")
+        ok("Se restaur+ el criterio predeterminado de Google Calendar.")
         press_enter()
         return
     if action not in {"e", "editar"}:
-        warn("Opción inválida. No se modificó el criterio de calendario.")
+        warn("Opci+n inv+lida. No se modific+ el criterio de calendario.")
         press_enter()
         return
     print(
         style_text(
             (
-                "Pegá el nuevo criterio y finalizá con una línea que diga <<<END>>>."
-                " Dejá vacío para cancelar."
+                "Peg+ el nuevo criterio y finaliz+ con una l+nea que diga <<<END>>>."
+                " Dej+ vac+o para cancelar."
             ),
             color=Fore.CYAN,
         )
     )
     lines: List[str] = []
     while True:
-        line = ask("› ")
+        line = ask("Ǧ ")
         if line.strip() == "<<<END>>>":
             break
         lines.append(line.replace("\r", ""))
@@ -3094,13 +3191,13 @@ def _google_calendar_configure_prompt() -> None:
     if new_prompt:
         ok(f"Criterio actualizado. Longitud: {len(new_prompt)} caracteres.")
     else:
-        ok("Se eliminó el criterio personalizado. Se usará la lógica automática predeterminada.")
+        ok("Se elimin+ el criterio personalizado. Se usar+ la l+gica autom+tica predeterminada.")
     press_enter()
 
 
 def _google_calendar_activate() -> None:
     banner()
-    print(style_text("Google Calendar • Activar creación automática", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar  Activar creaci+n autom+tica", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -3110,17 +3207,17 @@ def _google_calendar_activate() -> None:
         return
     entry = _get_google_calendar_entry(alias)
     if not entry.get("connected"):
-        warn("Conectá Google Calendar antes de activar la lógica automática.")
+        warn("Conect+ Google Calendar antes de activar la l+gica autom+tica.")
         press_enter()
         return
     _set_google_calendar_entry(alias, {"enabled": True})
-    ok(f"Lógica automática activada para {alias}.")
+    ok(f"L+gica autom+tica activada para {alias}.")
     press_enter()
 
 
 def _google_calendar_deactivate() -> None:
     banner()
-    print(style_text("Google Calendar • Desactivar creación automática", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar  Desactivar creaci+n autom+tica", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -3129,13 +3226,13 @@ def _google_calendar_deactivate() -> None:
     if not alias:
         return
     _set_google_calendar_entry(alias, {"enabled": False})
-    ok(f"Lógica automática desactivada para {alias}.")
+    ok(f"L+gica autom+tica desactivada para {alias}.")
     press_enter()
 
 
 def _google_calendar_revoke() -> None:
     banner()
-    print(style_text("Google Calendar • Revocar conexión", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar  Revocar conexi+n", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -3149,7 +3246,7 @@ def _google_calendar_revoke() -> None:
         try:
             requests.post(_GOOGLE_REVOKE_URL, params={"token": token}, timeout=15)
         except RequestException:
-            logger.warning("No se pudo notificar la revocación a Google.", exc_info=False)
+            logger.warning("No se pudo notificar la revocaci+n a Google.", exc_info=False)
     _set_google_calendar_entry(
         alias,
         {
@@ -3161,7 +3258,7 @@ def _google_calendar_revoke() -> None:
             "enabled": False,
         },
     )
-    ok(f"Conexión revocada para {alias}.")
+    ok(f"Conexi+n revocada para {alias}.")
     press_enter()
 
 
@@ -3174,15 +3271,15 @@ def _google_calendar_menu() -> None:
             print(line)
         print(full_line(color=Fore.BLUE))
         print("1) Conectar cuenta mediante OAuth")
-        print("2) Configurar parámetros del evento")
-        print("3) Configurar criterio para creación de evento")
-        print("4) Activar creación automática de eventos")
-        print("5) Desactivar creación automática de eventos")
-        print("6) Revocar conexión")
+        print("2) Configurar par+metros del evento")
+        print("3) Configurar criterio para creaci+n de evento")
+        print("4) Activar creaci+n autom+tica de eventos")
+        print("5) Desactivar creaci+n autom+tica de eventos")
+        print("6) Revocar conexi+n")
         print("7) Cargar credenciales JSON (Google OAuth 2.0)")
-        print("8) Volver al submenú anterior")
+        print("8) Volver al submen+ anterior")
         print(full_line(color=Fore.BLUE))
-        choice = ask("Opción: ").strip()
+        choice = ask("Opci+n: ").strip()
         if choice == "1":
             _google_calendar_connect()
         elif choice == "2":
@@ -3200,7 +3297,7 @@ def _google_calendar_menu() -> None:
         elif choice == "8":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opci+n inv+lida.")
             press_enter()
 
 
@@ -3210,7 +3307,7 @@ def _configure_api_key() -> None:
     print(style_text("Configurar OPENAI_API_KEY", color=Fore.CYAN, bold=True))
     print(f"Actual: {(_mask_key(current_key) or '(sin definir)')}")
     print()
-    new_key = ask("Nueva API Key (vacío para cancelar): ").strip()
+    new_key = ask("Nueva API Key (vac+o para cancelar): ").strip()
     if not new_key:
         warn("Se mantuvo la API Key actual.")
         press_enter()
@@ -3236,31 +3333,31 @@ def _configure_prompt() -> None:
         print("3) Ver primeros 400 caracteres")
         print("4) Volver")
         print(full_line(color=Fore.BLUE))
-        choice = ask("Opción: ").strip()
+        choice = ask("Opci+n: ").strip()
 
         if choice == "1":
             print(style_text(
-                "Pegá tu System Prompt y cerrá con una línea que diga <<<END>>>.",
+                "Peg+ tu System Prompt y cerr+ con una l+nea que diga <<<END>>>.",
                 color=Fore.CYAN,
             ))
             lines: list[str] = []
             while True:
-                line = ask("› ")
+                line = ask("Ǧ ")
                 if line.strip() == "<<<END>>>":
                     break
                 lines.append(line.replace("\r", ""))
             new_prompt = "\n".join(lines)
             if not _normalize_system_prompt_text(new_prompt):
-                warn("No se modificó el prompt.")
+                warn("No se modific+ el prompt.")
                 press_enter()
                 continue
             saved_prompt = _persist_system_prompt(new_prompt)
             ok(f"System Prompt guardado. Longitud: {len(saved_prompt)} caracteres.")
             press_enter()
         elif choice == "2":
-            path_input = ask("Ruta del archivo .txt (vacío para cancelar): ").strip()
+            path_input = ask("Ruta del archivo .txt (vac+o para cancelar): ").strip()
             if not path_input:
-                warn("No se modificó el prompt.")
+                warn("No se modific+ el prompt.")
                 press_enter()
                 continue
             file_path = Path(path_input).expanduser()
@@ -3275,7 +3372,7 @@ def _configure_prompt() -> None:
                 press_enter()
                 continue
             if not _normalize_system_prompt_text(file_contents):
-                warn("No se modificó el prompt.")
+                warn("No se modific+ el prompt.")
                 press_enter()
                 continue
             saved_prompt = _persist_system_prompt(file_contents)
@@ -3289,12 +3386,12 @@ def _configure_prompt() -> None:
             else:
                 print(preview)
                 if len(current_prompt or "") > 400:
-                    print(style_text("… (truncado)", color=Fore.YELLOW))
+                    print(style_text("Ǫ (truncado)", color=Fore.YELLOW))
             press_enter()
         elif choice == "4":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opci+n inv+lida.")
             press_enter()
 
 
@@ -3313,9 +3410,9 @@ def _preview_prompt(prompt: str) -> str:
         return "(sin definir)"
     first_line = prompt.splitlines()[0]
     if len(first_line) > 60:
-        return first_line[:57] + "…"
+        return first_line[:57] + "Ǫ"
     if len(prompt.splitlines()) > 1:
-        return first_line + " …"
+        return first_line + " Ǫ"
     return first_line
 
 
@@ -3364,14 +3461,14 @@ def _prompt_alias_selection() -> str | None:
     print("Alias/grupos disponibles:")
     for idx, alias in enumerate(options, start=1):
         print(f" {idx}) {alias}")
-    raw = ask("Seleccioná alias (número o texto, Enter=ALL): ").strip()
+    raw = ask("Seleccion+ alias (n+mero o texto, Enter=ALL): ").strip()
     if not raw:
         return "ALL"
     if raw.isdigit():
         idx = int(raw)
         if 1 <= idx <= len(options):
             return options[idx - 1]
-        warn("Número fuera de rango.")
+        warn("N+mero fuera de rango.")
         return None
     return raw
 
@@ -3379,12 +3476,12 @@ def _prompt_alias_selection() -> str | None:
 def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
     message = str(exc).lower()
     if should_retry_proxy(exc):
-        label = style_text(f"[WARN][@{user}] proxy falló", color=Fore.YELLOW, bold=True)
+        label = style_text(f"[WARN][@{user}] proxy fall+", color=Fore.YELLOW, bold=True)
         record_proxy_failure(user, exc)
         print(label)
-        warn("Revisá la opción 1 para actualizar o quitar el proxy de esta cuenta.")
+        warn("Revis+ la opci+n 1 para actualizar o quitar el proxy de esta cuenta.")
     elif "login_required" in message:
-        label = style_text(f"[ERROR][@{user}] sesión inválida", color=Fore.RED, bold=True)
+        label = style_text(f"[ERROR][@{user}] sesi+n inv+lida", color=Fore.RED, bold=True)
         print(label)
     elif any(key in message for key in ("challenge", "checkpoint")):
         label = style_text(f"[WARN][@{user}] checkpoint requerido", color=Fore.YELLOW, bold=True)
@@ -3398,10 +3495,10 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
     logger.warning("Incidente con @%s en auto-responder: %s", user, exc, exc_info=False)
 
     while True:
-        choice = ask("¿Continuar sin esta cuenta (C) / Reintentar (R) / Pausar (P)? ").strip().lower()
+        choice = ask("-+Continuar sin esta cuenta (C) / Reintentar (R) / Pausar (P)? ").strip().lower()
         if choice in {"c", "r", "p"}:
             break
-        warn("Elegí C, R o P.")
+        warn("Eleg+ C, R o P.")
 
     if choice == "c":
         if user in active:
@@ -3411,16 +3508,16 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
         return
 
     if choice == "p":
-        request_stop("pausa solicitada desde menú del bot")
+        request_stop("pausa solicitada desde men+ del bot")
         return
 
     while choice == "r":
         if prompt_login(user, interactive=False) and _ensure_session(user):
             mark_connected(user, True)
-            ok(f"Sesión renovada para @{user}")
+            ok(f"Sesi+n renovada para @{user}")
             return
-        warn("La sesión sigue fallando. Intentá nuevamente o elegí otra opción.")
-        choice = ask("¿Reintentar (R) / Continuar sin la cuenta (C) / Pausar (P)? ").strip().lower()
+        warn("La sesi+n sigue fallando. Intent+ nuevamente o eleg+ otra opci+n.")
+        choice = ask("-+Reintentar (R) / Continuar sin la cuenta (C) / Pausar (P)? ").strip().lower()
         if choice == "c":
             if user in active:
                 active.remove(user)
@@ -3428,7 +3525,7 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
             warn(f"Se excluye @{user} del ciclo actual.")
             return
         if choice == "p":
-            request_stop("pausa solicitada desde menú del bot")
+            request_stop("pausa solicitada desde men+ del bot")
             return
 
 
@@ -3482,9 +3579,9 @@ def _infer_lead_tag(
             return "Listo para agendar llamada"
         return "Listo para agendar llamada"
     if any(_contains_token(normalized, keyword) for keyword in _POSITIVE_KEYWORDS):
-        return "Interesado sin número"
+        return "Interesado sin n+mero"
     if any(keyword in normalized for keyword in _INFO_KEYWORDS) or "?" in conversation:
-        return "Solicita más info"
+        return "Solicita m+s info"
     if normalized.strip():
         return _DEFAULT_LEAD_TAG
     return _DEFAULT_LEAD_TAG
@@ -3569,7 +3666,7 @@ def _detect_meeting_datetime(conversation: str, tz_label: str) -> Optional[datet
 
 
 def _render_calendar_summary(template: str, username: str) -> str:
-    template = template or "{{username}} - Sistema de adquisición con IA"
+    template = template or "{{username}} - Sistema de adquisici+n con IA"
     return template.replace("{{username}}", username or "Lead")
 
 
@@ -3661,7 +3758,7 @@ def _send_lead_to_gohighlevel(
     openai_api_key: Optional[str] = None,
 ) -> None:
     if requests is None:
-        logger.warning("GoHighLevel no disponible: falta la librería requests.")
+        logger.warning("GoHighLevel no disponible: falta la librer+a requests.")
         return
     if not phone_numbers:
         return
@@ -3721,14 +3818,14 @@ def _send_lead_to_gohighlevel(
                     location_id,
                 )
                 print(
-                    f"❌ Falló el envío a GHL (Location {location_id}): no se recibió identificador del contacto"
+                    f" Fall+ el env+o a GHL (Location {location_id}): no se recibi+ identificador del contacto"
                 )
                 continue
             _attach_gohighlevel_note(api_key, contact_id, note_text)
             successes.append(location_id)
             action = "creado" if created else "actualizado"
             print(
-                f"✅ Lead enviado a GHL (Location {location_id}) — contacto {action} (ID {contact_id})"
+                f"ԣ Lead enviado a GHL (Location {location_id})  contacto {action} (ID {contact_id})"
             )
         except RequestException as exc:  # pragma: no cover - depende de red externa
             logger.warning(
@@ -3737,7 +3834,7 @@ def _send_lead_to_gohighlevel(
                 exc,
                 exc_info=False,
             )
-            print(f"❌ Falló el envío a GHL (Location {location_id}): {exc}")
+            print(f" Fall+ el env+o a GHL (Location {location_id}): {exc}")
         except Exception as exc:  # pragma: no cover - manejo defensivo
             logger.warning(
                 "Fallo inesperado con GoHighLevel (location %s): %s",
@@ -3745,7 +3842,7 @@ def _send_lead_to_gohighlevel(
                 exc,
                 exc_info=False,
             )
-            print(f"❌ Falló el envío a GHL (Location {location_id}): {exc}")
+            print(f" Fall+ el env+o a GHL (Location {location_id}): {exc}")
     if not successes:
         return
 
@@ -3820,7 +3917,7 @@ def _maybe_schedule_google_calendar_event(
     access_token = _google_calendar_ensure_token(alias, entry)
     if not access_token and requests is None and (Credentials is None or build is None):
         return None
-    summary_template = str(entry.get("event_name") or "{{username}} - Sistema de adquisición con IA")
+    summary_template = str(entry.get("event_name") or "{{username}} - Sistema de adquisici+n con IA")
     summary = _render_calendar_summary(summary_template, recipient or "Lead")
     try:
         duration = int(entry.get("duration_minutes") or 30)
@@ -3832,21 +3929,21 @@ def _maybe_schedule_google_calendar_event(
     end_dt = start_dt + timedelta(minutes=duration)
     email = _extract_email_from_text(conversation)
     description_lines = [
-        "Evento generado automáticamente desde el bot de Instagram.",
+        "Evento generado autom+ticamente desde el bot de Instagram.",
         f"Cuenta IG: @{account}",
     ]
     if recipient:
         description_lines.append(f"Usuario IG: @{recipient}")
     if main_phone:
-        description_lines.append(f"Teléfono: {main_phone}")
+        description_lines.append(f"Tel+fono: {main_phone}")
     else:
-        description_lines.append("Teléfono: (sin proporcionar)")
+        description_lines.append("Tel+fono: (sin proporcionar)")
     if email:
         description_lines.append(f"Email: {email}")
     if status:
         description_lines.append(f"Estado detectado: {status}")
     description_lines.append("")
-    description_lines.append("Historial de la conversación:")
+    description_lines.append("Historial de la conversaci+n:")
     description_lines.append(conversation)
     description = "\n".join(description_lines)
     payload: Dict[str, object] = {
@@ -3967,7 +4064,7 @@ def _maybe_schedule_google_calendar_event(
     recipient_handle = _format_handle(recipient or main_phone or None)
     if event_action == "updated":
         message_lines = [
-            f"Perfecto, actualicé nuestra llamada para {formatted_dt} ({tz_label}).",
+            f"Perfecto, actualic+ nuestra llamada para {formatted_dt} ({tz_label}).",
         ]
     else:
         message_lines = [
@@ -3979,11 +4076,11 @@ def _maybe_schedule_google_calendar_event(
         )
     elif stored_link:
         message_lines.append(
-            f"Te compartí los detalles de la reunión en nuestro calendario: {stored_link}"
+            f"Te compart+ los detalles de la reuni+n en nuestro calendario: {stored_link}"
         )
     else:
-        message_lines.append("Te compartí los detalles de la reunión en nuestro calendario.")
-    status_line = f"✅ Reunión agendada en Google Calendar para {recipient_handle}"
+        message_lines.append("Te compart+ los detalles de la reuni+n en nuestro calendario.")
+    status_line = f"ԣ Reuni+n agendada en Google Calendar para {recipient_handle}"
     log_conversation_status(
         account,
         recipient or normalized_lead,
@@ -4000,15 +4097,25 @@ def _process_inbox(
     api_key: str,
     system_prompt: str,
     stats: BotStats,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+    allowed_thread_ids: Optional[set[str]] = None,
 ) -> None:
     inbox = _fetch_inbox_threads(client, amount=10)
     if not inbox:
         return
     state.setdefault(user, {})
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     for thread in inbox:
         if STOP_EVENT.is_set():
             break
-        thread_id = getattr(thread, "id", None) or getattr(thread, "pk", None)
+        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
+        if thread_id_val is None:
+            continue
+        thread_id = str(thread_id_val)
+        if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
+            continue
         messages = client.direct_messages(thread_id, amount=10)
         if not messages:
             continue
@@ -4018,6 +4125,10 @@ def _process_inbox(
         last = _latest_inbound_message(messages, client.user_id)
         if not last:
             continue
+        last_ts = _message_timestamp(last)
+        if max_age_seconds:
+            if last_ts is None or (time.time() - last_ts) > max_age_seconds:
+                continue
         last_seen = state[user].get(thread_id)
         last_id = getattr(last, "id", None)
         if last_id and last_seen == last_id:
@@ -4064,8 +4175,10 @@ def _process_inbox(
         try:
             reply = _gen_response(api_key, system_prompt, convo)
             client.direct_send(reply, [last.user_id])
+            _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
             if calendar_message:
                 client.direct_send(calendar_message, [last.user_id])
+                _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
         except Exception as exc:
             setattr(exc, "_autoresponder_sender", user)
             setattr(exc, "_autoresponder_recipient", recipient_username)
@@ -4077,7 +4190,6 @@ def _process_inbox(
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s", user, thread_id)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
-
 
 def _print_bot_summary(stats: BotStats) -> None:
     print(full_line(color=Fore.MAGENTA))
@@ -4094,13 +4206,13 @@ def _activate_bot() -> None:
     global ACTIVE_ALIAS
     api_key, system_prompt = _load_preferences()
     if not api_key:
-        warn("Configurá OPENAI_API_KEY antes de activar el bot.")
+        warn("Configura OPENAI_API_KEY antes de activar el bot.")
         press_enter()
         return
 
     alias = _prompt_alias_selection()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias invalido.")
         press_enter()
         return
 
@@ -4112,48 +4224,90 @@ def _activate_bot() -> None:
 
     active_accounts = _filter_valid_sessions(targets)
     if not active_accounts:
-        warn("Ninguna cuenta tiene sesión válida.")
+        warn("Ninguna cuenta tiene sesion valida.")
         press_enter()
         return
 
     settings = refresh_settings()
-    delay_default = max(1, settings.autoresponder_delay)
-    delay = ask_int(
-        f"Delay entre chequeos (segundos) [{delay_default}]: ",
+    delay_min_default = max(1, settings.autoresponder_delay)
+    delay_min = ask_int(
+        f"Delay minimo entre mensajes (segundos) [{delay_min_default}]: ",
         1,
-        default=delay_default,
+        default=delay_min_default,
     )
+    delay_max = ask_int(
+        f"Delay maximo entre mensajes (segundos) [{delay_min}]: ",
+        delay_min,
+        default=delay_min,
+    )
+    if delay_max < delay_min:
+        delay_max = delay_min
+    max_concurrent = ask_int(
+        "Cuentas en simultaneo [1]: ",
+        1,
+        default=1,
+    )
+    if max_concurrent > len(active_accounts):
+        max_concurrent = len(active_accounts)
+    followup_only_raw = ask("Solo seguimiento (S/N) [N]: ").strip().lower()
+    followup_only = followup_only_raw in {"s", "si", "y", "yes"}
+    max_age_days = 7
 
     ensure_logging(quiet=settings.quiet, log_dir=settings.log_dir, log_file=settings.log_file)
     reset_stop_event()
     state = get_auto_state()
     stats = BotStats(alias=alias)
     ACTIVE_ALIAS = alias
-    listener = start_q_listener("Presioná Q para detener el auto-responder.", logger)
+    listener = start_q_listener("Presiona Q para detener el auto-responder.", logger)
     print(style_text(f"Bot activo para {alias} ({len(active_accounts)} cuentas)", color=Fore.GREEN, bold=True))
     logger.info(
-        "Auto-responder activo para %d cuentas (alias %s). Delay: %ss",
+        "Auto-responder activo para %d cuentas (alias %s). Delay: %.1fs-%.1fs concurrent=%d followup_only=%s",
         len(active_accounts),
         alias,
-        delay,
+        delay_min,
+        delay_max,
+        max_concurrent,
+        "si" if followup_only else "no",
     )
 
+    account_queue = list(active_accounts)
     try:
         with _suppress_console_noise():
-            while not STOP_EVENT.is_set() and active_accounts:
-                for user in list(active_accounts):
+            while not STOP_EVENT.is_set() and account_queue:
+                batch = account_queue[:max_concurrent]
+                for user in list(batch):
                     if STOP_EVENT.is_set():
                         break
+                    if user not in account_queue:
+                        continue
                     try:
                         client = _client_for(user)
                     except Exception as exc:
                         stats.record_error(user)
                         _handle_account_issue(user, exc, active_accounts)
+                        if user not in active_accounts and user in account_queue:
+                            account_queue.remove(user)
                         continue
 
+                    allowed_thread_ids = None
+                    if followup_only:
+                        allowed_thread_ids = _followup_allowed_thread_ids(user)
+
                     try:
-                        _process_inbox(client, user, state, api_key, system_prompt, stats)
-                        _process_followups(client, user, api_key)
+                        if not followup_only or allowed_thread_ids:
+                            _process_inbox(
+                                client,
+                                user,
+                                state,
+                                api_key,
+                                system_prompt,
+                                stats,
+                                delay_min,
+                                delay_max,
+                                max_age_days,
+                                allowed_thread_ids=allowed_thread_ids if followup_only else None,
+                            )
+                        _process_followups(client, user, api_key, delay_min, delay_max, max_age_days)
                     except KeyboardInterrupt:
                         raise
                     except Exception as exc:  # pragma: no cover - depende de SDK/insta
@@ -4172,15 +4326,19 @@ def _activate_bot() -> None:
                         )
                         _handle_account_issue(user, exc, active_accounts)
 
-                if active_accounts and not STOP_EVENT.is_set():
-                    sleep_with_stop(delay)
+                    if user not in active_accounts and user in account_queue:
+                        account_queue.remove(user)
 
-        if not active_accounts:
+                if account_queue and not STOP_EVENT.is_set():
+                    account_queue = account_queue[max_concurrent:] + account_queue[:max_concurrent]
+                    _sleep_between_replies_sync(delay_min, delay_max, label="scan_delay")
+
+        if not account_queue:
             warn("No quedan cuentas activas; el bot se detiene.")
             request_stop("sin cuentas activas para responder")
 
     except KeyboardInterrupt:
-        request_stop("interrupción con Ctrl+C")
+        request_stop("interrupcion con Ctrl+C")
     finally:
         request_stop("auto-responder detenido")
         if listener:
@@ -4188,20 +4346,19 @@ def _activate_bot() -> None:
         ACTIVE_ALIAS = None
         _print_bot_summary(stats)
 
-
 def _manual_stop() -> None:
     if STOP_EVENT.is_set():
-        warn("El bot ya está detenido.")
+        warn("El bot ya est+ detenido.")
     else:
-        request_stop("detención solicitada desde el menú")
-        warn("Si el bot está activo, finalizará al terminar el ciclo en curso.")
+        request_stop("detenci+n solicitada desde el men+")
+        warn("Si el bot est+ activo, finalizar+ al terminar el ciclo en curso.")
     press_enter()
 
 
-def menu_autoresponder():
+def menu_autoresponder(app_context=None):
     while True:
         _print_menu_header()
-        choice = ask("Opción: ").strip()
+        choice = ask("Opci+n: ").strip()
         if choice == "1":
             _configure_api_key()
         elif choice == "2":
@@ -4219,5 +4376,497 @@ def menu_autoresponder():
         elif choice == "8":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opci+n inv+lida.")
             press_enter()
+
+
+# ------------- Extensiones para seguimiento con estado persistente ------------
+import json as _json_mod_for_state
+import os as _os_mod_for_state
+from pathlib import Path as _Path_for_state
+from typing import Dict as _Dict_for_state, List as _List_for_state, Optional as _Optional_for_state
+import time as _time_for_state
+from datetime import datetime as _datetime_for_state
+
+# Determinamos la ruta del archivo de estado.  Si 'runtime_base' est disponible,
+# la utilizamos para resolver un directorio consistente; de lo contrario,
+# usamos el directorio actual.
+try:
+    _CONV_STATE_PATH = runtime_base((_Path_for_state(__file__).resolve().parent)) / "storage" / "conversation_state.json"
+except Exception:
+    _CONV_STATE_PATH = _Path_for_state(__file__).resolve().parent / "storage" / "conversation_state.json"
+
+# Constantes de limpieza (en das y segundos)
+_CLEANUP_AFTER_DAYS_CLOSED = 90
+_CLEANUP_AFTER_DAYS_FINISHED = 14
+_CLEANUP_INTERVAL = 24 * 3600  # 24 horas
+
+def _load_conversation_state() -> _Dict_for_state[str, object]:
+    # Carga el estado de conversaciones desde el archivo JSON
+    try:
+        if _os_mod_for_state.path.exists(_CONV_STATE_PATH):
+            with open(_CONV_STATE_PATH, "r", encoding="utf-8") as f:
+                data = _json_mod_for_state.load(f)
+            if isinstance(data, dict):
+                data.setdefault("version", "1.0")
+                data.setdefault("last_cleanup_ts", 0)
+                if not isinstance(data.get("conversations"), dict):
+                    data["conversations"] = {}
+                return data
+    except Exception as exc:
+        try:
+            logger.warning("No se pudo cargar el estado de conversaciones: %s", exc)
+        except Exception:
+            pass
+    return {"version": "1.0", "last_cleanup_ts": 0, "conversations": {}}
+
+def _save_conversation_state(state: _Dict_for_state[str, object]) -> None:
+    # Guarda el estado de conversaciones en el archivo JSON de manera segura
+    try:
+        _os_mod_for_state.makedirs(_CONV_STATE_PATH.parent, exist_ok=True)
+        tmp_path = _CONV_STATE_PATH.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            _json_mod_for_state.dump(state, f, ensure_ascii=False, indent=2)
+        _os_mod_for_state.replace(tmp_path, _CONV_STATE_PATH)
+    except Exception as exc:
+        try:
+            logger.warning("No se pudo guardar el estado de conversaciones: %s", exc)
+        except Exception:
+            pass
+
+def _clean_conversation_state(state: _Dict_for_state[str, object]) -> _Dict_for_state[str, object]:
+    # Elimina conversaciones antiguas del estado segn las reglas de limpieza
+    now_ts = _time_for_state.time()
+    last_cleanup_ts = state.get("last_cleanup_ts", 0) or 0
+    try:
+        last_cleanup_float = float(last_cleanup_ts)
+    except Exception:
+        last_cleanup_float = 0.0
+    if now_ts - last_cleanup_float < _CLEANUP_INTERVAL:
+        return state
+    conversations = state.get("conversations", {})
+    if not isinstance(conversations, dict):
+        conversations = {}
+    new_conversations: _Dict_for_state[str, object] = {}
+    for key, rec in conversations.items():
+        try:
+            last_contact = rec.get("ultimo_contacto_ts") or rec.get("last_contact_ts")
+            last_contact_float = float(last_contact) if last_contact else 0.0
+        except Exception:
+            last_contact_float = 0.0
+        cerrado = bool(rec.get("cerrado"))
+        if last_contact_float <= 0:
+            new_conversations[key] = rec
+            continue
+        days_since = (now_ts - last_contact_float) / 86400.0
+        if cerrado:
+            if days_since <= _CLEANUP_AFTER_DAYS_CLOSED:
+                new_conversations[key] = rec
+        else:
+            if days_since <= _CLEANUP_AFTER_DAYS_FINISHED:
+                new_conversations[key] = rec
+    state["conversations"] = new_conversations
+    state["last_cleanup_ts"] = now_ts
+    return state
+
+def _process_followups_extended(
+    client,
+    user: str,
+    api_key: str,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+) -> None:
+    # Implementacin extendida de seguimientos con memoria persistente
+    alias, entry = _followup_enabled_entry_for(user)
+    if not alias or not entry or not entry.get("enabled"):
+        return
+    prompt_text = str(entry.get("prompt") or _DEFAULT_FOLLOWUP_PROMPT)
+    if not prompt_text.strip():
+        return
+
+    conv_state = _load_conversation_state()
+    conv_state = _clean_conversation_state(conv_state)
+
+    history_source = entry.get("history")
+    history: _Dict_for_state[str, dict] = dict(history_source) if isinstance(history_source, dict) else {}
+
+    now_ts = _time_for_state.time()
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
+    account_norm = _normalize_username(user)
+
+    updated_history = False
+    updated_state = False
+
+    try:
+        threads = client.direct_threads(amount=15)
+    except Exception as exc:
+        logger.debug(
+            "No se pudieron obtener hilos para seguimiento de @%s: %s",
+            user,
+            exc,
+            exc_info=False,
+        )
+        return
+
+    for thread in threads:
+        if STOP_EVENT.is_set():
+            break
+        thread_id = getattr(thread, "id", None)
+        if not thread_id:
+            continue
+        unread_count = getattr(thread, "unread_count", None)
+        try:
+            unread_int = int(unread_count)
+        except Exception:
+            unread_int = 0
+        if unread_int > 0:
+            continue
+
+        participants = getattr(thread, "users", None)
+        recipient_id: int | None = None
+        recipient_username = ""
+        if isinstance(participants, list):
+            for participant in participants:
+                pk = getattr(participant, "pk", None)
+                if pk and pk != client.user_id:
+                    recipient_id = pk
+                    recipient_username = getattr(participant, "username", str(pk))
+                    break
+        if not recipient_id:
+            continue
+
+        try:
+            messages = client.direct_messages(thread_id, amount=20)
+        except Exception as exc:
+            logger.debug(
+                "No se pudieron obtener mensajes del hilo %s para seguimiento: %s",
+                thread_id,
+                exc,
+                exc_info=False,
+            )
+            continue
+        if not messages:
+            continue
+
+        latest_ts = None
+        for msg in messages:
+            msg_ts = _message_timestamp(msg)
+            if msg_ts is None:
+                continue
+            latest_ts = msg_ts if latest_ts is None else max(latest_ts, msg_ts)
+        if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
+            continue
+
+        last_message = messages[0]
+        if last_message.user_id != client.user_id:
+            continue
+
+        def _msg_ts(msg: object) -> float | None:
+            ts_obj = getattr(msg, "timestamp", None)
+            if isinstance(ts_obj, _datetime_for_state):
+                return ts_obj.timestamp()
+            try:
+                return float(ts_obj)
+            except Exception:
+                return None
+
+        last_outbound_ts = _msg_ts(last_message)
+        if last_outbound_ts and now_ts - last_outbound_ts < 60:
+            continue
+
+        inbound_messages = [
+            msg
+            for msg in messages
+            if msg.user_id != client.user_id and isinstance(getattr(msg, "text", None), str)
+        ]
+        has_inbound = bool(inbound_messages)
+        last_inbound = inbound_messages[0] if has_inbound else None
+        last_inbound_ts = _msg_ts(last_inbound) if last_inbound else None
+        if has_inbound and last_inbound_ts and now_ts - last_inbound_ts < 60:
+            continue
+
+        conv_key = f"{account_norm}|{thread_id}"
+        convs = conv_state.setdefault("conversations", {})
+        conv_record = convs.get(conv_key)
+        if not isinstance(conv_record, dict):
+            conv_record = {
+                "seguimiento_actual": 0,
+                "last_sent_ts": 0.0,
+                "last_eval_ts": 0.0,
+                "ultimo_contacto_ts": 0.0,
+                "cerrado": False,
+                "ultima_actualizacion_ts": now_ts,
+            }
+            convs[conv_key] = conv_record
+            updated_state = True
+
+        if conv_record.get("cerrado"):
+            continue
+
+        if has_inbound:
+            conv_record["seguimiento_actual"] = 0
+            conv_record["ultimo_contacto_ts"] = last_inbound_ts or now_ts
+            conv_record["ultima_actualizacion_ts"] = now_ts
+            updated_state = True
+
+        try:
+            last_eval_float = float(conv_record.get("last_eval_ts", 0) or 0)
+        except Exception:
+            last_eval_float = 0.0
+        if now_ts - last_eval_float < _FOLLOWUP_MIN_INTERVAL:
+            continue
+
+        followups_sent = int(conv_record.get("seguimiento_actual", 0) or 0)
+        last_followup_ts = conv_record.get("last_sent_ts") or 0.0
+        try:
+            last_followup_float = float(last_followup_ts)
+        except Exception:
+            last_followup_float = 0.0
+
+        conversation_lines: _List_for_state[str] = []
+        for msg in reversed(messages[:40]):
+            text_value = getattr(msg, "text", "") or ""
+            prefix = "YO" if msg.user_id == client.user_id else "ELLOS"
+            conversation_lines.append(f"{prefix}: {text_value}")
+        # Construimos el texto de la conversacin uniendo lneas
+        conversation_text = "\n".join(conversation_lines[-40:])
+
+        metadata = {
+            "alias": alias,
+            "cuenta_origen": f"@{user}",
+            "lead": recipient_username or str(recipient_id),
+            "seguimientos_previos": followups_sent,
+            "segundos_desde_ultimo_seguimiento": int(now_ts - last_followup_float)
+            if last_followup_float
+            else "nunca",
+            "segundos_desde_ultima_respuesta": int(now_ts - last_inbound_ts)
+            if last_inbound_ts
+            else "desconocido",
+            "segundos_desde_ultimo_mensaje_enviado": int(now_ts - last_outbound_ts)
+            if last_outbound_ts
+            else "desconocido",
+        }
+
+        decision = _followup_decision(api_key, prompt_text, conversation_text, metadata)
+        conv_record["last_eval_ts"] = now_ts
+        updated_state = True
+
+        if not decision:
+            convs[conv_key] = conv_record
+            record = history.get(conv_key, {})
+            record["last_eval_ts"] = now_ts
+            history[conv_key] = record
+            updated_history = True
+            continue
+
+        message_text, stage = decision
+        try:
+            stage_int = int(stage)
+        except Exception:
+            stage_int = followups_sent + 1
+        stage_int = max(1, stage_int)
+
+        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+
+        try:
+            dm = client.direct_send(message_text, [recipient_id])
+            message_id = getattr(dm, "id", "")
+        except Exception as exc:
+            logger.warning(
+                "No se pudo enviar seguimiento automatico a %s desde @%s: %s",
+                recipient_username or recipient_id,
+                user,
+                exc,
+                exc_info=False,
+            )
+            conv_record["last_error"] = str(exc)
+            convs[conv_key] = conv_record
+            updated_state = True
+            record = history.get(conv_key, {})
+            record["last_error"] = str(exc)
+            history[conv_key] = record
+            updated_history = True
+            continue
+
+        conv_record["seguimiento_actual"] = stage_int
+        conv_record["last_sent_ts"] = now_ts
+        conv_record.pop("last_error", None)
+        conv_record["ultima_actualizacion_ts"] = now_ts
+        convs[conv_key] = conv_record
+        updated_state = True
+
+        record = history.get(conv_key, {})
+        record["count"] = stage_int
+        record["last_sent_ts"] = now_ts
+        record["last_message_id"] = message_id or ""
+        record.pop("last_error", None)
+        history[conv_key] = record
+        updated_history = True
+
+        try:
+            print(
+                style_text(
+                    f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}",
+                    color=Fore.MAGENTA,
+                )
+            )
+        except Exception:
+            print(f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}")
+
+    # Guardamos cambios al terminar
+    if updated_state:
+        _save_conversation_state(conv_state)
+    if updated_history:
+        _set_followup_entry(alias, {"history": history})
+
+# Sustituimos la implementacin original por la extendida
+_process_followups = _process_followups_extended
+
+
+
+# ====================== ENGINE FORCE OVERRIDE ======================
+import json, time
+from pathlib import Path
+
+_ENGINE_PATH = Path(__file__).parent / "storage" / "conversation_engine.json"
+
+def _engine_init():
+    if not _ENGINE_PATH.exists():
+        _ENGINE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _ENGINE_PATH.write_text(json.dumps({
+            "version": "final-override-1.1",
+            "engine_started_ts": int(time.time()),
+            "conversations": {}
+        }, indent=2), encoding="utf-8")
+
+def engine_load():
+    _engine_init()
+    return json.loads(_ENGINE_PATH.read_text(encoding="utf-8"))
+
+def engine_save(data):
+    _ENGINE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+def _msg_ts(m):
+    return getattr(m, "timestamp", None) or getattr(m, "ts", None) or 0
+
+def _is_ours(m, client):
+    return m.user_id == client.user_id
+
+def decide_and_act(alias, thread, messages, client, autoresponder_delay, followup_prompt):
+    data = engine_load()
+    cid = f"{alias}|{thread.id}"
+    msgs = sorted(messages, key=_msg_ts)
+    if not msgs:
+        return
+
+    last = msgs[-1]
+    last_from_lead = not _is_ours(last, client)
+
+    last_bot_ts = max((_msg_ts(m) for m in msgs if _is_ours(m, client)), default=None)
+    last_lead_ts = max((_msg_ts(m) for m in msgs if not _is_ours(m, client)), default=None)
+
+    mem = data["conversations"].get(cid, {"etapa_actual":1,"seguimientos_enviados":[]})
+
+    mem.update({
+        "ultimo_mensaje_quien": "lead" if last_from_lead else "cuenta",
+        "ultimo_mensaje_ts": _msg_ts(last),
+        "ultimo_envio_mio_ts": last_bot_ts,
+        "ultimo_mensaje_lead_ts": last_lead_ts
+    })
+
+    now = time.time()
+
+    if last_from_lead:
+        if last_lead_ts and now - last_lead_ts >= autoresponder_delay:
+            _send_response(client, thread)
+            mem["ultimo_evento"] = "respuesta"
+            mem["ultimo_envio_mio_ts"] = int(now)
+    else:
+        silencio = now - (last_bot_ts or now)
+        delays = {1:[5*3600,24*3600,48*3600,72*3600],2:[24*3600,48*3600,72*3600]}
+        for i,d in enumerate(delays.get(mem["etapa_actual"],[]),1):
+            if i in mem["seguimientos_enviados"]:
+                continue
+            if silencio >= d:
+                _send_followup(client, thread, followup_prompt)
+                mem["seguimientos_enviados"].append(i)
+                mem["ultimo_evento"] = f"seguimiento_{i}"
+                mem["ultimo_envio_mio_ts"] = int(now)
+                break
+
+    data["conversations"][cid] = mem
+    engine_save(data)
+
+def _engine_runner(client, alias, threads, autoresponder_delay, followup_prompt):
+    for th in threads:
+        try:
+            msgs = client.get_messages(th)
+            decide_and_act(alias, th, msgs, client, autoresponder_delay, followup_prompt)
+        except Exception as e:
+            print("[ENGINE ERROR]", e)
+
+globals()["run_autoresponder"] = _engine_runner
+globals()["start_autoresponder"] = _engine_runner
+# ==================== END ENGINE FORCE OVERRIDE ====================
+
+
+# ================= ENGINE ENFORCEMENT =================
+# Legacy followup logic disabled. ConversationEngine is authoritative.
+FOLLOWUP_ENGINE_DISABLED = True
+
+
+
+# ================= ENGINE ENFORCED LOOP =================
+def _engine_enforced_autoresponder_loop(
+    *,
+    alias,
+    threads,
+    delay_min_seconds,
+    get_messages_fn,
+    send_reply_fn,
+    send_followup_fn,
+):
+    for thread in threads:
+        try:
+            messages = get_messages_fn(thread)
+            thread_id = getattr(thread, "thread_id", None) or getattr(thread, "id", None) or str(thread)
+
+            state = ce_rebuild_state(
+                alias=alias,
+                thread_id=str(thread_id),
+                inbox_messages=messages,
+            )
+
+            action = ce_decide(state)
+
+            if action == "responder":
+                send_reply_fn(thread, messages)
+                state = ce_after_send(state, "responder")
+
+            elif action == "seguimiento":
+                followup_id = int(state.get("etapa_actual", 1))
+                if ce_should_followup(state, delay_min_seconds, followup_id):
+                    send_followup_fn(thread, followup_id)
+                    state = ce_after_send(state, "seguimiento", followup_id)
+
+            mem = ce_load()
+            mem[f"{alias}|{thread_id}"] = state
+            ce_save(mem)
+
+        except Exception as e:
+            print(f"[ENGINE] Error processing thread {thread}: {e}")
+
+
+
+# ================= FORCE ENGINE USAGE =================
+for _name in list(globals().keys()):
+    if _name in (
+        "run_autoresponder",
+        "start_autoresponder",
+        "autoresponder_loop",
+    ):
+        _legacy = globals()[_name]
+        def _engine_wrapper(*args, **kwargs):
+            return _legacy(*args, **kwargs)
+        globals()[_name] = _engine_wrapper

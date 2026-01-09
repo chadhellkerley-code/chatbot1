@@ -25,6 +25,10 @@ profiles/
 .session_key
 *_automation.json
 
+# Playwright browsers
+ms-playwright/
+browsers/
+
 # Logs
 *.log
 celery.log

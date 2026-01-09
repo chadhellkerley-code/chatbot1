@@ -372,7 +372,20 @@ def mark_account_paused(username: str) -> None:
         _save_state(state)
 
 
-def log_sent(account: str, username: str, okflag: bool, detail: str = ""):
+def log_sent(
+    account: str,
+    username: str,
+    okflag: bool,
+    detail: str = "",
+    *,
+    started_at: str | None = None,
+    duration_ms: int | None = None,
+    template_id: str | None = None,
+    template_name: str | None = None,
+    selected_variant: str | None = None,
+    cancelled: bool | None = None,
+    verified: bool | None = None,
+):
     rec = {
         "ts": int(time.time()),
         "account": account,
@@ -380,6 +393,20 @@ def log_sent(account: str, username: str, okflag: bool, detail: str = ""):
         "ok": bool(okflag),
         "detail": detail,
     }
+    if started_at:
+        rec["started_at"] = started_at
+    if duration_ms is not None:
+        rec["duration_ms"] = int(duration_ms)
+    if template_id:
+        rec["template_id"] = template_id
+    if template_name:
+        rec["template_name"] = template_name
+    if selected_variant:
+        rec["selected_variant"] = selected_variant
+    if cancelled is not None:
+        rec["cancelled"] = bool(cancelled)
+    if verified is not None:
+        rec["verified"] = bool(verified)
     with SENT.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     _increment_daily(bool(okflag))

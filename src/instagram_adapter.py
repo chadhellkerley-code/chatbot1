@@ -761,37 +761,48 @@ async def get_login_errors(page: Page) -> List[str]:
     return messages
 
 
-async def is_logged_in(page: Page) -> bool:
+async def check_logged_in(page: Page) -> tuple[bool, str]:
     url = page.url or ""
     if "accounts/login" in url or "/challenge/" in url:
-        return False
+        return False, "url_login_or_challenge"
 
     try:
         if await _has_auth_cookies(page.context):
-            return True
+            return True, "auth_cookies"
     except Exception:
         pass
 
-    selectors: Sequence[str] = (
-        "a[href='/direct/inbox/']",
-        "nav[role='navigation']",
-        "svg[aria-label='Home']",
-        "svg[aria-label='Inicio']",
+    selectors: Sequence[tuple[str, str]] = (
+        ("inbox_link", "a[href='/direct/inbox/']"),
+        ("nav", "nav[role='navigation']"),
+        ("home_icon", "svg[aria-label='Home']"),
+        ("inicio_icon", "svg[aria-label='Inicio']"),
     )
-    for sel in selectors:
+    for name, sel in selectors:
         try:
             locator = page.locator(sel)
             if await locator.count():
-                first = locator.first
                 try:
-                    if await first.is_visible():
-                        return True
+                    await locator.first.wait_for(state="visible", timeout=2_000)
                 except Exception:
-                    return True
+                    pass
+                try:
+                    if await locator.first.is_visible():
+                        return True, f"selector:{name}"
+                except Exception:
+                    return True, f"selector:{name}"
         except Exception:
             continue
 
-    return False
+    if "instagram.com" not in url:
+        return False, "url_not_instagram"
+
+    return False, "selectors_miss=inbox_link|nav|home_icon|inicio_icon"
+
+
+async def is_logged_in(page: Page) -> bool:
+    ok, _reason = await check_logged_in(page)
+    return ok
 
 
 async def human_login(

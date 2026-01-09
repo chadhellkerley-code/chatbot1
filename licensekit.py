@@ -473,6 +473,66 @@ def _copy_tree_robust(source: Path, destination: Path, *, verify: bool = True) -
         )
 
 
+def _generate_playwright_folder() -> None:
+    try:
+        from tools.build_executable import (
+            _resolve_playwright_browsers_path,
+            _select_playwright_browser_dirs,
+            _copy_playwright_selected,
+        )
+    except Exception as exc:
+        warn(f"No se pudo cargar el utilitario Playwright: {exc}")
+        press_enter()
+        return
+
+    source = _resolve_playwright_browsers_path()
+    if not source:
+        warn("No se encontraron browsers de Playwright instalados.")
+        press_enter()
+        return
+
+    selected_dirs, reason = _select_playwright_browser_dirs(source)
+    if not selected_dirs:
+        warn("No se encontro un Chromium sano para copiar.")
+        press_enter()
+        return
+
+    client_name = ask("Nombre del cliente: ").strip()
+    if not client_name:
+        warn("Nombre requerido.")
+        press_enter()
+        return
+
+    base_default = _desktop_root() / "EntregaClientes"
+    base_input = ask(f"Carpeta base [{base_default}]: ").strip()
+    base_folder = Path(base_input) if base_input else base_default
+    target_root = base_folder / _safe_client_folder(client_name)
+    target = target_root / "playwright_browsers"
+
+    if target.exists():
+        confirm = ask("playwright_browsers ya existe. Reemplazar? (s/N): ").strip().lower()
+        if confirm != "s":
+            warn("Operacion cancelada.")
+            press_enter()
+            return
+        shutil.rmtree(target, ignore_errors=True)
+
+    try:
+        target_root.mkdir(parents=True, exist_ok=True)
+        _copy_playwright_selected(source, target, selected_dirs)
+    except Exception as exc:
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        warn(f"No se pudo copiar Playwright: {exc}")
+        press_enter()
+        return
+
+    picked = ", ".join(item.name for item in selected_dirs)
+    ok(f"Playwright copiado: {picked} ({reason})")
+    ok(f"Destino: {target}")
+    press_enter()
+
+
 def _build_delivery_zip(
     artifact_path: Path,
     destination_name: str,
@@ -1213,7 +1273,8 @@ def menu_deliver() -> None:
         print("4) Ver licencias activas")
         print("5) Eliminar o extender licencia")
         print("6) Generar ejecutable universal (backend)")
-        print("7) Volver")
+        print("7) Generar carpeta Playwright para cliente")
+        print("8) Volver")
         print()
         choice = ask("Opcion: ").strip()
         if choice == "1":
@@ -1229,6 +1290,8 @@ def menu_deliver() -> None:
         elif choice == "6":
             _build_universal_executable()
         elif choice == "7":
+            _generate_playwright_folder()
+        elif choice == "8":
             break
         else:
             warn("Opcion invalida.")

@@ -59,7 +59,7 @@ class InstagramPlaywrightClient(BaseInstagramClient):
         if self._username and not acct.get("username"):
             acct["username"] = self._username
         sender = HumanInstagramSender(headless=True)
-        return bool(sender.send_message_like_human(acct, target_username, message))
+        return bool(sender.send_message_like_human_sync(acct, target_username, message))
 
     def reply_to_unread(self, *, limit: int = 10, strategy: Optional[dict] = None) -> List[Dict[str, Any]]:
         # This is handled by responder.py / src/opt_in in other menu flows.

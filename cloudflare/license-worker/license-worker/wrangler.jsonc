@@ -1,0 +1,22 @@
+{
+  "name": "license-worker",
+  "main": "src/worker.js",
+  "workers_dev": true,
+  "preview_urls": true,
+  "compatibility_date": "2024-11-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "3805eeec-f856-4f23-95f9-972a87a9f6fa"
+    }
+  ],
+  "vars": {
+    "UPDATE_MANIFEST_KEY": "manifest.json"
+  },
+  "r2_buckets": [
+    {
+      "binding": "UPDATES_BUCKET",
+      "bucket_name": "insta-cli-updates"
+    }
+  ]
+}

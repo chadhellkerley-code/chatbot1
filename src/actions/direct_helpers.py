@@ -37,88 +37,142 @@ DIALOG_SEARCH_CANDIDATES = [
 ]
 
 SELECTORS = {
-    "inbox_icon": (
-        '[aria-label="Messenger"], [aria-label="Mensajes"], '
-        '[data-testid="direct-inbox"], a[href="/direct/inbox/"], '
-        'svg[aria-label*="Messenger"], svg[aria-label*="Mensajes"]'
-    ),
-    "new_message": (
-        '[aria-label="New message"], [aria-label="Enviar mensaje"], '
-        "[data-testid='new-message'], button:has-text('New message'), button:has-text('Enviar mensaje')"
-    ),
-    "compose_icon": (
-        'svg[aria-label="New message"], '
-        '[data-testid="new-message"], '
-        'a[href*="/direct/new"]'
-    ),
-    "send_message_cta": (
-        'main button:has-text("Send message"), '
-        'main [role="button"]:has-text("Send message"), '
-        'button:has-text("Send message"), '
-        'main button:has-text("Enviar mensaje"), '
-        'main [role="button"]:has-text("Enviar mensaje"), '
-        'button:has-text("Enviar mensaje")'
-    ),
-    "search_input": (
-        'input[placeholder*="Search"], input[placeholder*="Buscar"], '
-        '[role="searchbox"], input[name="queryBox"]'
-    ),
-    "dialog": '[role="dialog"]',
-    "dialog_search": ", ".join(DIALOG_SEARCH_CANDIDATES),
-    "dialog_result": (
-        '[role="dialog"] [role="listitem"], '
-        '[role="dialog"] [role="row"], '
-        '[role="dialog"] [role="button"], '
-        '[role="dialog"] li, '
-        '[role="dialog"] [data-testid*="user"], '
-        '[role="dialog"] a[href*="/"], '
-        '[role="dialog"] article'
-    ),
-    "dialog_result_checkbox": (
-        '[role="dialog"] [role="button"] input[type="checkbox"], '
-        '[role="dialog"] [role="button"] [role="checkbox"], '
-        '[role="dialog"] [role="button"] [aria-checked]'
-    ),
-    "dialog_submit": (
-        '[role="dialog"] button:has-text("Next"), '
-        '[role="dialog"] button:has-text("Chat"), '
-        '[role="dialog"] button:has-text("Message"), '
-        'button:has-text("Next"), button:has-text("Chat"), button:has-text("Message")'
-    ),
-    "search_results_container": (
-        '[role="dialog"] [role="presentation"], '
-        '[role="dialog"] [role="listbox"], '
-        '[role="dialog"] [data-testid*="user"]'
-    ),
-    "search_result_item": (
-        '[role="dialog"] [role="button"], '
-        '[role="dialog"] a[href*="/"], '
-        '[role="dialog"] div[tabindex="0"]'
-    ),
-    "next_button": 'button:has-text("Next"), button:has-text("Siguiente")',
-    "composer": (
-        '[role="textbox"][contenteditable="true"], '
-        'div[contenteditable="true"][role="textbox"], '
-        "textarea"
-    ),
-    "send_button": '[aria-label="Send"], [data-testid="send"], [type="submit"]',
-    "thread_header": '[data-testid="chat-header"], header:has([href*="/direct/t"])',
-    "own_bubble": '[data-testid="message-bubble"] [data-testid="own"]',
-    "toast_error": '[role="alert"], [data-testid="toast"]',
-    "modal_dialog": '[role="dialog"]',
+    "inbox_icon": [
+        '[aria-label="Messenger"]',
+        '[aria-label="Mensajes"]',
+        '[data-testid="direct-inbox"]',
+        'a[href="/direct/inbox/"]',
+        'svg[aria-label*="Messenger"]',
+        'svg[aria-label*="Mensajes"]',
+    ],
+    "new_message": [
+        '[aria-label="New message"]',
+        '[aria-label="Enviar mensaje"]',
+        "[data-testid='new-message']",
+        "button:has-text('New message')",
+        "button:has-text('Enviar mensaje')",
+    ],
+    "compose_icon": [
+        'svg[aria-label="New message"]',
+        '[data-testid="new-message"]',
+        'a[href*="/direct/new"]',
+    ],
+    "send_message_cta": [
+        'main button:has-text("Send message")',
+        'main [role="button"]:has-text("Send message")',
+        'button:has-text("Send message")',
+        'main button:has-text("Enviar mensaje")',
+        'main [role="button"]:has-text("Enviar mensaje")',
+        'button:has-text("Enviar mensaje")',
+    ],
+    "search_input": [
+        'input[placeholder*="Search"]',
+        'input[placeholder*="Buscar"]',
+        '[role="searchbox"]',
+        'input[name="queryBox"]',
+    ],
+    "dialog": ['[role="dialog"]'],
+    "dialog_search": DIALOG_SEARCH_CANDIDATES,
+    "dialog_result": [
+        '[role="dialog"] [role="listitem"]',
+        '[role="dialog"] [role="row"]',
+        '[role="dialog"] [role="button"]',
+        '[role="dialog"] li',
+        '[role="dialog"] [data-testid*="user"]',
+        '[role="dialog"] a[href*="/"]',
+        '[role="dialog"] article',
+    ],
+    "dialog_result_checkbox": [
+        '[role="dialog"] [role="button"] input[type="checkbox"]',
+        '[role="dialog"] [role="button"] [role="checkbox"]',
+        '[role="dialog"] [role="button"] [aria-checked]',
+    ],
+    "dialog_submit": [
+        '[role="dialog"] button:has-text("Next")',
+        '[role="dialog"] button:has-text("Chat")',
+        '[role="dialog"] button:has-text("Message")',
+        'button:has-text("Next")',
+        'button:has-text("Chat")',
+        'button:has-text("Message")',
+    ],
+    "search_results_container": [
+        '[role="dialog"] [role="presentation"]',
+        '[role="dialog"] [role="listbox"]',
+        '[role="dialog"] [data-testid*="user"]',
+    ],
+    "search_result_item": [
+        '[role="dialog"] [role="button"]',
+        '[role="dialog"] a[href*="/"]',
+        '[role="dialog"] div[tabindex="0"]',
+    ],
+    "next_button": [
+        'button:has-text("Next")',
+        'button:has-text("Siguiente")',
+    ],
+    "composer": [
+        '[role="textbox"][contenteditable="true"]',
+        'div[contenteditable="true"][role="textbox"]',
+        "textarea",
+    ],
+    "send_button": [
+        '[aria-label="Send"]',
+        '[aria-label="Enviar"]',
+        '[aria-label*="Send"]',
+        '[aria-label*="Enviar"]',
+        "[data-testid='send']",
+        "[data-testid*='send']",
+        "[type='submit']",
+        "form button[type='submit']",
+        "button:has-text('Send')",
+        "button:has-text('Enviar')",
+        "div[role='button'][aria-label*='Send']",
+        "div[role='button'][aria-label*='Enviar']",
+    ],
+    "thread_header": [
+        '[data-testid="chat-header"]',
+        'header:has([href*="/direct/t"])',
+    ],
+    "own_bubble": [
+        '[data-testid="message-bubble"] [data-testid="own"]',
+        'div[role="row"]:has([data-testid="own"])',
+        'div[role="listitem"]:has([data-testid="own"])',
+    ],
+    "toast_error": ['[role="alert"]', '[data-testid="toast"]'],
+    "modal_dialog": ['[role="dialog"]'],
 }
 
+
+def _selector_candidates(value: list[str] | str) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if item]
+    if value:
+        return [value]
+    return []
+
+
+def selector_union(value: list[str] | str) -> str:
+    return ", ".join(_selector_candidates(value))
+
+
+def sel(key: str) -> str:
+    return selector_union(SELECTORS.get(key, []))
+
+
+def sels(key: str) -> list[str]:
+    return _selector_candidates(SELECTORS.get(key, []))
+
+
+SELECTORS_JOINED = {key: selector_union(value) for key, value in SELECTORS.items()}
+
 DIALOG_FALLBACK_SELECTORS = [
-    SELECTORS["dialog"],
+    *sels("dialog"),
     "[aria-modal='true']",
     "div[aria-modal='true']",
     "section[aria-modal='true']",
     "[aria-label*='New message']",
     "[aria-label*='Nuevo mensaje']",
 ]
-DIRECT_READY_QUERY = (
-    f'{SELECTORS["search_input"]}, {SELECTORS["modal_dialog"]}, {SELECTORS["thread_header"]}'
-)
+DIRECT_READY_QUERY = f'{sel("search_input")}, {sel("modal_dialog")}, {sel("thread_header")}'
 
 
 async def _snap(page: Page, name: str) -> Optional[str]:
@@ -138,7 +192,7 @@ async def _snap_step(page: Page, label: str) -> None:
 async def _log_search_candidates(page: Page) -> None:
     url = page.url or "about:blank"
     print(f"[direct] search input missing. url={url}")
-    raw_selectors = [chunk.strip() for chunk in SELECTORS["search_input"].split(",") if chunk.strip()]
+    raw_selectors = sels("search_input")
     for sel in raw_selectors:
         try:
             count = await page.locator(sel).count()
@@ -198,15 +252,17 @@ async def _wait_for_direct_surface(page: Page, timeout_ms: int) -> bool:
 
 
 async def _wait_for_search_input(page: Page, timeout_ms: int) -> bool:
-    try:
-        await page.wait_for_selector(SELECTORS["search_input"], timeout=timeout_ms)
-        return True
-    except Exception:
-        return False
+    for selector in sels("search_input"):
+        try:
+            await page.wait_for_selector(selector, timeout=timeout_ms)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 async def _click_send_message_cta(page: Page) -> bool:
-    cta = page.locator(SELECTORS["send_message_cta"]).first
+    cta = page.locator(sel("send_message_cta")).first
     if await cta.count() == 0:
         return False
     print("[direct] clicking inbox CTA Send message")
@@ -224,7 +280,7 @@ async def _click_send_message_cta(page: Page) -> bool:
 
 
 async def _click_compose_icon(page: Page) -> bool:
-    icon = page.locator(SELECTORS["compose_icon"]).first
+    icon = page.locator(sel("compose_icon")).first
     if await icon.count() == 0:
         return False
     print("[direct] clicking compose icon")
@@ -271,7 +327,7 @@ async def _wait_for_dialog_ready(page: Page, timeout_ms: int = 20_000) -> bool:
 
 async def ensure_new_message_dialog(page: Page, timeout_ms: int = 10_000) -> bool:
     """Garantiza que el modal de 'New message' esté abierto (CTA ➜ ícono ➜ goto/direct/new)."""
-    dialog = page.locator(SELECTORS["dialog"])
+    dialog = page.locator(sel("dialog"))
     if await dialog.count() > 0:
         _mark_modal_ready(True)
         print("[direct] dialog already visible")
@@ -314,7 +370,7 @@ async def ensure_inbox(page: Page, timeout_ms: int = 25_000) -> bool:
     """Garantiza estar en la UI de Direct y, de ser posible, en el diálogo de 'New'."""
     await page.wait_for_load_state("domcontentloaded")
 
-    if _is_modal_ready() and await page.locator(SELECTORS["dialog"]).count() > 0:
+    if _is_modal_ready() and await page.locator(sel("dialog")).count() > 0:
         return True
 
     if "/direct/" in (page.url or ""):
@@ -325,7 +381,7 @@ async def ensure_inbox(page: Page, timeout_ms: int = 25_000) -> bool:
             return True
 
     for cycle in range(2):
-        if _is_modal_ready() and await page.locator(SELECTORS["dialog"]).count() > 0:
+        if _is_modal_ready() and await page.locator(sel("dialog")).count() > 0:
             return True
         for label, action in (
             (f"goto_new_{cycle+1}", goto_direct_new),
@@ -341,11 +397,11 @@ async def ensure_inbox(page: Page, timeout_ms: int = 25_000) -> bool:
                 await random_wait(300, 700)
                 return True
 
-    if _is_modal_ready() and await page.locator(SELECTORS["dialog"]).count() > 0:
+    if _is_modal_ready() and await page.locator(sel("dialog")).count() > 0:
         return True
 
     try:
-        icon = page.locator(SELECTORS["inbox_icon"]).first
+        icon = page.locator(sel("inbox_icon")).first
         if await icon.count() > 0:
             await icon.click()
             await random_wait(400, 900)
@@ -353,7 +409,7 @@ async def ensure_inbox(page: Page, timeout_ms: int = 25_000) -> bool:
     except Exception as exc:
         print(f"[direct] click_inbox_icon failed: {exc}")
 
-    if _is_modal_ready() and await page.locator(SELECTORS["dialog"]).count() > 0:
+    if _is_modal_ready() and await page.locator(sel("dialog")).count() > 0:
         return True
 
     await goto_direct_new(page)
@@ -374,7 +430,7 @@ async def open_new_message(page: Page, timeout_ms: int = 25_000) -> bool:
         return True
 
     steps = []
-    btn = page.locator(SELECTORS["new_message"]).first
+    btn = page.locator(sel("new_message")).first
     if await btn.count() > 0:
 
         async def click_new_button():
@@ -404,12 +460,12 @@ async def open_new_message(page: Page, timeout_ms: int = 25_000) -> bool:
 
 
 async def _get_dialog_search_field(page: Page) -> Optional[Locator]:
-    dialog = page.locator(SELECTORS["dialog"]).first
+    dialog = page.locator(sel("dialog")).first
     if await dialog.count() == 0:
         frame_dialog = None
         for frame in page.frames:
             try:
-                candidate = frame.locator(SELECTORS["dialog"]).first
+                candidate = frame.locator(sel("dialog")).first
             except Exception:
                 continue
             if await candidate.count() > 0:
@@ -467,7 +523,7 @@ async def _wait_results_in_dialog(page: Page, timeout_ms: int = 9_000) -> bool:
     except PWTimeoutError:
         # Fallback al selector genérico que ya usabas
         try:
-            await page.wait_for_selector(SELECTORS["dialog_result"], timeout=timeout_ms)
+            await page.wait_for_selector(sel("dialog_result"), timeout=timeout_ms)
             return True
         except PWTimeoutError:
             return False
@@ -478,7 +534,7 @@ async def _wait_results_stable(page: Page, min_ms: int = 1_000, max_ms: int = 2_
     Espera a que la lista de resultados del diálogo esté "estable":
     que haya resultados y que el conteo no cambie durante al menos `min_ms`.
     """
-    selector = SELECTORS["dialog_result"]
+    selector = sel("dialog_result")
     start = time.time()
     last_count: Optional[int] = None
     stable_since: Optional[float] = None
@@ -531,7 +587,7 @@ async def _locate_username_row(page: Page, handle: str) -> Optional[Locator]:
     handle_norm = handle.strip().lstrip("@").lower()
     if not handle_norm:
         return None
-    results = page.locator(SELECTORS["dialog_result"])
+    results = page.locator(sel("dialog_result"))
     total = await results.count()
     if total == 0:
         return None
@@ -578,7 +634,7 @@ async def _wait_and_click_submit(
         await page.wait_for_function("(button) => button && !button.disabled", submit, timeout=timeout_ms)
         await submit.click()
         print("[direct] clicked Chat/Next submit button")
-        await page.wait_for_selector(SELECTORS["dialog"], state="detached", timeout=6_000)
+        await page.wait_for_selector(sel("dialog"), state="detached", timeout=6_000)
         await random_wait(300, 700)
         if ensure_thread:
             opened = await wait_thread_open(page, timeout_ms=15_000)
@@ -591,7 +647,7 @@ async def _wait_and_click_submit(
         print(f"[direct] submit click failed: {exc}")
         try:
             await page.keyboard.press("Enter")
-            await page.wait_for_selector(SELECTORS["dialog"], state="detached", timeout=6_000)
+            await page.wait_for_selector(sel("dialog"), state="detached", timeout=6_000)
             await random_wait(300, 700)
             if ensure_thread:
                 opened = await wait_thread_open(page, timeout_ms=15_000)
@@ -612,7 +668,7 @@ async def search_and_select(page: Page, username: str, exact: bool = True) -> tu
     if not handle:
         return False, "invalid_username"
 
-    if not _is_modal_ready() or await page.locator(SELECTORS["dialog"]).count() == 0:
+    if not _is_modal_ready() or await page.locator(sel("dialog")).count() == 0:
         ok = await ensure_new_message_dialog(page)
         if not ok:
             return False, "no_dialog"
@@ -632,11 +688,11 @@ async def search_and_select(page: Page, username: str, exact: bool = True) -> tu
         return False, f"no_results_stable_{handle}"
 
     if exact:
-        row = page.locator(SELECTORS["dialog_result"]).filter(has_text=handle).first
+        row = page.locator(sel("dialog_result")).filter(has_text=handle).first
         if await row.count() == 0:
-            row = page.locator(SELECTORS["dialog_result"]).first
+            row = page.locator(sel("dialog_result")).first
     else:
-        row = page.locator(SELECTORS["dialog_result"]).first
+        row = page.locator(sel("dialog_result")).first
 
     if await row.count() == 0:
         await _snap(page, f"no_pick_or_submit_{handle}")
@@ -725,7 +781,7 @@ async def open_chat(page: Page, username: str) -> dict:
 
 async def confirm_next(page: Page) -> bool:
     """Confirma el diálogo de selección (si el botón existe)."""
-    btn = page.locator(SELECTORS["next_button"]).first
+    btn = page.locator(sel("next_button")).first
     if await btn.count() == 0:
         return False
     try:
@@ -748,7 +804,7 @@ async def wait_thread_open(page: Page, timeout_ms: int = 15_000) -> bool:
 
     try:
         await page.wait_for_selector(
-            f"{SELECTORS['thread_header']}, {SELECTORS['composer']}",
+            f"{sel('thread_header')}, {sel('composer')}",
             timeout=timeout_ms,
         )
         _mark_modal_ready(False)
@@ -759,40 +815,76 @@ async def wait_thread_open(page: Page, timeout_ms: int = 15_000) -> bool:
 
 
 async def focus_composer(page: Page) -> bool:
-    """Fija foco en el composer; devuelve True si quedó listo para tipear."""
-    comp = page.locator(SELECTORS["composer"]).first
-    if await comp.count() == 0:
+    """Fija foco en el composer; devuelve True si qued? listo para tipear."""
+    comp = page.locator(sel("composer"))
+    try:
+        count = await comp.count()
+    except Exception:
+        count = 0
+    if count == 0:
         await _snap(page, "composer_not_found")
         return False
-    try:
-        await comp.click()
-        await random_wait(200, 500)
-        return True
-    except Exception as exc:
-        print(f"[direct] focus_composer failed: {exc}")
-        await _snap(page, "composer_click_error")
-        return False
+    last_exc: Optional[Exception] = None
+    for idx in range(count):
+        candidate = comp.nth(idx)
+        try:
+            if not await candidate.is_visible():
+                continue
+        except Exception:
+            continue
+        try:
+            await candidate.click()
+            await random_wait(200, 500)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc:
+        print(f"[direct] focus_composer failed: {last_exc}")
+    await _snap(page, "composer_click_error")
+    return False
 
 
 async def click_send(page: Page) -> None:
-    send_btn = page.locator(SELECTORS["send_button"])
-    if await send_btn.count() > 0:
-        await send_btn.first.click()
-    else:
+    send_btn = page.locator(sel("send_button"))
+    clicked = False
+    try:
+        await page.wait_for_selector(sel("send_button"), timeout=2_000)
+    except Exception:
+        pass
+    try:
+        count = await send_btn.count()
+    except Exception:
+        count = 0
+    if count > 0:
+        for idx in range(min(count, 3)):
+            candidate = send_btn.nth(idx)
+            try:
+                if not await candidate.is_visible():
+                    continue
+            except Exception:
+                continue
+            try:
+                await candidate.click()
+                clicked = True
+                break
+            except Exception:
+                continue
+    if not clicked:
         await page.keyboard.press("Enter")
     await random_wait(350, 900)
 
 
 async def wait_own_bubble(page: Page, timeout_ms: int = 8_000) -> bool:
     try:
-        await page.wait_for_selector(SELECTORS["own_bubble"], timeout=timeout_ms, state="visible")
+        await page.wait_for_selector(sel("own_bubble"), timeout=timeout_ms, state="visible")
         return True
     except PWTimeoutError:
         return False
 
 
 async def last_error_toast(page: Page) -> Optional[str]:
-    toast = page.locator(SELECTORS["toast_error"]).last
+    toast = page.locator(sel("toast_error")).last
     if await toast.count() > 0:
         try:
             return (await toast.inner_text()).strip()

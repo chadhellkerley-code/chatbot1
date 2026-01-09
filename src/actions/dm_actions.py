@@ -14,7 +14,7 @@ PWTimeoutError = PlaywrightTimeoutError
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.actions.direct_helpers import (
-    SELECTORS,
+    SELECTORS_JOINED,
     ensure_inbox,
     ensure_new_message_dialog,
     search_and_select,
@@ -94,7 +94,7 @@ async def send_dm_to_user(
             result["screenshot"] = await snap("composer_not_found")
             return result
 
-        composer = page.locator(SELECTORS["composer"]).first
+        composer = page.locator(SELECTORS_JOINED["composer"]).first
         typing_defaults = {"min_delay": 0.04, "max_delay": 0.18, "occasional_pause": 0.12}
         typing_cfg = {**typing_defaults, **(cfg.get("typing", {}) or {})}
         typed_message = message.format(username=target)
@@ -140,7 +140,7 @@ async def send_dm_to_user(
 # --------------------------------------------------------------------------- #
 
 async def _find_message_box(page):
-    composer_selector = SELECTORS["composer"]
+    composer_selector = SELECTORS_JOINED["composer"]
     locator = page.locator(composer_selector)
     if await locator.count():
         return locator

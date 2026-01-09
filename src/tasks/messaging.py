@@ -33,7 +33,7 @@ def send_message_task(self, username, password, proxy, target_user, message_text
         
         # Ejecutamos el envío
         logger.info(f"Worker: Navegando para enviar DM...")
-        success = sender.send_message_like_human(account_payload, target_user, message_text)
+        success = sender.send_message_like_human_sync(account_payload, target_user, message_text)
         
         if not success:
             raise Exception("HumanInstagramSender devolvió False")
