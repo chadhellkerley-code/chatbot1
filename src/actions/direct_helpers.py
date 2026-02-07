@@ -3,6 +3,7 @@
 import os
 import re
 import time
+from enum import Enum
 from typing import Optional
 
 from playwright.async_api import Frame, Locator, Page, TimeoutError as PWTimeoutError
@@ -140,6 +141,172 @@ SELECTORS = {
     "toast_error": ['[role="alert"]', '[data-testid="toast"]'],
     "modal_dialog": ['[role="dialog"]'],
 }
+
+DM_BUTTON_LABELS = ("Mensaje", "Enviar mensaje", "Message", "Send message")
+DM_BUTTON_REGEX = re.compile(
+    r"^(mensaje|enviar mensaje|message|send message)$", re.IGNORECASE
+)
+DM_TEXT_BLOCK_PATTERNS = [
+    re.compile(r"try again later", re.IGNORECASE),
+    re.compile(r"something went wrong", re.IGNORECASE),
+    re.compile(r"confirm(ing)? it'?s you", re.IGNORECASE),
+    re.compile(r"we restrict certain activity", re.IGNORECASE),
+    re.compile(r"intenta( lo)?( de nuevo)? m[aá]s tarde", re.IGNORECASE),
+    re.compile(r"algo sali[oó] mal", re.IGNORECASE),
+    re.compile(r"confirma que eres t[uú]", re.IGNORECASE),
+    re.compile(r"restringimos cierta actividad", re.IGNORECASE),
+]
+DM_BLOCKING_URL_TOKENS = (
+    "accounts/login",
+    "/challenge/",
+    "/checkpoint/",
+    "accounts/confirm_email",
+    "two_factor",
+)
+PROFILE_BLOCKING_SELECTORS = [
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "[role='progressbar']",
+    "[aria-busy='true']",
+    "svg[aria-label*='Loading']",
+    "svg[aria-label*='Cargando']",
+]
+PROFILE_READY_SELECTORS = [
+    "h1",
+    "h2",
+    "[href*='/followers/']",
+    "[href*='/following/']",
+]
+PROFILE_READY_BUTTONS = (
+    "Follow",
+    "Seguir",
+    "Following",
+    "Siguiendo",
+    "Requested",
+    "Solicitado",
+    "Edit profile",
+    "Editar perfil",
+)
+
+
+class DmAvailability(Enum):
+    OK = "OK"
+    NO_DM = "NO_DM"
+    UNKNOWN = "UNKNOWN"
+
+
+async def find_profile_dm_button(page: Page) -> Optional[Locator]:
+    for label in DM_BUTTON_LABELS:
+        try:
+            locator = page.get_by_role(
+                "button", name=re.compile(rf"^{re.escape(label)}$", re.IGNORECASE)
+            )
+            if await locator.count() > 0:
+                return locator.first
+        except Exception:
+            continue
+
+    header = page.locator("header")
+    if await header.count() > 0:
+        candidates = header.locator("button, div[role='button'], a[role='button'], span")
+        match = candidates.filter(has_text=DM_BUTTON_REGEX)
+        if await match.count() > 0:
+            return match.first
+
+    fallback = page.locator("button, div[role='button'], a[role='button'], span").filter(
+        has_text=DM_BUTTON_REGEX
+    )
+    if await fallback.count() > 0:
+        return fallback.first
+    return None
+
+
+async def _profile_surface_ready(page: Page) -> bool:
+    header = page.locator("header")
+    if await header.count() == 0:
+        return False
+    if await page.locator("main").count() == 0:
+        return False
+    try:
+        if await header.locator(", ".join(PROFILE_READY_SELECTORS)).count() > 0:
+            return True
+    except Exception:
+        pass
+    for label in PROFILE_READY_BUTTONS:
+        try:
+            locator = header.get_by_role(
+                "button", name=re.compile(rf"^{re.escape(label)}$", re.IGNORECASE)
+            )
+            if await locator.count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _has_blocking_signals(page: Page) -> bool:
+    current_url = (page.url or "").lower()
+    if any(token in current_url for token in DM_BLOCKING_URL_TOKENS):
+        return True
+    for selector in PROFILE_BLOCKING_SELECTORS:
+        try:
+            if await page.locator(selector).count() > 0:
+                return True
+        except Exception:
+            continue
+    try:
+        body_text = await page.locator("body").inner_text()
+    except Exception:
+        return False
+    if not body_text:
+        return False
+    for pattern in DM_TEXT_BLOCK_PATTERNS:
+        if pattern.search(body_text):
+            return True
+    return False
+
+
+async def _await_profile_surface_ready(page: Page, timeout_ms: int = 3500) -> bool:
+    deadline = time.time() + (timeout_ms / 1000.0)
+    while time.time() < deadline:
+        if await _profile_surface_ready(page):
+            return True
+        try:
+            await page.wait_for_timeout(350)
+        except Exception:
+            pass
+    return await _profile_surface_ready(page)
+
+
+async def detect_dm_availability(page: Page) -> DmAvailability:
+    try:
+        if await find_profile_dm_button(page):
+            return DmAvailability.OK
+    except Exception:
+        return DmAvailability.UNKNOWN
+
+    try:
+        if await _has_blocking_signals(page):
+            return DmAvailability.UNKNOWN
+        if not await _await_profile_surface_ready(page):
+            return DmAvailability.UNKNOWN
+    except Exception:
+        return DmAvailability.UNKNOWN
+
+    for _ in range(3):
+        try:
+            if await find_profile_dm_button(page):
+                return DmAvailability.OK
+        except Exception:
+            return DmAvailability.UNKNOWN
+        try:
+            await page.wait_for_timeout(600)
+        except Exception:
+            pass
+        if await _has_blocking_signals(page):
+            return DmAvailability.UNKNOWN
+
+    return DmAvailability.NO_DM
 
 
 def _selector_candidates(value: list[str] | str) -> list[str]:

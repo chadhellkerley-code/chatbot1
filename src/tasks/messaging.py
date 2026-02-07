@@ -33,8 +33,29 @@ def send_message_task(self, username, password, proxy, target_user, message_text
         
         # Ejecutamos el envío
         logger.info(f"Worker: Navegando para enviar DM...")
-        success = sender.send_message_like_human_sync(account_payload, target_user, message_text)
-        
+        success, detail, payload = sender.send_message_like_human_sync(
+            account_payload,
+            target_user,
+            message_text,
+            return_detail=True,
+            return_payload=True,
+        )
+
+        skip_reason = (payload.get("skip_reason") or detail or "").strip()
+        if skip_reason == "NO_DM_BUTTON":
+            logger.info("skip | no_dm | Perfil sin botón de mensaje / no permite DM")
+            return {"success": False, "skipped": True, "reason": "NO_DM_BUTTON"}
+
+        if (
+            payload.get("sent_unverified")
+            or (payload.get("reason_code") or "").strip().upper() == "SENT_UNVERIFIED"
+            or (detail or "").strip().lower() == "sent_unverified"
+        ):
+            logger.warning(
+                "warn | sent_unverified | Se intentó enviar y no se pudo verificar en DOM; no cuenta como error"
+            )
+            return {"success": True, "sent_unverified": True}
+
         if not success:
             raise Exception("HumanInstagramSender devolvió False")
             

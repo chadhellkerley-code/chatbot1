@@ -306,6 +306,8 @@ def _counts_for_date(date: datetime.date) -> tuple[int, int]:
     sent = 0
     errors = 0
     for obj in _iter_records():
+        if obj.get("skipped") or obj.get("skip_reason"):
+            continue
         local_dt = obj.get("local_dt")
         if not local_dt or local_dt.date() != date:
             continue
@@ -385,6 +387,9 @@ def log_sent(
     selected_variant: str | None = None,
     cancelled: bool | None = None,
     verified: bool | None = None,
+    skip: bool = False,
+    skip_reason: str | None = None,
+    sent_unverified: bool = False,
 ):
     rec = {
         "ts": int(time.time()),
@@ -393,6 +398,12 @@ def log_sent(
         "ok": bool(okflag),
         "detail": detail,
     }
+    if skip:
+        rec["skipped"] = True
+    if skip_reason:
+        rec["skip_reason"] = skip_reason
+    if sent_unverified:
+        rec["sent_unverified"] = True
     if started_at:
         rec["started_at"] = started_at
     if duration_ms is not None:
@@ -409,7 +420,8 @@ def log_sent(
         rec["verified"] = bool(verified)
     with SENT.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    _increment_daily(bool(okflag))
+    if not skip:
+        _increment_daily(bool(okflag))
 
 
 def log_conversation_status(
@@ -446,6 +458,8 @@ def sent_totals() -> tuple[int, int]:
     ok_count = 0
     error_count = 0
     for obj in _iter_records():
+        if obj.get("skipped") or obj.get("skip_reason"):
+            continue
         if obj.get("ok"):
             ok_count += 1
         else:
@@ -473,7 +487,10 @@ def _print_records(records: Iterable[dict], limit: int | None = None) -> None:
         if limit is not None and shown >= limit:
             break
         ts = obj.get("local_dt") or datetime.fromtimestamp(obj.get("ts", 0), tz=_UTC_TZ).astimezone(TZ)
-        status = "OK" if obj.get("ok") else "ERROR"
+        if obj.get("skipped") or obj.get("skip_reason"):
+            status = "SKIP"
+        else:
+            status = "OK" if obj.get("ok") else "ERROR"
         detail = obj.get("detail", "")
         timestamp = ts.strftime("%Y-%m-%d %H:%M:%S")
         print(

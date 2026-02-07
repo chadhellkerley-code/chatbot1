@@ -70,6 +70,7 @@ CHALLENGE_SUBMIT_SELECTORS = (
 
 TotpProvider = Callable[[str], Optional[str]]
 CodeProvider = Callable[[], Optional[str]]
+TraceFn = Callable[[str], None]
 
 LOGIN_FAILED_DIR = Path(BASE_PROFILES) / "login_failed_screenshots"
 
@@ -81,6 +82,14 @@ def _keystroke_delay_ms(base: float = 0.07, jitter: float = 0.03) -> int:
 
 async def _human_wait(min_s: float = 0.2, max_s: float = 1.0) -> None:
     await asyncio.sleep(random.uniform(min_s, max_s))
+
+
+def _trace(trace: Optional[TraceFn], message: str) -> None:
+    if callable(trace):
+        try:
+            trace(message)
+        except Exception:
+            pass
 
 
 def _resolve_locator(target, selector: Optional[str]):
@@ -220,8 +229,14 @@ async def _wait_one_of(page: Page, *, timeout: int = 25_000, selectors: Sequence
     return False
 
 
-async def _submit_login_form(page: Page, username: str, password: str) -> None:
+async def _submit_login_form(
+    page: Page,
+    username: str,
+    password: str,
+    trace: Optional[TraceFn] = None,
+) -> None:
     # Asegura estar en la vista de login
+    _trace(trace, "Open https://www.instagram.com/accounts/login/")
     await _ensure_login_view(page)
     username_locators = (
         "input[name='username']",
@@ -253,7 +268,9 @@ async def _submit_login_form(page: Page, username: str, password: str) -> None:
 
     # Limpiar y rellenar directamente (más robusto que tipeo lento en algunos layouts)
     try:
+        _trace(trace, "Fill username")
         await username_input.fill(username)
+        _trace(trace, "Fill password")
         await password_input.fill(password)
     except Exception:
         return
@@ -263,6 +280,7 @@ async def _submit_login_form(page: Page, username: str, password: str) -> None:
         await submit_btn.scroll_into_view_if_needed()
     except Exception:
         pass
+    _trace(trace, "Submit login")
     # Intentar click y siempre presionar Enter como respaldo
     try:
         await _human_click(submit_btn)
@@ -279,6 +297,7 @@ async def _submit_login_form(page: Page, username: str, password: str) -> None:
             await page.wait_for_load_state("domcontentloaded")
         except Exception:
             pass
+    _trace(trace, "Wait for navigation / DOM ready")
 
 
 async def _after_submit_outcome(page: Page) -> str:
@@ -427,6 +446,7 @@ async def _resolve_two_factor_flow(
     totp_secret: Optional[str],
     totp_provider: Optional[TotpProvider],
     *,
+    trace: Optional[TraceFn] = None,
     max_attempts: int = 3,
 ) -> bool:
     """
@@ -438,7 +458,12 @@ async def _resolve_two_factor_flow(
         if not await _is_two_factor_prompt(page):
             return True
 
-        filled = await _handle_totp_prompt(page, username, totp_secret, totp_provider)
+        _trace(trace, "Detect 2FA prompt")
+        if not totp_secret and not callable(totp_provider):
+            _trace(trace, "2FA required but no TOTP provided")
+            raise RuntimeError("2FA required but no TOTP provided")
+
+        filled = await _handle_totp_prompt(page, username, totp_secret, totp_provider, trace=trace)
         await _human_wait(0.8, 1.6)
         if await is_logged_in(page):
             return True
@@ -463,6 +488,7 @@ async def _handle_totp_prompt(
     username: str,
     totp_secret: Optional[str],
     totp_provider: Optional[TotpProvider],
+    trace: Optional[TraceFn] = None,
 ) -> bool:
     try:
         current_url = page.url or ""
@@ -501,14 +527,15 @@ async def _handle_totp_prompt(
         code = _resolve_totp_code(username, totp_secret, totp_provider)
         if not code:
             raise RuntimeError(
-                "Instagram solicitó TOTP pero no hay totp_secret ni proveedor configurado."
+                "2FA required but no TOTP provided"
             )
-        logger.info("TOTP para @%s: %s", username, code)
+        _trace(trace, "Fill 2FA TOTP code")
         await _human_type(totp_input, code)
         try:
             await totp_input.press("Enter")
         except Exception:
             pass
+        _trace(trace, "Submit 2FA code")
         await _click_if_present(
             page,
             (
@@ -813,10 +840,13 @@ async def human_login(
     totp_secret: Optional[str] = None,
     totp_provider: Optional[TotpProvider] = None,
     code_provider: Optional[CodeProvider] = None,
+    trace: Optional[TraceFn] = None,
+    retry_on_still_login: bool = True,
 ) -> bool:
     logger.info("Iniciando login humano para @%s", username)
 
     try:
+        _trace(trace, "Open https://www.instagram.com/")
         await page.goto(INSTAGRAM_URL, wait_until="domcontentloaded")
     except Exception:
         await page.goto(INSTAGRAM_URL)
@@ -828,6 +858,7 @@ async def human_login(
 
     if not await _has_login_form(page):
         try:
+            _trace(trace, "Open https://www.instagram.com/accounts/login/")
             await page.goto(LOGIN_URL, wait_until="domcontentloaded")
         except Exception:
             await page.goto(LOGIN_URL)
@@ -837,26 +868,38 @@ async def human_login(
         await _dismiss_cookies(page)
 
     async def _attempt_login() -> str:
-        await _submit_login_form(page, username, password)
+        await _submit_login_form(page, username, password, trace=trace)
         # Esperamos un momento para que se seteen cookies (critico)
         await _wait_post_submit(page)
         await _human_wait(2, 3)
         two_factor_ok = await _resolve_two_factor_flow(
-            page, username, totp_secret, totp_provider, max_attempts=3
+            page,
+            username,
+            totp_secret,
+            totp_provider,
+            trace=trace,
+            max_attempts=3,
         )
         if not two_factor_ok and "/accounts/login" in (page.url or ""):
             return "still_login"
         await _handle_suspended_flow(page)
 
         # FUERZA BRUTA: Navegación forzada al Inbox como solicitaste
-        logger.info("🚀 FORZANDO NAVEGACIÓN A INBOX: https://www.instagram.com/direct/inbox/?next=%2F")
+        _trace(trace, "Open https://www.instagram.com/direct/inbox/?next=%2F")
         try:
             await page.goto("https://www.instagram.com/direct/inbox/?next=%2F", wait_until="domcontentloaded", timeout=60000)
             await _human_wait(3, 5)
         except Exception as e:
             logger.warning(f"Error en navegación forzada (pero continuamos): {e}")
         # Si tras la navegación seguimos en prompt de TOTP, reintenta rellenarlo
-        await _resolve_two_factor_flow(page, username, totp_secret, totp_provider, max_attempts=2)
+        await _resolve_two_factor_flow(
+            page,
+            username,
+            totp_secret,
+            totp_provider,
+            trace=trace,
+            max_attempts=2,
+        )
         await _handle_suspended_flow(page)
 
         # Verificamos directamente si funcionó
@@ -866,7 +909,14 @@ async def human_login(
         # Si aun no estamos logueados, miramos si hay challenge o errores
         await _handle_light_challenge(page, username, code_provider)
         # Reintenta TOTP en caso de que IG siga mostrando el prompt
-        await _resolve_two_factor_flow(page, username, totp_secret, totp_provider, max_attempts=2)
+        await _resolve_two_factor_flow(
+            page,
+            username,
+            totp_secret,
+            totp_provider,
+            trace=trace,
+            max_attempts=2,
+        )
         await _handle_suspended_flow(page)
 
         if "/challenge/" in (page.url or ""):
@@ -877,7 +927,14 @@ async def human_login(
     outcome = await _attempt_login()
     # Si quedamos en la pantalla de two_factor, intentar rellenar TOTP una vez más
     if "/two_factor" in (page.url or ""):
-        await _resolve_two_factor_flow(page, username, totp_secret, totp_provider, max_attempts=2)
+        await _resolve_two_factor_flow(
+            page,
+            username,
+            totp_secret,
+            totp_provider,
+            trace=trace,
+            max_attempts=2,
+        )
         if await is_logged_in(page):
             outcome = "ok"
 
@@ -894,7 +951,7 @@ async def human_login(
             pass
         outcome = "ok"
 
-    if outcome == "still_login":
+    if outcome == "still_login" and retry_on_still_login:
         # Doble chequeo por si la URL cambio justo despues
         if "/accounts/onetap/" in (page.url or ""):
              logger.info("Detectado /onetap/ tras intento fallido. Asumiendo éxito.")
@@ -917,11 +974,16 @@ async def human_login(
         try: await page.goto("https://www.instagram.com/direct/inbox/") 
         except: pass
 
+    if outcome == "challenge":
+        _trace(trace, "FAIL reason=challenge_required")
+
     if outcome == "bad_creds":
+        _trace(trace, "FAIL reason=bad_credentials")
         await _capture_login_failure(page, username)
         raise RuntimeError("Instagram rechazó las credenciales proporcionadas.")
 
     if outcome == "still_login":
+        _trace(trace, "FAIL reason=login_form_returned")
         await _capture_login_failure(page, username)
         raise RuntimeError("Instagram devolvió nuevamente el formulario de login.")
 
@@ -937,6 +999,8 @@ async def human_login(
     success = await is_logged_in(page)
     if not success and outcome != "challenge":
         await _capture_login_failure(page, username)
+    if success:
+        _trace(trace, "Login OK (session valid)")
     logger.info("Login humano para @%s %s", username, "OK" if success else "FALLO")
     return success
 

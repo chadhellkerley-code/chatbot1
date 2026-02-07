@@ -7,12 +7,14 @@ from typing import Any, Dict, List, Optional
 
 from .base import BaseInstagramClient, TwoFARequired, TwoFactorCodeRejected
 
+_INSTAGRAPI_IMPORT_ERROR: Optional[str] = None
 try:  # pragma: no cover - optional dependency
     from instagrapi import Client as InstaClient
     from instagrapi.exceptions import TwoFactorRequired as InstaTwoFactorRequired
-except Exception:  # pragma: no cover - environment without instagrapi
+except Exception as exc:  # pragma: no cover - environment without instagrapi
     InstaClient = None  # type: ignore[assignment]
     InstaTwoFactorRequired = None  # type: ignore[assignment]
+    _INSTAGRAPI_IMPORT_ERROR = str(exc)
 
 
 def _infer_two_factor_mode(info: Dict[str, Any]) -> str:
@@ -32,7 +34,8 @@ class InstagramInstagrapiClient(BaseInstagramClient):
 
     def __init__(self, *, account: Optional[dict] = None) -> None:
         if InstaClient is None:
-            raise RuntimeError("instagrapi is not available")
+            detail = f": {_INSTAGRAPI_IMPORT_ERROR}" if _INSTAGRAPI_IMPORT_ERROR else ""
+            raise RuntimeError(f"instagrapi is not available{detail}")
         super().__init__(account=account)
         self._client = InstaClient()
         self._two_factor_identifier: Optional[str] = None

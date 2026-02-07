@@ -473,66 +473,6 @@ def _copy_tree_robust(source: Path, destination: Path, *, verify: bool = True) -
         )
 
 
-def _generate_playwright_folder() -> None:
-    try:
-        from tools.build_executable import (
-            _resolve_playwright_browsers_path,
-            _select_playwright_browser_dirs,
-            _copy_playwright_selected,
-        )
-    except Exception as exc:
-        warn(f"No se pudo cargar el utilitario Playwright: {exc}")
-        press_enter()
-        return
-
-    source = _resolve_playwright_browsers_path()
-    if not source:
-        warn("No se encontraron browsers de Playwright instalados.")
-        press_enter()
-        return
-
-    selected_dirs, reason = _select_playwright_browser_dirs(source)
-    if not selected_dirs:
-        warn("No se encontro un Chromium sano para copiar.")
-        press_enter()
-        return
-
-    client_name = ask("Nombre del cliente: ").strip()
-    if not client_name:
-        warn("Nombre requerido.")
-        press_enter()
-        return
-
-    base_default = _desktop_root() / "EntregaClientes"
-    base_input = ask(f"Carpeta base [{base_default}]: ").strip()
-    base_folder = Path(base_input) if base_input else base_default
-    target_root = base_folder / _safe_client_folder(client_name)
-    target = target_root / "playwright_browsers"
-
-    if target.exists():
-        confirm = ask("playwright_browsers ya existe. Reemplazar? (s/N): ").strip().lower()
-        if confirm != "s":
-            warn("Operacion cancelada.")
-            press_enter()
-            return
-        shutil.rmtree(target, ignore_errors=True)
-
-    try:
-        target_root.mkdir(parents=True, exist_ok=True)
-        _copy_playwright_selected(source, target, selected_dirs)
-    except Exception as exc:
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-        warn(f"No se pudo copiar Playwright: {exc}")
-        press_enter()
-        return
-
-    picked = ", ".join(item.name for item in selected_dirs)
-    ok(f"Playwright copiado: {picked} ({reason})")
-    ok(f"Destino: {target}")
-    press_enter()
-
-
 def _build_delivery_zip(
     artifact_path: Path,
     destination_name: str,
@@ -656,20 +596,102 @@ def _render_table(records: Iterable[Dict[str, Any]]) -> None:
 
 
 def _show_active_licenses() -> None:
-    records = [rec for rec in _load_local_licenses() if _is_active_record(rec)]
+    """Muestra todas las licencias, sincronizando con el backend si está disponible."""
     banner()
-    print(style_text("Licencias activas", color=Fore.CYAN, bold=True))
+    print(style_text("Gestión de Licencias", color=Fore.CYAN, bold=True))
     print(full_line())
-    if not records:
-        warn("No hay licencias activas.")
+    
+    # Intentar sincronizar con backend
+    synced = False
+    url, key = _supabase_credentials()
+    if url and key:
+        print("Sincronizando con backend...")
+        try:
+            data, error, status = _request("get", f"{_TABLE}?select=*&order=created_at.desc")
+            if not error and isinstance(data, list):
+                # Sincronizar licencias del backend con local
+                for remote_record in data:
+                    _upsert_local_license(remote_record)
+                synced = True
+                ok(f"Sincronizadas {len(data)} licencias desde el backend.")
+            else:
+                warn(f"No se pudo sincronizar: {error or 'Error desconocido'}")
+        except Exception as exc:
+            warn(f"Error al sincronizar: {exc}")
+    
+    # Cargar todas las licencias (local + sincronizadas)
+    all_records = _load_local_licenses()
+    
+    if not all_records:
+        warn("No hay licencias registradas.")
         press_enter()
         return
-    records.sort(key=lambda r: r.get("expires_at") or "")
-    _render_table(records)
+    
+    # Separar por estado
+    active_records = [r for r in all_records if _is_active_record(r)]
+    expired_records = [r for r in all_records if str(r.get("status", "")).lower() == _STATUS_EXPIRED or (_is_expired(r) and str(r.get("status", "")).lower() != _STATUS_REVOKED)]
+    revoked_records = [r for r in all_records if str(r.get("status", "")).lower() == _STATUS_REVOKED]
+    paused_records = [r for r in all_records if str(r.get("status", "")).lower() == _STATUS_PAUSED]
+    
+    print()
+    print(style_text("=== LICENCIAS ACTIVAS ===", color=Fore.GREEN, bold=True))
+    if active_records:
+        active_records.sort(key=lambda r: r.get("expires_at") or "")
+        _render_table(active_records)
+    else:
+        print("  (ninguna)")
+    
+    print()
+    print(style_text("=== LICENCIAS VENCIDAS ===", color=Fore.YELLOW, bold=True))
+    if expired_records:
+        expired_records.sort(key=lambda r: r.get("expires_at") or "", reverse=True)
+        _render_table(expired_records)
+    else:
+        print("  (ninguna)")
+    
+    print()
+    print(style_text("=== LICENCIAS REVOCADAS ===", color=Fore.RED, bold=True))
+    if revoked_records:
+        revoked_records.sort(key=lambda r: r.get("expires_at") or "", reverse=True)
+        _render_table(revoked_records)
+    else:
+        print("  (ninguna)")
+    
+    print()
+    print(style_text("=== LICENCIAS PAUSADAS ===", color=Fore.YELLOW, bold=True))
+    if paused_records:
+        paused_records.sort(key=lambda r: r.get("expires_at") or "", reverse=True)
+        _render_table(paused_records)
+    else:
+        print("  (ninguna)")
+    
+    print()
+    print(f"Total: {len(all_records)} licencias")
+    if synced:
+        print(style_text("✓ Sincronizado con backend", color=Fore.GREEN))
+    
     press_enter()
 
 
-def _fetch_licenses() -> List[Dict[str, Any]]:
+def _fetch_licenses(sync_with_backend: bool = True) -> List[Dict[str, Any]]:
+    """
+    Obtiene todas las licencias, sincronizando con el backend si está disponible.
+    
+    Args:
+        sync_with_backend: Si sincronizar con Supabase antes de retornar
+    """
+    if sync_with_backend:
+        url, key = _supabase_credentials()
+        if url and key:
+            try:
+                data, error, status = _request("get", f"{_TABLE}?select=*&order=created_at.desc")
+                if not error and isinstance(data, list):
+                    # Sincronizar licencias del backend con local
+                    for remote_record in data:
+                        _upsert_local_license(remote_record)
+            except Exception:
+                pass  # Si falla, usar solo licencias locales
+    
     return _load_local_licenses()
 
 
@@ -1270,11 +1292,10 @@ def menu_deliver() -> None:
         print("1) Crear licencia en backend + archivo")
         print("2) Generar archivo de licencia (backend)")
         print("3) Crear nueva licencia local (sin ZIP)")
-        print("4) Ver licencias activas")
+        print("4) Ver todas las licencias (sincronizar con backend)")
         print("5) Eliminar o extender licencia")
         print("6) Generar ejecutable universal (backend)")
-        print("7) Generar carpeta Playwright para cliente")
-        print("8) Volver")
+        print("7) Volver")
         print()
         choice = ask("Opcion: ").strip()
         if choice == "1":
@@ -1290,8 +1311,6 @@ def menu_deliver() -> None:
         elif choice == "6":
             _build_universal_executable()
         elif choice == "7":
-            _generate_playwright_folder()
-        elif choice == "8":
             break
         else:
             warn("Opcion invalida.")

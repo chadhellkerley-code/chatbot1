@@ -255,6 +255,8 @@ class CampaignUI:
 
         sent_today = int(send_state.get("sent", 0) or 0)
         err_today = int(send_state.get("errors", 0) or 0)
+        skipped_no_dm = int(send_state.get("skipped_no_dm", 0) or 0)
+        sent_unverified = int(send_state.get("sent_unverified", 0) or 0)
         template_preview = ""
         if self.templates:
             template_preview = _template_preview(self.templates[0].get("text", ""), limit=24)
@@ -263,6 +265,10 @@ class CampaignUI:
         meta.append(str(sent_today), style="bold green")
         meta.append("  Mensajes con error: ", style="bold")
         meta.append(str(err_today), style="bold red")
+        meta.append("  Enviados sin verificación: ", style="bold")
+        meta.append(str(sent_unverified), style="bold yellow")
+        meta.append("  Saltados sin DM: ", style="bold")
+        meta.append(str(skipped_no_dm), style="bold yellow")
         meta.append(f"  Concurrencia: {self.concurrency}", style="bold")
         meta2 = Text(
             f"Delay: {self.delay_min}-{self.delay_max}s  Plantilla: \"{template_preview}\"  Modo: humano/headless",
@@ -417,6 +423,8 @@ def create_daily_send_state() -> Dict[str, object]:
         "date": today_ar(),
         "sent": 0,
         "errors": 0,
+        "skipped_no_dm": 0,
+        "sent_unverified": 0,
         "next_reset_at": next_midnight_ar(),
     }
 
@@ -435,12 +443,16 @@ def _refresh_daily_state(send_state: Dict[str, object]) -> None:
             send_state["date"] = today_ar()
             send_state["sent"] = 0
             send_state["errors"] = 0
+            send_state["skipped_no_dm"] = 0
+            send_state["sent_unverified"] = 0
             send_state["next_reset_at"] = next_midnight_ar(now)
     except Exception:
         try:
             send_state["date"] = today_ar()
             send_state.setdefault("sent", 0)
             send_state.setdefault("errors", 0)
+            send_state.setdefault("skipped_no_dm", 0)
+            send_state.setdefault("sent_unverified", 0)
             send_state["next_reset_at"] = next_midnight_ar()
         except Exception:
             pass
@@ -899,6 +911,14 @@ _RETRYABLE_SEND_HINTS = (
     "execution context was destroyed",
 )
 
+NO_DM_SKIP_REASON = "NO_DM_BUTTON"
+NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
+NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
+SENT_UNVERIFIED_REASON = "SENT_UNVERIFIED"
+SENT_UNVERIFIED_DETAIL = (
+    "Se intentó enviar y no se pudo verificar en DOM; no cuenta como error"
+)
+
 
 def _is_retryable_send_failure(detail: str) -> bool:
     lowered = (detail or "").lower()
@@ -928,6 +948,60 @@ def _render_progress(
         )
 
 
+def _print_final_summary(
+    alias: str,
+    accounts: list[Dict],
+    success: Dict[str, int],
+    failed: Dict[str, int],
+    no_dm_by_account: Dict[str, int],
+    sent_unverified_by_account: Dict[str, int],
+) -> None:
+    title = "================ RESUMEN FINAL (campaña) ================"
+    divider = "-" * len(title)
+    footer = "=" * len(title)
+    usernames = [str(a.get("username", "")).strip() for a in accounts if a.get("username")]
+    usernames = sorted(set(usernames))
+    account_width = max(20, len("Cuenta"), len("TOTAL GENERAL"))
+    if usernames:
+        account_width = max(account_width, max(len(name) for name in usernames))
+
+    def _row(label: str, ok: int, err: int, no_dm: int, unver: int, total: int) -> str:
+        return (
+            f"{label:<{account_width}} "
+            f"{ok:>5} {err:>5} {no_dm:>6} {unver:>6} {total:>6}"
+        )
+
+    print(title)
+    print(f"Alias: {alias} | Hora fin: {time.strftime('%H:%M:%S')}")
+    print(divider)
+    print(
+        f"{'Cuenta':<{account_width}} "
+        f"{'OK':>5} {'ERR':>5} {'NO_DM':>6} {'UNVER':>6} {'TOTAL':>6}"
+    )
+
+    total_ok = 0
+    total_err = 0
+    total_no_dm = 0
+    total_unver = 0
+    total_all = 0
+    for username in usernames:
+        unver = int(sent_unverified_by_account.get(username, 0))
+        ok = max(0, int(success.get(username, 0)) - unver)
+        err = int(failed.get(username, 0))
+        no_dm = int(no_dm_by_account.get(username, 0))
+        total = ok + err + no_dm + unver
+        total_ok += ok
+        total_err += err
+        total_no_dm += no_dm
+        total_unver += unver
+        total_all += total
+        print(_row(username, ok, err, no_dm, unver, total))
+
+    print(divider)
+    print(_row("TOTAL GENERAL", total_ok, total_err, total_no_dm, total_unver, total_all))
+    print(footer)
+
+
 def _handle_event(
     event: SendEvent,
     success: Dict[str, int],
@@ -940,15 +1014,50 @@ def _handle_event(
     paused_accounts: set[str],
     emit_log: Callable[[str, str, str, Optional[str], Optional[bool]], None],
     prompt: Callable[[str], str],
+    no_dm_by_account: Optional[Dict[str, int]] = None,
+    sent_unverified_by_account: Optional[Dict[str, int]] = None,
     *,
     overnight: bool,
     request_stop_fn: Callable[[str], None],
 ) -> Optional[str]:
     username = event.username
+    skip_reason = (event.reason_code or "").strip().upper()
+    if not event.success and skip_reason == NO_DM_SKIP_REASON:
+        account_error_streaks.pop(username, None)
+        detail = event.detail or NO_DM_SKIP_DETAIL
+        if no_dm_by_account is not None:
+            no_dm_by_account[username] = int(no_dm_by_account.get(username, 0)) + 1
+        _log_runner_event(
+            "message",
+            account=username,
+            lead=event.lead,
+            status="skipped",
+            reason=detail,
+        )
+        live_table.complete(username, True, NO_DM_SKIP_LOG)
+        log_sent(
+            username,
+            event.lead,
+            False,
+            detail,
+            started_at=event.started_at,
+            duration_ms=event.duration_ms,
+            template_id=event.template_id,
+            template_name=event.template_name,
+            selected_variant=event.selected_variant,
+            cancelled=event.cancelled,
+            verified=False,
+            skip=True,
+            skip_reason=NO_DM_SKIP_REASON,
+        )
+        bump("skipped_no_dm", 1)
+        emit_log(username, event.lead, "skip", f"no_dm | {detail}", None)
+        return None
     if event.success:
         account_error_streaks.pop(username, None)
         success[username] += 1
         detail = event.detail or ""
+        is_unverified = (event.reason_code or "").strip().upper() == SENT_UNVERIFIED_REASON
         _log_runner_event(
             "message",
             account=username,
@@ -969,6 +1078,7 @@ def _handle_event(
             selected_variant=event.selected_variant,
             cancelled=event.cancelled,
             verified=event.verified,
+            sent_unverified=is_unverified,
         )
         with _LIVE_LOCK:
             _LIVE_COUNTS["run_ok"] += 1
@@ -977,6 +1087,19 @@ def _handle_event(
         if not event.verified:
             action = "enviado_sin_confirmacion"
         emit_log(username, event.lead, action, detail, event.verified)
+        if is_unverified:
+            bump("sent_unverified", 1)
+            if sent_unverified_by_account is not None:
+                sent_unverified_by_account[username] = int(
+                    sent_unverified_by_account.get(username, 0)
+                ) + 1
+            emit_log(
+                username,
+                event.lead,
+                "warn",
+                f"sent_unverified | {SENT_UNVERIFIED_DETAIL}",
+                None,
+            )
     else:
         failed[username] += 1
         detail = event.detail or "envío falló"
@@ -1355,7 +1478,7 @@ def menu_send_rotating(
     send_state: Dict[str, object] = create_daily_send_state()
 
     def bump(kind: str, delta: int = 1) -> None:
-        if kind not in {"sent", "errors"}:
+        if kind not in {"sent", "errors", "skipped_no_dm", "sent_unverified"}:
             return
         try:
             _refresh_daily_state(send_state)
@@ -1423,6 +1546,8 @@ def menu_send_rotating(
     remaining = {a["username"]: account_caps[a["username"]] for a in accounts}
     success = defaultdict(int)
     failed = defaultdict(int)
+    no_dm_by_account = defaultdict(int)
+    sent_unverified_by_account = defaultdict(int)
     total_target = min(len(users), sum(remaining.values()))
     send_index = 0
     semaphore = threading.Semaphore(concurr)
@@ -1571,6 +1696,26 @@ def menu_send_rotating(
                         success_flag, info = send_result
                 else:
                     success_flag, info = send_result, None
+                skip_reason = (payload.get("skip_reason") or info or "").strip().upper()
+                if skip_reason == NO_DM_SKIP_REASON:
+                    success_flag = False
+                    detail = NO_DM_SKIP_DETAIL
+                    reason_code = NO_DM_SKIP_REASON
+                    reason_label = NO_DM_SKIP_DETAIL
+                    scope = "lead"
+                    break
+                if (
+                    payload.get("sent_unverified")
+                    or (payload.get("reason_code") or "").strip().upper() == SENT_UNVERIFIED_REASON
+                    or (info or "").strip().lower() == "sent_unverified"
+                ):
+                    success_flag = True
+                    verified_flag = False
+                    detail = info or "sent_unverified"
+                    reason_code = SENT_UNVERIFIED_REASON
+                    reason_label = "Enviado sin verificación"
+                    scope = "lead"
+                    break
                 if success_flag:
                     verified_flag = bool(payload.get("verified", True))
                 if success_flag:
@@ -1730,6 +1875,8 @@ def menu_send_rotating(
                         paused_runtime,
                         emit_log,
                         prompt,
+                        no_dm_by_account=no_dm_by_account,
+                        sent_unverified_by_account=sent_unverified_by_account,
                         overnight=overnight_mode,
                         request_stop_fn=_request_stop,
                     )
@@ -1793,13 +1940,15 @@ def menu_send_rotating(
                         remaining,
                         bump,
                         error_tracker,
-                    account_error_streaks,
-                    paused_runtime,
-                    emit_log,
-                    prompt,
-                    overnight=overnight_mode,
-                    request_stop_fn=_request_stop,
-                )
+                        account_error_streaks,
+                        paused_runtime,
+                        emit_log,
+                        prompt,
+                        no_dm_by_account=no_dm_by_account,
+                        sent_unverified_by_account=sent_unverified_by_account,
+                        overnight=overnight_mode,
+                        request_stop_fn=_request_stop,
+                    )
                     need_render = True
                     account_lock.release()
                     semaphore.release()
@@ -1845,13 +1994,15 @@ def menu_send_rotating(
                         remaining,
                         bump,
                         error_tracker,
-                    account_error_streaks,
-                    paused_runtime,
-                    emit_log,
-                    prompt,
-                    overnight=overnight_mode,
-                    request_stop_fn=_request_stop,
-                )
+                        account_error_streaks,
+                        paused_runtime,
+                        emit_log,
+                        prompt,
+                        no_dm_by_account=no_dm_by_account,
+                        sent_unverified_by_account=sent_unverified_by_account,
+                        overnight=overnight_mode,
+                        request_stop_fn=_request_stop,
+                    )
                     need_render = True
                     account_lock.release()
                     semaphore.release()
@@ -1906,6 +2057,8 @@ def menu_send_rotating(
                     paused_runtime,
                     emit_log,
                     prompt,
+                    no_dm_by_account=no_dm_by_account,
+                    sent_unverified_by_account=sent_unverified_by_account,
                     overnight=overnight_mode,
                     request_stop_fn=_request_stop,
                 )
@@ -1950,6 +2103,8 @@ def menu_send_rotating(
                 paused_runtime,
                 emit_log,
                 prompt,
+                no_dm_by_account=no_dm_by_account,
+                sent_unverified_by_account=sent_unverified_by_account,
                 overnight=overnight_mode,
                 request_stop_fn=_request_stop,
             )
@@ -1977,6 +2132,14 @@ def menu_send_rotating(
         if _CAMPAIGN_UI is not None:
             _CAMPAIGN_UI.stop()
             _CAMPAIGN_UI = None
+        _print_final_summary(
+            alias,
+            accounts,
+            success,
+            failed,
+            no_dm_by_account,
+            sent_unverified_by_account,
+        )
 
     total_ok = sum(success.values())
     emit_log("-", "-", "resumen", f"OK: {total_ok}", None)

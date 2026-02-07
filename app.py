@@ -1,9 +1,8 @@
-﻿# app.py
+# app.py
 # -*- coding: utf-8 -*-
 import importlib
 import os
 import time
-import traceback
 
 from config import SETTINGS
 from storage import sent_totals_today
@@ -22,14 +21,8 @@ try:
     from src.auth.onboarding import onboard_accounts_from_csv as _onboarding_csv  # noqa: F401
 except Exception as e:
     print("[ERROR] Backend de onboarding no disponible:", e)
-    print("[IMPORT] module=src.auth.onboarding handler=login_and_persist/onboard_accounts_from_csv")
-    print(traceback.format_exc())
     print("Instala dependencias: pip install playwright pyotp && playwright install")
     print("Verifica que existan los archivos src/__init__.py y src/auth/__init__.py")
-
-IMPORT_ERRORS = {}
-
-
 
 # --- BEGIN OPT-IN HOOK ---
 
@@ -117,42 +110,22 @@ def handle_choice_optin(choice: str) -> bool:
 # --- END OPT-IN HOOK ---
 
 
-def _safe_import(name, handler=None):
+def _safe_import(name):
     try:
-        module = importlib.import_module(name)
-        if handler:
-            getattr(module, handler)
-        return module
+        return importlib.import_module(name)
     except Exception as e:
-        warn(f"Modulo no disponible o con error: {name} ({e})")
-        print(f"[IMPORT] module={name} handler={handler}")
-        tb = traceback.format_exc()
-        print(tb)
-        IMPORT_ERRORS[name] = {"handler": handler, "error": str(e), "traceback": tb}
+        warn(f"Módulo no disponible o con error: {name} ({e})")
         return None
 
 
-
-OPTION_MODULE_MAP = {
-    "1": ("accounts", "menu_accounts"),
-    "2": ("leads", "menu_leads"),
-    "3": ("ig", "menu_send_rotating"),
-    "4": ("storage", "menu_logs"),
-    "5": ("responder", "menu_autoresponder"),
-    "6": ("state_view", "menu_conversation_state"),
-    "7": ("whatsapp", "menu_whatsapp"),
-    "8": ("licensekit", "menu_deliver"),
-}
-
-
-accounts = _safe_import("accounts", "menu_accounts")
-leads = _safe_import("leads", "menu_leads")
-ig = _safe_import("ig", "menu_send_rotating")
-storage = _safe_import("storage", "menu_logs")
-responder = _safe_import("responder", "menu_autoresponder")
-licensekit = _safe_import("licensekit", "menu_deliver")
-state_view = _safe_import("state_view", "menu_conversation_state")
-whatsapp = _safe_import("whatsapp", "menu_whatsapp")
+accounts = _safe_import("accounts")
+leads = _safe_import("leads")
+ig = _safe_import("ig")
+storage = _safe_import("storage")
+responder = _safe_import("responder")
+licensekit = _safe_import("licensekit")
+state_view = _safe_import("state_view")
+whatsapp = _safe_import("whatsapp")
 
 
 def _counts():
@@ -195,25 +168,36 @@ def _print_dashboard() -> None:
 
 def current_menu_option_labels() -> list[str]:
     options = [
-        f"1) {em('🔐')} Gestionar cuentas  ",
-        f"2) {em('🗂️')} Gestionar leads / plantillas  ",
-        f"3) {em('💬')} Enviar mensajes (rotando cuentas activas)  ",
-        f"4) {em('📜')} Ver registros de envíos  ",
-        f"5) {em('🤖')} Auto-responder con OpenAI  ",
-        f"6) {em('📊')} Estado de la conversación  ",
-        f"7) {em('📱')} Automatización por WhatsApp  ",
+        f"1) {em('🔐')} Gestionar cuentas de instagram",
+        f"2) {em('🗂️')} Gestionar leads",
+        f"3) {em('💬')} Enviar mensajes",
+        f"4) {em('📜')} Ver registros de envíos",
+        f"5) {em('🤖')} Auto-responder con OpenAI",
+        f"6) {em('📊')} Estado de la conversación",
+        f"7) {em('📱')} Automatización por WhatsApp",
     ]
     if not SETTINGS.client_distribution:
-        options.append(f"8) {em('📦')} Entregar a cliente (licencia / ZIP)  ")
-        options.append(f"9) {em('🚪')} Salir  ")
+        options.append(f"8) {em('📦')} Entregar a cliente")
+        options.append(f"9) {em('🔄')} Actualizaciones")
+        options.append(f"10) {em('🚪')} Salir")
     else:
-        options.append(f"8) {em('🚪')} Salir  ")
+        options.append(f"8) {em('🔄')} Actualizaciones")
+        options.append(f"9) {em('🚪')} Salir")
     return options
 
 
 def menu():
     if licensekit and hasattr(licensekit, "enforce_startup_validation"):
         licensekit.enforce_startup_validation()
+    
+    # Verificación automática de actualizaciones al inicio (solo si no es distribución de cliente)
+    if not SETTINGS.client_distribution:
+        try:
+            from update_system import auto_update_check
+            auto_update_check()
+        except ImportError:
+            pass  # Sistema de actualizaciones no disponible
+    
     while True:
         clear_console()
         _print_dashboard()
@@ -247,24 +231,26 @@ def menu():
             and not SETTINGS.client_distribution
         ):
             licensekit.menu_deliver()
+        elif (op == "9" and not SETTINGS.client_distribution) or (
+            op == "8" and SETTINGS.client_distribution
+        ):
+            try:
+                from update_system import menu_updates
+                clear_console()
+                menu_updates()
+            except ImportError:
+                warn("Sistema de actualizaciones no disponible.")
+                press_enter()
         elif (
-            (op == "8" and SETTINGS.client_distribution)
-            or (op == "9" and not SETTINGS.client_distribution)
+            (op == "9" and SETTINGS.client_distribution)
+            or (op == "10" and not SETTINGS.client_distribution)
         ):
             print("Saliendo...")
             time.sleep(0.3)
             break
         else:
-            warn("Opcion invalida o modulo faltante.")
-            info = OPTION_MODULE_MAP.get(op)
-            if info:
-                mod_name, handler = info
-                detail = IMPORT_ERRORS.get(mod_name)
-                if detail:
-                    print(f"[IMPORT] module={mod_name} handler={handler}")
-                    print(detail.get("traceback", ""))
+            warn("Opción inválida o módulo faltante.")
             press_enter()
-
 
 
 if __name__ == "__main__":

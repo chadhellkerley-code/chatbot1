@@ -181,6 +181,15 @@ async def ensure_logged_in_async(
     password = account.get("password")
     logger.info("Engine=playwright_async login account=@%s", username)
 
+    trace = account.get("trace")
+
+    def _trace_msg(message: str) -> None:
+        if callable(trace):
+            try:
+                trace(message)
+            except Exception:
+                pass
+
     derived_profile_root = profile_root
     derived_proxy = proxy
 
@@ -196,6 +205,7 @@ async def ensure_logged_in_async(
 
     _session_log(profile_root_path, f"login_start username={username} headless={headless}")
 
+    _trace_msg(f"Launch browser ({'headful' if not headless else 'headless'})")
     svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
     await svc.start()
 
@@ -262,6 +272,8 @@ async def ensure_logged_in_async(
             totp_secret=account.get("totp_secret"),
             totp_provider=account.get("totp_callback"),
             code_provider=code_provider,
+            trace=trace if callable(trace) else None,
+            retry_on_still_login=not bool(account.get("strict_login")),
         )
     except Exception as exc:
         raise await _raise_login_failure(page, username, profile_root_path, exc) from exc

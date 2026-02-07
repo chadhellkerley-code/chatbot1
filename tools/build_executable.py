@@ -144,7 +144,18 @@ _HIDDEN_IMPORTS = [
     "storage",
     "totp_store",
     "ui",
+    "update_system",
     "utils",
+]
+
+# Dependencias requeridas por pkg_resources/pyi_rth_pkgres
+_EXTRA_HIDDEN_IMPORTS = [
+    "jaraco",
+    "jaraco.text",
+    "jaraco.classes",
+    "jaraco.functools",
+    "pkg_resources",
+    "setuptools",
 ]
 
 _DEFAULT_EXCLUDES = [
@@ -545,7 +556,7 @@ def build_for_license(
             elif not bundle_playwright:
                 _log_step("Playwright browsers externos: no se copian al bundle")
 
-        for module in _HIDDEN_IMPORTS:
+        for module in _HIDDEN_IMPORTS + _EXTRA_HIDDEN_IMPORTS:
             command.extend(["--hidden-import", module])
 
         for module in _parse_excludes():

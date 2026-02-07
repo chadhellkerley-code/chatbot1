@@ -98,13 +98,19 @@ def send_dm(
         }
 
         sender = HumanInstagramSender(headless=True)
-        success, detail = sender.send_message_like_human_sync(
+        success, detail, payload = sender.send_message_like_human_sync(
             account_payload,
             target_user,
             message_text,
             return_detail=True,
+            return_payload=True,
         )
 
+        is_unverified = (
+            payload.get("sent_unverified")
+            or (payload.get("reason_code") or "").strip().upper() == "SENT_UNVERIFIED"
+            or (detail or "").strip().lower() == "sent_unverified"
+        )
         if success:
             count = state_mgr.increment_daily_counter(username, "messages_sent")
             logger.info(
@@ -112,6 +118,10 @@ def send_dm(
                 count,
                 MAX_MESSAGES_PER_DAY,
             )
+            if is_unverified:
+                logger.warning(
+                    "warn | sent_unverified | Se intentó enviar y no se pudo verificar en DOM; no cuenta como error"
+                )
             state_mgr.save_account_state(
                 username,
                 {
@@ -124,6 +134,18 @@ def send_dm(
                 "sender": username,
                 "target": target_user,
                 "daily_count": count,
+                "sent_unverified": bool(is_unverified),
+            }
+
+        skip_reason = (payload.get("skip_reason") or detail or "").strip()
+        if skip_reason == "NO_DM_BUTTON":
+            logger.info("skip | no_dm | Perfil sin botón de mensaje / no permite DM")
+            return {
+                "success": False,
+                "skipped": True,
+                "reason": "NO_DM_BUTTON",
+                "sender": username,
+                "target": target_user,
             }
 
         # Manejo de error

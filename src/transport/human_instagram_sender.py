@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import os
@@ -11,6 +11,11 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 from playwright.async_api import Locator, Page, TimeoutError as PwTimeoutError
 
+from src.actions.direct_helpers import (
+    DmAvailability,
+    detect_dm_availability,
+    find_profile_dm_button,
+)
 from src.auth.persistent_login import ensure_logged_in_async
 from src.humanizer import random_wait
 from src.playwright_service import BASE_PROFILES, PlaywrightService
@@ -80,6 +85,10 @@ ALLOW_UNVERIFIED = os.getenv("HUMAN_DM_ALLOW_UNVERIFIED", "0").strip().lower() i
     "yes",
     "y",
 )
+NO_DM_SKIP_REASON = "NO_DM_BUTTON"
+NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
+NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
+NO_DM_SEND_METHOD = "skip_no_dm"
 
 
 class HumanInstagramSender:
@@ -482,6 +491,14 @@ class HumanInstagramSender:
         if any(token in current_url for token in ("challenge", "checkpoint", "accounts/confirm_email", "two_factor")):
             return False, "challenge_detected"
 
+        toast_selectors = [
+            "[role='alert']",
+            "[data-testid='toast']",
+            "div[role='status']",
+        ]
+        toast_success = re.compile(r"(sent|enviado|mensaje enviado|message sent)", re.IGNORECASE)
+        toast_negative = re.compile(r"(not sent|no se pudo enviar|no enviado)", re.IGNORECASE)
+
         message_selectors = [
             "div[role='list'] div[role='listitem']",
             "div[role='list'] div[role='row']",
@@ -496,29 +513,52 @@ class HumanInstagramSender:
         def _contains_snippet(value: str) -> bool:
             return snippet.lower() in (value or "").lower()
 
+        prefix_len = min(18, len(snippet))
+        prefix = snippet[:prefix_len].lower()
+
+        def _contains_prefix(value: str) -> bool:
+            if not prefix:
+                return False
+            return prefix in (value or "").lower()
+
         deadline = time.time() + VERIFY_TIMEOUT_S
         while time.time() < deadline:
             try:
                 await page.wait_for_timeout(500)
             except Exception:
                 pass
+            for selector in toast_selectors:
+                try:
+                    toast = page.locator(selector).last
+                    if await toast.count() > 0:
+                        toast_text = (await toast.inner_text() or "").strip()
+                        if toast_text and toast_success.search(toast_text) and not toast_negative.search(toast_text):
+                            return True, "toast_sent"
+                except Exception:
+                    continue
             if composer is not None:
                 try:
-                    if _contains_snippet(await self._composer_text(composer)):
+                    composer_text = await self._composer_text(composer)
+                    if composer_text == "":
+                        return True, "composer_cleared"
+                    if _contains_snippet(composer_text):
                         continue
                 except Exception:
                     pass
             for sel in message_selectors:
                 try:
                     items = page.locator(sel)
-                    if await items.count() > 0:
-                        last = items.last
-                        try:
-                            text_value = await last.inner_text()
-                        except Exception:
-                            text_value = await last.text_content() or ""
-                        if _contains_snippet(text_value):
-                            return True, "message_present"
+                    count = await items.count()
+                    if count > 0:
+                        start = max(0, count - 3)
+                        for idx in range(start, count):
+                            item = items.nth(idx)
+                            try:
+                                text_value = await item.inner_text()
+                            except Exception:
+                                text_value = await item.text_content() or ""
+                            if _contains_snippet(text_value) or _contains_prefix(text_value):
+                                return True, "message_present"
                         matches = items.filter(has_text=snippet)
                         if await matches.count() > 0:
                             return True, "message_present"
@@ -605,25 +645,24 @@ class HumanInstagramSender:
             except Exception as exc:
                 logger.warning("Error cargando perfil: %s", exc)
 
-            msg_btn_selectors = [
-                "div[role='button']:has-text('Message')",
-                "div[role='button']:has-text('Enviar mensaje')",
-                "button:has-text('Message')",
-                "button:has-text('Enviar mensaje')",
-            ]
-
             clicked = False
-            for sel in msg_btn_selectors:
-                if await page.locator(sel).count() > 0:
-                    try:
-                        logger.info("Clickeando boton de mensaje en perfil: %s", sel)
-                        await page.locator(sel).first.click()
-                        clicked = True
-                        break
-                    except Exception:
-                        pass
+            click_error: Exception | None = None
+            dm_button = await find_profile_dm_button(page)
+            if dm_button is not None:
+                try:
+                    logger.info("Clickeando boton de mensaje en perfil.")
+                    await dm_button.click()
+                    clicked = True
+                except Exception as exc:
+                    click_error = exc
 
             if not clicked:
+                availability = await detect_dm_availability(page)
+                if availability == DmAvailability.NO_DM:
+                    logger.info(NO_DM_SKIP_LOG)
+                    return NO_DM_SEND_METHOD
+                if click_error is not None:
+                    logger.debug("Error clickeando boton de mensaje: %s", click_error)
                 raise RuntimeError("No se encontro boton 'Enviar mensaje' en el perfil del usuario.")
 
             try:
@@ -681,6 +720,22 @@ class HumanInstagramSender:
                 send_method = await _send_via_profile()
                 used_strategy = "profile"
 
+            if send_method == NO_DM_SEND_METHOD:
+                payload.update(
+                    {
+                        "engine": "playwright_async",
+                        "url": page.url if page else "",
+                        "strategy": used_strategy,
+                        "send_method": NO_DM_SEND_METHOD,
+                        "skip_reason": NO_DM_SKIP_REASON,
+                        "skip_detail": NO_DM_SKIP_DETAIL,
+                        "skipped": True,
+                    }
+                )
+                if return_payload:
+                    return False, NO_DM_SKIP_REASON, payload
+                return (False, NO_DM_SKIP_REASON) if return_detail else False
+
             composer = await self._composer(page)
             ok, reason = await self._confirm_message_sent(page, text, composer=composer)
             payload["verified"] = bool(ok)
@@ -710,9 +765,9 @@ class HumanInstagramSender:
                     detail = "sent_request" if "/direct/requests" in (current_url or "") else "sent_unverified"
                     payload["verification_reason"] = reason
                     payload["detail"] = detail
-                    if detail != "sent_request" and not ALLOW_UNVERIFIED:
-                        await self._capture_debug(page, username, normalized_target, detail)
-                        raise RuntimeError(detail)
+                    if detail == "sent_unverified":
+                        payload["sent_unverified"] = True
+                        payload["reason_code"] = "SENT_UNVERIFIED"
                     if return_payload:
                         return True, detail, payload
                     return (True, detail) if return_detail else True

@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from src.auth.persistent_login import ChallengeRequired, ensure_logged_in_async
-from src.instagram_adapter import is_logged_in
+from src.instagram_adapter import INBOX_URL, check_logged_in, get_login_errors, is_logged_in
 from src.playwright_service import BASE_PROFILES, PlaywrightService, shutdown
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,54 @@ def _make_account(username: str, password: str, totp_secret: str | None, proxy_f
     return acc
 
 
+def parse_accounts_csv(csv_path: Union[str, Path]) -> List[Dict[str, Any]]:
+    headers, raw_rows = smart_read_csv(csv_path)
+    if not headers:
+        return []
+
+    normalized_headers = [h.strip().lower() for h in headers]
+    has_username = any(alias in normalized_headers for alias in ("username", "user", "login"))
+    has_password = any(alias in normalized_headers for alias in ("password", "pass"))
+    header_has_labels = has_username and has_password
+
+    if header_has_labels:
+        data_rows = raw_rows
+        base_row_number = 2
+        parser_headers = headers
+    else:
+        data_rows = [headers] + raw_rows if headers else raw_rows
+        base_row_number = 1
+        parser_headers = []
+
+    parsed_rows: List[Dict[str, Any]] = []
+    for idx, row in enumerate(data_rows):
+        row_number = base_row_number + idx
+        parsed = _row_from_headers(parser_headers, row)
+        username = (parsed.get("username") or "").strip().lstrip("@")
+        password = (parsed.get("password") or "").strip()
+        totp_secret = (parsed.get("totp_secret") or "").strip()
+        proxy_fields = parsed.get("proxy_fields") or {}
+
+        account_data = {
+            "row_number": row_number,
+            "username": username,
+            "password": password,
+            "totp_secret": totp_secret,
+            "proxy_url": proxy_fields.get("url") or (
+                f"http://{proxy_fields.get('ip')}:{proxy_fields.get('port')}"
+                if proxy_fields.get("ip") and proxy_fields.get("port")
+                else ""
+            ),
+            "proxy_user": proxy_fields.get("username") or "",
+            "proxy_pass": proxy_fields.get("password") or "",
+            "proxy_sticky_minutes": proxy_fields.get("minutes") or proxy_fields.get("sticky"),
+            "proxy_fields": proxy_fields,
+        }
+        parsed_rows.append(account_data)
+
+    return parsed_rows
+
+
 def code_provider_prompt(label: str = "Ingresa el cÃ³digo recibido (WhatsApp/SMS/email): ") -> str:
     """
     Solicita un cÃ³digo de verificaciÃ³n sin mostrarlo en consola.
@@ -428,6 +477,219 @@ def _write_results_file(rows: List[OnboardingResult]) -> None:
         logger.warning("No se pudo escribir %s: %s", RESULTS_PATH, exc)
 
 
+def write_onboarding_results(rows: List[OnboardingResult]) -> None:
+    _write_results_file(rows)
+
+
+def _login_trace(alias: str, username: str):
+    prefix = f"[LOGIN] [ACCOUNT alias={alias} user=@{username}]"
+
+    def _trace(message: str) -> None:
+        print(f"{prefix} {message}", flush=True)
+
+    return _trace
+
+
+def _proxy_label(proxy_payload: Optional[Dict[str, str]]) -> str:
+    if not proxy_payload:
+        return "No proxy"
+    server = (
+        proxy_payload.get("server")
+        or proxy_payload.get("url")
+        or proxy_payload.get("proxy")
+        or ""
+    )
+    if not server:
+        return "Proxy enabled"
+    candidate = server if "://" in server else f"http://{server}"
+    try:
+        parsed = urlparse(candidate)
+        hostport = parsed.netloc or parsed.path
+    except Exception:
+        hostport = server
+    return f"Proxy enabled {hostport}"
+
+
+async def confirm_inbox_logged_in(page, trace=None) -> tuple[bool, str]:
+    if callable(trace):
+        trace("Wait for inbox confirmation")
+        trace(f"Open {INBOX_URL}")
+    try:
+        await page.goto(INBOX_URL, wait_until="domcontentloaded")
+    except Exception:
+        try:
+            await page.goto(INBOX_URL)
+        except Exception:
+            pass
+    try:
+        await page.wait_for_timeout(2000)
+    except Exception:
+        pass
+
+    url = page.url or ""
+    if "/accounts/login" in url:
+        return False, "redirected_to_login"
+    if "/challenge/" in url:
+        return False, "challenge_required"
+    if "/direct/inbox" in url:
+        return True, "inbox_url"
+
+    inbox_selectors = (
+        "a[href='/direct/inbox/']",
+        "div[role='main'] a[href='/direct/inbox/']",
+        "nav[role='navigation'] a[href='/direct/inbox/']",
+    )
+    for sel in inbox_selectors:
+        try:
+            if await page.locator(sel).count():
+                return True, f"inbox_dom:{sel}"
+        except Exception:
+            continue
+
+    ok, reason = await check_logged_in(page)
+    if ok:
+        return False, f"logged_in_but_not_inbox:{reason}"
+    return False, f"not_logged_in:{reason}"
+
+
+async def login_account_playwright_async(
+    account: AccountPayload,
+    alias: str,
+    *,
+    headful: bool = True,
+) -> Dict[str, Any]:
+    username = (account.get("username") or "").strip().lstrip("@")
+    password = (account.get("password") or "").strip()
+    trace = _login_trace(alias, username or "unknown")
+
+    if not username or not password:
+        trace("FAIL reason=missing_username_or_password")
+        return {
+            "username": username or "",
+            "status": "failed",
+            "message": "missing_username_or_password",
+            "profile_path": "",
+            "row_number": account.get("row_number"),
+        }
+
+    proxy_payload = account.get("proxy")
+    if not proxy_payload:
+        proxy_payload = build_proxy(account.get("proxy_url") or account.get("proxy"))
+    if proxy_payload:
+        account["proxy"] = proxy_payload
+    trace(_proxy_label(proxy_payload))
+
+    account["alias"] = alias
+    account["trace"] = trace
+    account["strict_login"] = True
+
+    headless = not headful
+    attempts = 0
+    last_error: Optional[str] = None
+
+    while attempts < 2:
+        attempts += 1
+        svc = None
+        ctx = None
+        try:
+            svc, ctx, page = await ensure_logged_in_async(
+                account,
+                headless=headless,
+                profile_root=_DEFAULT_PROFILE_ROOT,
+                proxy=proxy_payload,
+            )
+
+            ok_inbox, reason = await confirm_inbox_logged_in(page, trace=trace)
+            if ok_inbox:
+                profile_path = str(_profile_path_for(username, _DEFAULT_PROFILE_ROOT))
+                try:
+                    await svc.save_storage_state(ctx, profile_path)
+                except Exception:
+                    pass
+                trace("SUCCESS login confirmed by inbox")
+                return {
+                    "username": username,
+                    "status": "ok",
+                    "message": reason,
+                    "profile_path": profile_path,
+                    "row_number": account.get("row_number"),
+                }
+
+            errors = []
+            try:
+                errors = await get_login_errors(page)
+            except Exception:
+                errors = []
+            detail = reason
+            if errors:
+                detail = f"{detail} errors={'; '.join(errors)}"
+            trace(f"FAIL reason={detail}")
+            return {
+                "username": username,
+                "status": "failed",
+                "message": detail,
+                "profile_path": "",
+                "row_number": account.get("row_number"),
+            }
+        except ChallengeRequired:
+            trace("FAIL reason=challenge_required")
+            return {
+                "username": username,
+                "status": "failed",
+                "message": "challenge_required",
+                "profile_path": "",
+                "row_number": account.get("row_number"),
+            }
+        except PlaywrightTimeoutError as exc:
+            last_error = f"timeout:{exc}"
+            trace(f"FAIL reason={last_error}")
+            if attempts < 2:
+                trace("Retrying once due to timeout")
+                continue
+            return {
+                "username": username,
+                "status": "failed",
+                "message": last_error,
+                "profile_path": "",
+                "row_number": account.get("row_number"),
+            }
+        except Exception as exc:
+            last_error = str(exc)
+            trace(f"FAIL reason={last_error}")
+            return {
+                "username": username,
+                "status": "failed",
+                "message": last_error,
+                "profile_path": "",
+                "row_number": account.get("row_number"),
+            }
+        finally:
+            if svc:
+                try:
+                    await shutdown(svc, ctx)
+                except Exception:
+                    pass
+
+    return {
+        "username": username,
+        "status": "failed",
+        "message": last_error or "failed",
+        "profile_path": "",
+        "row_number": account.get("row_number"),
+    }
+
+
+def login_account_playwright(
+    account: AccountPayload,
+    alias: str,
+    *,
+    headful: bool = True,
+) -> Dict[str, Any]:
+    return _run_async(
+        login_account_playwright_async(account, alias, headful=headful)
+    )
+
+
 def onboard_accounts_from_csv(
     csv_path: Union[str, Path],
     *,
@@ -528,5 +790,10 @@ __all__ = [
     "code_provider_prompt",
     "login_and_persist",
     "login_and_persist_async",
+    "login_account_playwright",
+    "login_account_playwright_async",
     "onboard_accounts_from_csv",
+    "parse_accounts_csv",
+    "confirm_inbox_logged_in",
+    "write_onboarding_results",
 ]
