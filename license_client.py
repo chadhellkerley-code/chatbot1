@@ -4,12 +4,18 @@
 
 from __future__ import annotations
 
+import getpass
 import glob
+import hashlib
 import json
 import os
+import platform
 import re
+import socket
 import sys
 import time
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -53,6 +59,222 @@ def _initial_app_root() -> Path:
 
 os.environ.setdefault("APP_DATA_ROOT", str(_initial_app_root()))
 
+def _get_app_root() -> Path:
+    """Determina el directorio raiz del bundle/ejecutable."""
+
+    return _initial_app_root()
+
+
+_PLAYWRIGHT_BROWSER_PREFIXES = (
+    "chromium-",
+    "chromium_headless_shell-",
+    "firefox-",
+    "webkit-",
+    "ffmpeg-",
+)
+_PLAYWRIGHT_CHROMIUM_PREFIX = "chromium-"
+_PLAYWRIGHT_HEADLESS_PREFIX = "chromium_headless_shell-"
+_MIN_EXECUTABLE_BYTES = 1 * 1024 * 1024
+_PAK_FILES = (
+    "resources.pak",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "headless_lib_data.pak",
+    "headless_lib_strings.pak",
+    "headless_command_resources.pak",
+)
+_PLAYWRIGHT_SELECTION_LOGGED = False
+
+
+def _safe_stat_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except Exception:
+        return 0
+
+
+def _parse_revision(name: str, prefix: str) -> int:
+    if not name.startswith(prefix):
+        return -1
+    suffix = name[len(prefix) :]
+    digits = "".join(ch for ch in suffix if ch.isdigit())
+    return int(digits) if digits else -1
+
+
+def _pick_latest_dir(root: Path, prefix: str) -> Optional[Path]:
+    try:
+        candidates: List[Tuple[int, Path]] = []
+        for item in root.iterdir():
+            if item.is_dir() and item.name.startswith(prefix):
+                candidates.append((_parse_revision(item.name, prefix), item))
+    except Exception:
+        return None
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _key_files_ok(folder: Path) -> bool:
+    if _safe_stat_size(folder / "icudtl.dat") <= 0:
+        return False
+    for name in _PAK_FILES:
+        if _safe_stat_size(folder / name) > 0:
+            return True
+    return False
+
+
+def _chromium_exe_candidates(browser_dir: Path) -> List[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            browser_dir / "chrome-win64" / "chrome.exe",
+            browser_dir / "chrome-win" / "chrome.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            browser_dir / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+        ]
+    return [browser_dir / "chrome-linux" / "chrome"]
+
+
+def _headless_exe_candidates(browser_dir: Path) -> List[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            browser_dir / "chrome-headless-shell-win64" / "chrome-headless-shell.exe",
+            browser_dir / "chrome-headless-shell-win32" / "chrome-headless-shell.exe",
+            browser_dir / "chrome-headless-shell" / "chrome-headless-shell.exe",
+            browser_dir / "headless_shell" / "headless_shell.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            browser_dir
+            / "chrome-headless-shell"
+            / "Chromium.app"
+            / "Contents"
+            / "MacOS"
+            / "Chromium"
+        ]
+    return [browser_dir / "chrome-headless-shell" / "chrome-headless-shell"]
+
+
+def _validate_executable(exe_path: Path) -> Tuple[bool, int]:
+    size = _safe_stat_size(exe_path)
+    if size <= _MIN_EXECUTABLE_BYTES:
+        return False, size
+    if not _key_files_ok(exe_path.parent):
+        return False, size
+    return True, size
+
+
+def _select_executable(
+    browser_dir: Path, candidates: List[Path], reason: str
+) -> Optional[Tuple[Path, int, str, Path]]:
+    for exe_path in candidates:
+        ok, size = _validate_executable(exe_path)
+        if ok:
+            return exe_path, size, reason, browser_dir
+    return None
+
+
+def _select_playwright_root(
+    candidate: Path,
+) -> Optional[Tuple[Path, Path, int, str, Path]]:
+    if not candidate.exists():
+        return None
+
+    chromium_dir = _pick_latest_dir(candidate, _PLAYWRIGHT_CHROMIUM_PREFIX)
+    if chromium_dir:
+        selection = _select_executable(
+            chromium_dir, _chromium_exe_candidates(chromium_dir), "chromium_ok"
+        )
+        if selection:
+            exe_path, size, reason, browser_dir = selection
+            return candidate, exe_path, size, reason, browser_dir
+
+    headless_dir = _pick_latest_dir(candidate, _PLAYWRIGHT_HEADLESS_PREFIX)
+    if headless_dir:
+        reason = "headless_ok" if not chromium_dir else "headless_fallback"
+        selection = _select_executable(
+            headless_dir, _headless_exe_candidates(headless_dir), reason
+        )
+        if selection:
+            exe_path, size, reason, browser_dir = selection
+            return candidate, exe_path, size, reason, browser_dir
+
+    nested = candidate / "ms-playwright"
+    if nested.exists():
+        return _select_playwright_root(nested)
+    return None
+
+
+def _log_playwright_selection(
+    root: Path, browser_dir: Path, exe_path: Path, size: int, reason: str
+) -> None:
+    global _PLAYWRIGHT_SELECTION_LOGGED
+    if _PLAYWRIGHT_SELECTION_LOGGED:
+        return
+    _PLAYWRIGHT_SELECTION_LOGGED = True
+    print(
+        "Playwright browsers selected: "
+        f"root={root} browser_dir={browser_dir.name} "
+        f"exe={exe_path.name} size={size} reason={reason}"
+    )
+
+
+def _detect_playwright_browsers_path() -> Optional[Tuple[Path, Path, int, str, Path]]:
+    env_path = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        selection = _select_playwright_root(candidate)
+        if selection:
+            return selection
+
+    candidates: List[Path] = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidates.extend([Path(base) / "playwright_browsers", Path(base) / "playwright"])
+
+    app_root = _get_app_root()
+    candidates.extend([app_root / "playwright_browsers", app_root / "playwright"])
+
+    exe_parent = None
+    try:
+        executable = getattr(sys, "executable", "") or ""
+        if executable:
+            exe_parent = Path(executable).resolve().parent
+    except Exception:
+        exe_parent = None
+    if exe_parent:
+        candidates.extend([exe_parent / "playwright_browsers", exe_parent / "playwright"])
+
+    for candidate in candidates:
+        selection = _select_playwright_root(candidate)
+        if selection:
+            return selection
+    return None
+
+
+def _ensure_playwright_browsers_env() -> Optional[Path]:
+    current = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if current:
+        selection = _select_playwright_root(Path(current).expanduser())
+        if selection:
+            root, exe_path, size, reason, browser_dir = selection
+            if str(root) != current:
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
+            _log_playwright_selection(root, browser_dir, exe_path, size, reason)
+            return root
+    selection = _detect_playwright_browsers_path()
+    if selection:
+        root, exe_path, size, reason, browser_dir = selection
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
+        _log_playwright_selection(root, browser_dir, exe_path, size, reason)
+        return root
+    return None
+
+
+_ensure_playwright_browsers_env()
+
 import config
 from licensekit import validate_license_payload
 from ui import Fore, banner, full_line, style_text
@@ -75,6 +297,7 @@ CANDIDATE_SESSION_DIRS = [
 ]
 
 _DEBUG_ROOT_PRINTED = False
+_FINGERPRINT_FILENAME = "client_fingerprint.json"
 
 
 def _resource_path(relative: str) -> Path:
@@ -155,7 +378,10 @@ def _prompt_license_key(default_key: str) -> str:
 
 
 def _activate_remote_license(
-    license_key: str, backend_url: str
+    license_key: str,
+    backend_url: str,
+    client_fingerprint: Optional[str],
+    machine_id: Optional[str],
 ) -> Tuple[bool, Dict, str]:
     try:
         from backend_license_client import LicenseBackendClient
@@ -163,7 +389,9 @@ def _activate_remote_license(
         return False, {}, f"Backend client no disponible: {exc}"
 
     client = LicenseBackendClient(backend_url)
-    success, data, error = client.activate_license(license_key)
+    success, data, error = client.activate_license(
+        license_key, client_fingerprint=client_fingerprint, machine_id=machine_id
+    )
     return success, data or {}, error or ""
 
 
@@ -192,10 +420,128 @@ def _slugify(value: str, fallback: str = "cliente") -> str:
     return value or fallback
 
 
-def _get_app_root() -> Path:
-    """Determina el directorio raíz del bundle/ejecutable."""
+def _storage_root() -> Path:
+    root = Path(os.environ.get("APP_DATA_ROOT") or _get_app_root())
+    storage = root / "storage"
+    try:
+        storage.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return root
+    return storage
 
-    return _initial_app_root()
+
+def _fingerprint_storage_path() -> Path:
+    return _storage_root() / _FINGERPRINT_FILENAME
+
+
+def _load_persisted_fingerprint(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return raw if raw.strip() else None
+    if isinstance(data, str):
+        return data.strip() or None
+    if isinstance(data, dict):
+        for key in ("client_fingerprint", "machine_id", "machine", "fingerprint"):
+            value = str(data.get(key) or "").strip()
+            if value:
+                return value
+    return None
+
+
+def _build_fingerprint_from_components(components: Iterable[str]) -> Optional[str]:
+    clean = [value.strip() for value in components if value and value.strip()]
+    if not clean:
+        return None
+    blob = "|".join(clean).encode("utf-8", errors="ignore")
+    digest = hashlib.sha256(blob).hexdigest()
+    return f"fp-{digest[:16]}"
+
+
+def _windows_volume_serial(path: Path) -> str:
+    if not sys.platform.startswith("win"):
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        drive = path.drive or os.environ.get("SystemDrive", "C:")
+        root = drive.rstrip("\\") + "\\"
+        serial = wintypes.DWORD()
+        result = ctypes.windll.kernel32.GetVolumeInformationW(
+            root, None, 0, ctypes.byref(serial), None, None, None, 0
+        )
+        if result:
+            return f"{serial.value:08X}"
+    except Exception:
+        return ""
+    return ""
+
+
+def _generate_fingerprint() -> Tuple[str, str, Dict[str, str]]:
+    details: Dict[str, str] = {}
+    components = [
+        platform.node(),
+        platform.system(),
+        platform.release(),
+        platform.machine(),
+        str(uuid.getnode()),
+    ]
+    details["hostname"] = platform.node() or socket.gethostname()
+    details["username"] = getpass.getuser()
+    details["volume_serial"] = _windows_volume_serial(_get_app_root())
+    fingerprint = _build_fingerprint_from_components(components)
+    if fingerprint:
+        return fingerprint, "primary", details
+    fallback_components = [
+        details.get("hostname", ""),
+        details.get("username", ""),
+        details.get("volume_serial", ""),
+    ]
+    fingerprint = _build_fingerprint_from_components(fallback_components)
+    if fingerprint:
+        return fingerprint, "fallback", details
+    return f"fp-{uuid.uuid4().hex[:16]}", "random", details
+
+
+def _persist_fingerprint(
+    path: Path, fingerprint: str, source: str, details: Dict[str, str]
+) -> None:
+    payload = {
+        "client_fingerprint": fingerprint,
+        "machine_id": fingerprint,
+        "source": source,
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "details": details,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _get_or_create_fingerprint() -> Tuple[str, Path, str]:
+    path = _fingerprint_storage_path()
+    existing = _load_persisted_fingerprint(path)
+    if existing:
+        return existing, path, "loaded"
+    fingerprint, source, details = _generate_fingerprint()
+    if not fingerprint:
+        fingerprint = f"fp-{uuid.uuid4().hex[:16]}"
+        source = "random"
+    _persist_fingerprint(path, fingerprint, source, details)
+    return fingerprint, path, source
 
 
 def _resolve_sessions_dir() -> Path:
@@ -354,7 +700,17 @@ def _verify_playwright_bundle() -> None:
         print()
         return
 
+    resolved = _ensure_playwright_browsers_env()
     browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    print(style_text(f"PLAYWRIGHT_BROWSERS_PATH: {browsers_path or '-'}", color=Fore.WHITE))
+    try:
+        from playwright._impl import _driver
+
+        node_path, cli_path = _driver.compute_driver_executable()
+        print(style_text(f"Playwright driver: {node_path}", color=Fore.WHITE))
+        print(style_text(f"Playwright CLI: {cli_path}", color=Fore.WHITE))
+    except Exception:
+        pass
     if not browsers_path:
         print(style_text("Playwright: OK", color=Fore.GREEN, bold=True))
         print(style_text("Browsers: NO CONFIGURADOS", color=Fore.YELLOW, bold=True))
@@ -363,7 +719,7 @@ def _verify_playwright_bundle() -> None:
         return
 
     candidate = Path(browsers_path)
-    if not candidate.exists():
+    if not resolved:
         print(style_text("Playwright: OK", color=Fore.GREEN, bold=True))
         print(style_text("Browsers: NO ENCONTRADOS", color=Fore.RED, bold=True))
         print(style_text(f"Ruta: {candidate}", color=Fore.YELLOW))
@@ -372,7 +728,7 @@ def _verify_playwright_bundle() -> None:
         return
 
     try:
-        folders = [p.name for p in candidate.iterdir() if p.is_dir()]
+        folders = [p.name for p in resolved.iterdir() if p.is_dir()]
     except Exception:
         folders = []
 
@@ -383,7 +739,7 @@ def _verify_playwright_bundle() -> None:
         if len(folders) > 4:
             preview += ", ..."
         print(style_text(f"Detectados: {preview}", color=Fore.WHITE))
-    print(style_text(f"Ruta: {candidate}", color=Fore.WHITE))
+    print(style_text(f"Ruta: {resolved}", color=Fore.WHITE))
     print(full_line(color=Fore.CYAN))
     print()
 
@@ -562,8 +918,16 @@ def launch_with_license() -> None:
         if not license_key:
             _print_error("Falta la licencia.")
             sys.exit(2)
+        fingerprint, fingerprint_path, fingerprint_source = _get_or_create_fingerprint()
+        if fingerprint:
+            os.environ["CLIENT_FINGERPRINT"] = fingerprint
+        payload_keys = ["license_key", "client_fingerprint", "machine"]
+        print(f"fingerprint={fingerprint}")
+        print(f"fingerprint_path={fingerprint_path}")
+        print(f"fingerprint_source={fingerprint_source}")
+        print(f"payload keys={', '.join(payload_keys)}")
         ok_remote, activation, error = _activate_remote_license(
-            license_key, backend_url
+            license_key, backend_url, fingerprint, fingerprint
         )
         if not ok_remote:
             _print_error(error or "No se pudo validar la licencia.")

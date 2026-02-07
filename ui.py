@@ -135,9 +135,7 @@ def print_daily_metrics(sent: int, errors: int, tz_label: str, last_reset: str) 
     print(divider)
     ok = style_text(f"Mensajes enviados (HOY): {sent}", color=Fore.GREEN, bold=True)
     fail = style_text(f"Mensajes con error (HOY): {errors}", color=Fore.RED, bold=True)
-    tz_line = style_text(
-        f"Zona horaria: {tz_label} • Último reset: {last_reset}", color=Fore.WHITE
-    )
+    tz_line = style_text(f"Zona horaria: Último reset: {last_reset}", color=Fore.WHITE)
     print(f"{pad}{ok}")
     print(f"{pad}{fail}")
     print(f"{pad}{tz_line}")

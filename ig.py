@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import logging
 import math
+import os
 import queue
 import random
 import threading
@@ -15,6 +17,19 @@ from datetime import datetime, timedelta, time as dt_time, timezone
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+try:  # pragma: no cover - optional dependency for premium UI
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich import box
+
+    _RICH_AVAILABLE = True
+except Exception:  # pragma: no cover - fallback without rich
+    Console = Group = Live = Panel = Table = Text = None  # type: ignore
+    box = None  # type: ignore
+    _RICH_AVAILABLE = False
 try:  # pragma: no cover - depende de la versión de Python
     from zoneinfo import ZoneInfo as _BuiltinZoneInfo
 except Exception:  # pragma: no cover - fallback si falta la stdlib
@@ -40,6 +55,7 @@ from accounts import (
 from client_factory import get_instagram_client
 from config import SETTINGS
 from leads import load_list
+from paths import runtime_base
 from runtime import (
     STOP_EVENT,
     ensure_logging,
@@ -55,15 +71,283 @@ from storage import (
     paused_accounts_today,
     sent_totals,
 )
-from ui import Fore, LiveTable, banner, full_line, highlight, style_text
+from templates_store import load_templates, next_round_robin, render_template
+from ui import Fore, LiveTable, style_text
 from utils import ask, ask_int, enable_quiet_mode, press_enter, warn
-from src.playwright_service import BASE_PROFILES
+from src.auth.persistent_login import check_session
 from src.transport.human_instagram_sender import HumanInstagramSender
 
 # Optional adapter: import inside functions to keep import-time inexpensive
 
 
 logger = logging.getLogger(__name__)
+
+_RUNNER_LOG_PATH = runtime_base(Path(__file__).resolve().parent) / "storage" / "send_runner.log"
+_HEADER_TEXT = "HERRAMIENTA DE MENSAJERÍA DE IG  -  PROPIEDAD DE MATIDIAZLIFE/ELITE"
+
+_CAMPAIGN_UI = None
+
+
+def _env_flag(name: str) -> bool:
+    value = os.getenv(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_overnight(override: Optional[bool]) -> bool:
+    if override is not None:
+        return bool(override)
+    return _env_flag("IG_OVERNIGHT")
+
+
+def _resolve_headless(override: Optional[bool], overnight: bool) -> bool:
+    if overnight:
+        return True
+    if _env_flag("IG_HEADLESS"):
+        return True
+    if override is not None:
+        return bool(override)
+    return True
+
+
+class CampaignUI:
+    def __init__(
+        self,
+        *,
+        alias: str,
+        total_leads: int,
+        settings: object,
+        templates: list[dict[str, str]],
+        concurrency: int,
+        delay_min: int,
+        delay_max: int,
+        max_logs: int = 30,
+    ) -> None:
+        self.alias = alias
+        self.total_leads = total_leads
+        self.settings = settings
+        self.templates = templates
+        self.concurrency = concurrency
+        self.delay_min = delay_min
+        self.delay_max = delay_max
+        self._log_queue: queue.Queue[str] = queue.Queue()
+        self._logs = deque(maxlen=max_logs)
+        self._live: Live | None = None
+        self._console: Console | None = Console() if _RICH_AVAILABLE else None
+
+    def start(self) -> None:
+        if not _RICH_AVAILABLE:
+            self._print_header_fallback()
+            return
+        self._live = Live(
+            self._build_renderable({}, {}, None, {}),
+            console=self._console,
+            refresh_per_second=24,
+            transient=False,
+            auto_refresh=False,
+        )
+        self._live.start()
+
+    def stop(self) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+
+    def prompt(self, text: str) -> str:
+        self.stop()
+        try:
+            return input(text)
+        finally:
+            self.start()
+
+    def emit_log(
+        self,
+        account: str,
+        lead: str,
+        action: str,
+        detail: str | None = None,
+        verified: bool | None = None,
+    ) -> None:
+        timestamp = time.strftime("%H:%M:%S", time.localtime())
+        line = f"{timestamp} | {account} -> {lead} | {action}"
+        if detail:
+            line = f"{line} | {detail}"
+        if verified is not None:
+            line = f"{line} | verified={'true' if verified else 'false'}"
+        self._log_queue.put(line)
+
+    def update(
+        self,
+        success_totals: Dict[str, int],
+        failed_totals: Dict[str, int],
+        live_table: LiveTable,
+        send_state: Dict[str, object],
+        leads_left: int,
+    ) -> None:
+        if not _RICH_AVAILABLE:
+            while True:
+                try:
+                    print(self._log_queue.get_nowait())
+                except queue.Empty:
+                    break
+            return
+        while True:
+            try:
+                self._logs.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+        if self._live is None:
+            return
+        renderable = self._build_renderable(
+            success_totals, failed_totals, live_table, send_state, leads_left
+        )
+        self._live.update(renderable, refresh=True)
+
+    def _build_renderable(
+        self,
+        success_totals: Dict[str, int],
+        failed_totals: Dict[str, int],
+        live_table: LiveTable | None,
+        send_state: Dict[str, object],
+        leads_left: int = 0,
+    ):
+        header = Text(f"🟣 {_HEADER_TEXT}", style="bold magenta")
+        separator = Text("-" * max(40, len(_HEADER_TEXT) + 2), style="magenta")
+        info = Text(
+            f"Alias: {self.alias}  Leads pendientes: {leads_left}  Hora: {time.strftime('%H:%M:%S')}",
+            style="bold",
+        )
+
+        totals = Table.grid(padding=(0, 1))
+        totals.add_column()
+        totals.add_row("Totales por cuenta (esta campaña)", style="bold cyan")
+        for username in sorted(set(success_totals) | set(failed_totals)):
+            ok_run = success_totals.get(username, 0)
+            fail_run = failed_totals.get(username, 0)
+            totals.add_row(f"{username} : {ok_run} OK / {fail_run} errores")
+
+        inflight = Table(
+            show_header=True,
+            header_style="bold",
+            box=box.SIMPLE if box else None,
+            pad_edge=False,
+        )
+        inflight.add_column("Cuenta")
+        inflight.add_column("Lead")
+        inflight.add_column("Hora", justify="right")
+        inflight.add_column("Res", justify="center")
+        inflight.add_column("Detalle")
+        if live_table:
+            rows = live_table.rows()
+        else:
+            rows = []
+        inflight_label = Text("Envíos en vuelo", style="bold cyan")
+        inflight_section = inflight
+        if rows:
+            for row in rows[1:]:
+                account, lead, started, status_icon, detail = row
+                status = self._map_status(status_icon)
+                inflight.add_row(str(account), str(lead), str(started), status, detail or "en progreso")
+        else:
+            inflight_label = Text(
+                "Envíos en vuelo: (sin envíos en vuelo)", style="bold cyan"
+            )
+            inflight_section = None
+
+        sent_today = int(send_state.get("sent", 0) or 0)
+        err_today = int(send_state.get("errors", 0) or 0)
+        skipped_no_dm = int(send_state.get("skipped_no_dm", 0) or 0)
+        sent_unverified = int(send_state.get("sent_unverified", 0) or 0)
+        template_preview = ""
+        if self.templates:
+            template_preview = _template_preview(self.templates[0].get("text", ""), limit=24)
+        meta = Text()
+        meta.append("Mensajes enviados: ", style="bold")
+        meta.append(str(sent_today), style="bold green")
+        meta.append("  Mensajes con error: ", style="bold")
+        meta.append(str(err_today), style="bold red")
+        meta.append("  Enviados sin verificación: ", style="bold")
+        meta.append(str(sent_unverified), style="bold yellow")
+        meta.append("  Saltados sin DM: ", style="bold")
+        meta.append(str(skipped_no_dm), style="bold yellow")
+        meta.append(f"  Concurrencia: {self.concurrency}", style="bold")
+        meta2 = Text(
+            f"Delay: {self.delay_min}-{self.delay_max}s  Plantilla: \"{template_preview}\"  Modo: humano/headless",
+            style="bold",
+        )
+
+        logs_header = Text("LOGS (últimos 30)", style="bold white")
+        logs_body = "\n".join(self._logs) if self._logs else "Sin logs."
+        logs_panel = Panel(logs_body, title=logs_header, border_style="white")
+        controls = Text(
+            "(Controles) Q=Cancelar campaña | Enter=Continuar | (si aplica) s/N=continuar cuenta",
+            style="bold white",
+        )
+
+        sections = [
+            header,
+            separator,
+            info,
+            Text(""),
+            totals,
+            Text(""),
+            inflight_label,
+        ]
+        if inflight_section is not None:
+            sections.append(inflight_section)
+        sections.extend(
+            [
+                Text(""),
+                meta,
+                meta2,
+                Text(""),
+                controls,
+                Text(""),
+                logs_panel,
+            ]
+        )
+        return Group(*sections)
+
+    def _map_status(self, icon: str) -> Text:
+        value = str(icon or "")
+        if any(token in value for token in ("OK", "✅", "✔", "✓")):
+            return Text("✅", style="green")
+        if any(token in value for token in ("ERR", "❌", "✗", "×")):
+            return Text("❌", style="red")
+        if any(token in value for token in ("⚠", "WARN", "WARNING")):
+            return Text("⚠", style="yellow")
+        return Text("⏳", style="yellow")
+
+    def _print_header_fallback(self) -> None:
+        line = f"🟣 {_HEADER_TEXT}"
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            print(_HEADER_TEXT)
+        print("-" * max(40, len(_HEADER_TEXT) + 2))
+
+
+def _log_runner_event(
+    event: str,
+    *,
+    account: str = "-",
+    lead: str = "-",
+    status: str = "-",
+    reason: str = "-",
+) -> None:
+    def _safe(value: object) -> str:
+        return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+    line = (
+        f"event={_safe(event)} account={_safe(account)} lead={_safe(lead)} "
+        f"status={_safe(status)} reason={_safe(reason)}"
+    )
+    try:
+        _RUNNER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        with _RUNNER_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} {line}\n")
+    except Exception:
+        pass
 
 
 @dataclass
@@ -72,6 +356,15 @@ class SendEvent:
     lead: str
     success: bool
     detail: str
+    index: int = 0
+    total: int = 0
+    started_at: str = ""
+    duration_ms: int = 0
+    template_id: str = ""
+    template_name: str = ""
+    selected_variant: str = ""
+    cancelled: bool = False
+    verified: bool = True
     attention: str | None = None
     reason_code: str | None = None
     reason_label: str | None = None
@@ -130,6 +423,8 @@ def create_daily_send_state() -> Dict[str, object]:
         "date": today_ar(),
         "sent": 0,
         "errors": 0,
+        "skipped_no_dm": 0,
+        "sent_unverified": 0,
         "next_reset_at": next_midnight_ar(),
     }
 
@@ -148,12 +443,16 @@ def _refresh_daily_state(send_state: Dict[str, object]) -> None:
             send_state["date"] = today_ar()
             send_state["sent"] = 0
             send_state["errors"] = 0
+            send_state["skipped_no_dm"] = 0
+            send_state["sent_unverified"] = 0
             send_state["next_reset_at"] = next_midnight_ar(now)
     except Exception:
         try:
             send_state["date"] = today_ar()
             send_state.setdefault("sent", 0)
             send_state.setdefault("errors", 0)
+            send_state.setdefault("skipped_no_dm", 0)
+            send_state.setdefault("sent_unverified", 0)
             send_state["next_reset_at"] = next_midnight_ar()
         except Exception:
             pass
@@ -194,11 +493,19 @@ def _ensure_session(username: str) -> bool:
         return False
 
 
-def _has_playwright_session(username: str) -> bool:
+def _has_playwright_session(username: str, *, account: Optional[Dict] = None) -> bool:
     if not username:
         return False
-    storage_state = Path(BASE_PROFILES) / username / "storage_state.json"
-    return storage_state.exists()
+    proxy = None
+    if account:
+        proxy = account.get("proxy")
+    try:
+        ok, reason = check_session(username, proxy=proxy, headless=True)
+    except Exception as exc:
+        logger.warning("Playwright session check failed for @%s: %s", username, exc)
+        return False
+    logger.info("Playwright session check for @%s: %s (%s)", username, ok, reason)
+    return bool(ok)
 
 
 def _send_dm(cl, to_username: str, message: str) -> bool:
@@ -254,36 +561,12 @@ def _enqueue_background_send(
     message: str,
     delay_seconds: float,
 ) -> tuple[bool, str]:
-    try:
-        from src.jobs.send_message_job import send_dm  # type: ignore
-    except Exception as exc:
-        return False, f"background unavailable: {exc}"
-    username = (account.get("username") or "").strip()
-    if not username:
-        return False, "missing_username"
-    password = _resolve_account_password(account)
-    proxy = _proxy_payload_from_account(account)
-    try:
-        task = send_dm.apply_async(
-            kwargs={
-                "username": username,
-                "password": password,
-                "proxy": proxy,
-                "target_user": lead,
-                "message_text": message,
-                "human_delay": False,
-            },
-            countdown=max(0.0, float(delay_seconds)),
-        )
-    except Exception as exc:
-        logger.info(
-            "Background enqueue failed for @%s -> @%s: %s",
-            username,
-            lead,
-            exc,
-        )
-        return False, f"background enqueue failed: {exc}"
-    return True, f"Encolado en segundo plano (task={task.id})"
+    logger.info(
+        "Background enqueue disabled. Sending will run locally for @%s -> @%s.",
+        account.get("username"),
+        lead,
+    )
+    return False, "background_disabled"
 
 
 def _diagnose_exception(exc: Exception) -> str | None:
@@ -407,6 +690,78 @@ def _send_messages_from_csv(
     for record in accounts:
         results.append(_send_from_csv_record(record, normalized_target, normalized_message))
     return results
+
+
+def _template_preview(text: str, limit: int = 60) -> str:
+    cleaned = " ".join((text or "").splitlines()).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)] + "..."
+
+
+def _template_candidates(text: str) -> list[str]:
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
+def _template_id(name: str, text: str) -> str:
+    clean_name = (name or "").strip()
+    if clean_name:
+        return clean_name
+    digest = hashlib.sha1((text or "").encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return f"tmpl_{digest}"
+
+
+def _build_template_entry(name: str, text: str) -> dict[str, str]:
+    return {
+        "name": (name or "").strip(),
+        "text": text or "",
+        "id": _template_id(name, text),
+    }
+
+
+def _select_saved_templates() -> list[dict[str, str]]:
+    saved = load_templates()
+    if not saved:
+        warn("No hay plantillas guardadas.")
+        return []
+    print("\nPlantillas disponibles:")
+    for idx, item in enumerate(saved, start=1):
+        preview = _template_preview(item.get("text", ""))
+        print(f" {idx}) {item.get('name', '')} - {preview}")
+    raw = ask("Selecciona plantillas (1,2 o nombre; Enter para cancelar): ").strip()
+    if not raw:
+        return []
+    selections = [part.strip() for part in raw.split(",") if part.strip()]
+    chosen: list[dict[str, str]] = []
+    for token in selections:
+        if token.isdigit():
+            idx = int(token)
+            if 1 <= idx <= len(saved):
+                item = saved[idx - 1]
+                chosen.append(_build_template_entry(item.get("name", ""), item.get("text", "")))
+            continue
+        lowered = token.lower()
+        match = next(
+            (item for item in saved if str(item.get("name", "")).lower() == lowered),
+            None,
+        )
+        if match:
+            chosen.append(_build_template_entry(match.get("name", ""), match.get("text", "")))
+    if not chosen:
+        warn("No se seleccionaron plantillas validas.")
+    return [item for item in chosen if item.get("text")]
+
+
+def _render_message(template: str, *, lead: str, account: str) -> str:
+    variables = {
+        "nombre": lead,
+        "username": lead,
+        "usuario": lead,
+        "lead": lead,
+        "cuenta": account,
+        "account": account,
+    }
+    return render_template(template, variables)
 
 
 _ERROR_SIGNATURES = [
@@ -543,6 +898,37 @@ def _classify_exception(exc: Exception) -> tuple[str, str | None, str | None, st
     return fallback_detail, _diagnose_exception(exc), None, text or "Error desconocido", None, None
 
 
+_RETRYABLE_SEND_HINTS = (
+    "timeout",
+    "timed out",
+    "page not responding",
+    "page is not responding",
+    "target closed",
+    "browser has disconnected",
+    "browser closed",
+    "context closed",
+    "page closed",
+    "execution context was destroyed",
+)
+
+NO_DM_SKIP_REASON = "NO_DM_BUTTON"
+NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
+NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
+SENT_UNVERIFIED_REASON = "SENT_UNVERIFIED"
+SENT_UNVERIFIED_DETAIL = (
+    "Se intentó enviar y no se pudo verificar en DOM; no cuenta como error"
+)
+
+
+def _is_retryable_send_failure(detail: str) -> bool:
+    lowered = (detail or "").lower()
+    return any(token in lowered for token in _RETRYABLE_SEND_HINTS)
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    return min(30.0, 2.0 + (attempt * 2.0))
+
+
 def _render_progress(
     alias: str,
     leads_left: int,
@@ -551,32 +937,69 @@ def _render_progress(
     live_table: LiveTable,
     send_state: Dict[str, object],
 ) -> None:
-    banner()
     _refresh_daily_state(send_state)
-    print(full_line())
-    print(style_text(f"Alias: {alias}", color=Fore.CYAN, bold=True))
-    print(style_text(f"Leads pendientes: {leads_left}", bold=True))
-    print(full_line())
-    print(style_text("Totales por cuenta (ésta campaña)", color=Fore.CYAN, bold=True))
-    for username in sorted(set(success_totals) | set(failed_totals)):
-        ok_run = success_totals.get(username, 0)
-        fail_run = failed_totals.get(username, 0)
-        print(f" @{username}: {ok_run} OK / {fail_run} errores")
-    print(full_line())
-    print(style_text("Envíos en vuelo", color=Fore.CYAN, bold=True))
-    print(live_table.render())
-    print(full_line())
-    sent_today = int(send_state.get("sent", 0) or 0)
-    err_today = int(send_state.get("errors", 0) or 0)
-    ok_line = style_text(
-        f"Mensajes enviados: {sent_today}", color=Fore.GREEN, bold=True
+    if _CAMPAIGN_UI is not None:
+        _CAMPAIGN_UI.update(
+            success_totals,
+            failed_totals,
+            live_table,
+            send_state,
+            leads_left,
+        )
+
+
+def _print_final_summary(
+    alias: str,
+    accounts: list[Dict],
+    success: Dict[str, int],
+    failed: Dict[str, int],
+    no_dm_by_account: Dict[str, int],
+    sent_unverified_by_account: Dict[str, int],
+) -> None:
+    title = "================ RESUMEN FINAL (campaña) ================"
+    divider = "-" * len(title)
+    footer = "=" * len(title)
+    usernames = [str(a.get("username", "")).strip() for a in accounts if a.get("username")]
+    usernames = sorted(set(usernames))
+    account_width = max(20, len("Cuenta"), len("TOTAL GENERAL"))
+    if usernames:
+        account_width = max(account_width, max(len(name) for name in usernames))
+
+    def _row(label: str, ok: int, err: int, no_dm: int, unver: int, total: int) -> str:
+        return (
+            f"{label:<{account_width}} "
+            f"{ok:>5} {err:>5} {no_dm:>6} {unver:>6} {total:>6}"
+        )
+
+    print(title)
+    print(f"Alias: {alias} | Hora fin: {time.strftime('%H:%M:%S')}")
+    print(divider)
+    print(
+        f"{'Cuenta':<{account_width}} "
+        f"{'OK':>5} {'ERR':>5} {'NO_DM':>6} {'UNVER':>6} {'TOTAL':>6}"
     )
-    err_line = style_text(
-        f"Mensajes con error: {err_today}", color=Fore.RED, bold=True
-    )
-    print(ok_line)
-    print(err_line)
-    print(full_line())
+
+    total_ok = 0
+    total_err = 0
+    total_no_dm = 0
+    total_unver = 0
+    total_all = 0
+    for username in usernames:
+        unver = int(sent_unverified_by_account.get(username, 0))
+        ok = max(0, int(success.get(username, 0)) - unver)
+        err = int(failed.get(username, 0))
+        no_dm = int(no_dm_by_account.get(username, 0))
+        total = ok + err + no_dm + unver
+        total_ok += ok
+        total_err += err
+        total_no_dm += no_dm
+        total_unver += unver
+        total_all += total
+        print(_row(username, ok, err, no_dm, unver, total))
+
+    print(divider)
+    print(_row("TOTAL GENERAL", total_ok, total_err, total_no_dm, total_unver, total_all))
+    print(footer)
 
 
 def _handle_event(
@@ -589,62 +1012,200 @@ def _handle_event(
     error_tracker: Dict[str, Dict[str, object]],
     account_error_streaks: Dict[str, int],
     paused_accounts: set[str],
+    emit_log: Callable[[str, str, str, Optional[str], Optional[bool]], None],
+    prompt: Callable[[str], str],
+    no_dm_by_account: Optional[Dict[str, int]] = None,
+    sent_unverified_by_account: Optional[Dict[str, int]] = None,
+    *,
+    overnight: bool,
+    request_stop_fn: Callable[[str], None],
 ) -> Optional[str]:
     username = event.username
+    skip_reason = (event.reason_code or "").strip().upper()
+    if not event.success and skip_reason == NO_DM_SKIP_REASON:
+        account_error_streaks.pop(username, None)
+        detail = event.detail or NO_DM_SKIP_DETAIL
+        if no_dm_by_account is not None:
+            no_dm_by_account[username] = int(no_dm_by_account.get(username, 0)) + 1
+        _log_runner_event(
+            "message",
+            account=username,
+            lead=event.lead,
+            status="skipped",
+            reason=detail,
+        )
+        live_table.complete(username, True, NO_DM_SKIP_LOG)
+        log_sent(
+            username,
+            event.lead,
+            False,
+            detail,
+            started_at=event.started_at,
+            duration_ms=event.duration_ms,
+            template_id=event.template_id,
+            template_name=event.template_name,
+            selected_variant=event.selected_variant,
+            cancelled=event.cancelled,
+            verified=False,
+            skip=True,
+            skip_reason=NO_DM_SKIP_REASON,
+        )
+        bump("skipped_no_dm", 1)
+        emit_log(username, event.lead, "skip", f"no_dm | {detail}", None)
+        return None
     if event.success:
         account_error_streaks.pop(username, None)
         success[username] += 1
         detail = event.detail or ""
+        is_unverified = (event.reason_code or "").strip().upper() == SENT_UNVERIFIED_REASON
+        _log_runner_event(
+            "message",
+            account=username,
+            lead=event.lead,
+            status="sent",
+            reason=detail or "ok",
+        )
         live_table.complete(username, True, detail)
-        log_sent(username, event.lead, True, detail)
+        log_sent(
+            username,
+            event.lead,
+            True,
+            detail,
+            started_at=event.started_at,
+            duration_ms=event.duration_ms,
+            template_id=event.template_id,
+            template_name=event.template_name,
+            selected_variant=event.selected_variant,
+            cancelled=event.cancelled,
+            verified=event.verified,
+            sent_unverified=is_unverified,
+        )
         with _LIVE_LOCK:
             _LIVE_COUNTS["run_ok"] += 1
         bump("sent", 1)
-        summary = style_text(
-            f"✅ @{username} → @{event.lead}", color=Fore.GREEN, bold=True
-        )
-        print(summary)
+        action = "enviado"
+        if not event.verified:
+            action = "enviado_sin_confirmacion"
+        emit_log(username, event.lead, action, detail, event.verified)
+        if is_unverified:
+            bump("sent_unverified", 1)
+            if sent_unverified_by_account is not None:
+                sent_unverified_by_account[username] = int(
+                    sent_unverified_by_account.get(username, 0)
+                ) + 1
+            emit_log(
+                username,
+                event.lead,
+                "warn",
+                f"sent_unverified | {SENT_UNVERIFIED_DETAIL}",
+                None,
+            )
     else:
         failed[username] += 1
         detail = event.detail or "envío falló"
+        _log_runner_event(
+            "message",
+            account=username,
+            lead=event.lead,
+            status="error",
+            reason=detail,
+        )
         live_table.complete(username, False, detail)
-        log_sent(username, event.lead, False, detail)
+        log_sent(
+            username,
+            event.lead,
+            False,
+            detail,
+            started_at=event.started_at,
+            duration_ms=event.duration_ms,
+            template_id=event.template_id,
+            template_name=event.template_name,
+            selected_variant=event.selected_variant,
+            cancelled=event.cancelled,
+            verified=event.verified,
+        )
         with _LIVE_LOCK:
             _LIVE_COUNTS["run_fail"] += 1
         bump("errors", 1)
-        summary = style_text(
-            f"❌ @{username} → @{event.lead} ({detail})", color=Fore.RED, bold=True
-        )
-        print(summary)
+        emit_log(username, event.lead, "error", detail, None)
         streak = int(account_error_streaks.get(username, 0)) + 1
         account_error_streaks[username] = streak
         normalized_username = username.lower()
-        if streak >= 2 and normalized_username not in paused_accounts:
-            print(full_line(char="!", color=Fore.YELLOW, bold=True))
-            print(highlight(f"Protección activada para @{username}", color=Fore.YELLOW))
-            print(
-                style_text(
-                    "Se registraron 2 errores consecutivos. Se recomienda pausar esta cuenta por hoy.",
-                    color=Fore.YELLOW,
-                    bold=True,
-                )
+        if overnight and event.reason_code == "overnight_retries_exhausted":
+            if normalized_username not in paused_accounts:
+                paused_accounts.add(normalized_username)
+                remaining[username] = 0
+                mark_account_paused(username)
+            account_error_streaks[username] = 0
+            emit_log(
+                username,
+                event.lead,
+                "warning",
+                "Cuenta pausada automaticamente (overnight: retries agotados).",
+                None,
             )
-            choice = ask("¿Continuar con esta cuenta igualmente? (s/N): ").strip().lower()
-            if choice == "s":
-                warn(f"Se continuará con @{username} bajo tu responsabilidad.")
-                account_error_streaks[username] = 0
-            else:
+            _log_runner_event(
+                "account_pause",
+                account=username,
+                lead=event.lead,
+                status="paused",
+                reason="overnight_retries_exhausted",
+            )
+        if streak >= 2 and normalized_username not in paused_accounts:
+            emit_log(
+                username,
+                event.lead,
+                "warning",
+                "Proteccion activada (2 errores consecutivos).",
+                None,
+            )
+            if overnight:
                 paused_accounts.add(normalized_username)
                 remaining[username] = 0
                 mark_account_paused(username)
                 account_error_streaks[username] = 0
-                warn(f"@{username} quedará pausada por el resto del día.")
-                logger.warning(
-                    "Cuenta pausada por protección diaria: @%s (errores consecutivos=%d)",
+                emit_log(
                     username,
-                    streak,
+                    event.lead,
+                    "warning",
+                    "Cuenta pausada automaticamente (overnight).",
+                    None,
                 )
-            print(full_line(char="!", color=Fore.YELLOW, bold=True))
+                _log_runner_event(
+                    "account_pause",
+                    account=username,
+                    lead=event.lead,
+                    status="paused",
+                    reason="overnight_error_streak",
+                )
+            else:
+                choice = prompt("¿Continuar con esta cuenta igualmente? (s/N): ").strip().lower()
+                if choice == "s":
+                    emit_log(
+                        username,
+                        event.lead,
+                        "warning",
+                        "Se continuara con la cuenta bajo tu responsabilidad.",
+                        None,
+                    )
+                    account_error_streaks[username] = 0
+                else:
+                    paused_accounts.add(normalized_username)
+                    remaining[username] = 0
+                    mark_account_paused(username)
+                    account_error_streaks[username] = 0
+                    emit_log(
+                        username,
+                        event.lead,
+                        "warning",
+                        "Cuenta pausada por el resto del dia.",
+                        None,
+                    )
+                    logger.warning(
+                        "Cuenta pausada por protección diaria: @%s (errores consecutivos=%d)",
+                        username,
+                        streak,
+                    )
         reason_key = (event.reason_code or "").strip().lower()
         if not reason_key:
             reason_key = (event.reason_label or detail).strip().lower()
@@ -666,49 +1227,64 @@ def _handle_event(
             if event.suggestion and not tracker.get("suggestion"):
                 tracker["suggestion"] = event.suggestion
             if not tracker.get("alerted") and tracker["count"] >= 3:
-                print(full_line(char="!", color=Fore.YELLOW, bold=True))
-                print(
-                    style_text(
-                        f"Patrón detectado: {tracker['count']} errores con motivo '{tracker['label']}'.",
-                        color=Fore.YELLOW,
-                        bold=True,
-                    )
+                emit_log(
+                    username,
+                    event.lead,
+                    "warning",
+                    f"Patron detectado: {tracker['count']} errores con motivo '{tracker['label']}'.",
+                    None,
                 )
                 suggestion = tracker.get("suggestion")
                 if suggestion:
-                    print(style_text(f"Sugerencia: {suggestion}", color=Fore.YELLOW))
+                    emit_log(username, event.lead, "warning", f"Sugerencia: {suggestion}", None)
                 else:
-                    print(
-                        style_text(
-                            "Sugerencia: pausá la campaña o ajustá delays/concurrencia antes de continuar.",
-                            color=Fore.YELLOW,
-                        )
+                    emit_log(
+                        username,
+                        event.lead,
+                        "warning",
+                        "Sugerencia: pausa la campana o ajusta delays/concurrencia.",
+                        None,
                     )
-                print(full_line(char="!", color=Fore.YELLOW, bold=True))
                 tracker["alerted"] = True
     if event.attention:
-        print(full_line(char="=", color=Fore.RED, bold=True))
-        print(highlight(f"Atención en @{username}", color=Fore.RED))
-        print(event.attention)
-        print(full_line(char="=", color=Fore.RED, bold=True))
-        print("[1] Continuar sin esta cuenta")
-        print("[2] Pausar todo")
-        choice = ask("Opción: ").strip() or "1"
+        emit_log(username, event.lead, "warning", event.attention, None)
+        if overnight:
+            normalized_username = username.lower()
+            if normalized_username not in paused_accounts:
+                paused_accounts.add(normalized_username)
+                remaining[username] = 0
+                mark_account_paused(username)
+            emit_log(
+                username,
+                event.lead,
+                "warning",
+                "Cuenta pausada automaticamente (overnight).",
+                None,
+            )
+            _log_runner_event(
+                "account_pause",
+                account=username,
+                lead=event.lead,
+                status="paused",
+                reason="overnight_attention",
+            )
+            return "continue"
+        choice = prompt("Atencion: [1] Continuar sin esta cuenta, [2] Pausar todo. Opcion: ").strip() or "1"
         if choice == "1":
             remaining[username] = 0
-            warn(f"Se omitirá @{username} en esta campaña.")
+            emit_log(username, event.lead, "warning", "Cuenta omitida en esta campana.", None)
             return "continue"
-        else:
-            request_stop(f"usuario decidió pausar tras incidente con @{username}")
-            return "stop"
+        request_stop_fn(f"usuario decidió pausar tras incidente con @{username}")
+        return "stop"
     return None
 
 
-def _build_accounts_for_alias(alias: str) -> list[Dict]:
+def _build_accounts_for_alias(alias: str, *, overnight: bool = False) -> list[Dict]:
     all_acc = [a for a in list_all() if a.get("alias") == alias and a.get("active")]
     if not all_acc:
         warn("No hay cuentas activas en ese alias.")
-        press_enter()
+        if not overnight:
+            press_enter()
         return []
 
     paused_lookup = {acct.lower() for acct in paused_accounts_today()}
@@ -724,14 +1300,15 @@ def _build_accounts_for_alias(alias: str) -> list[Dict]:
         all_acc = [acct for acct in all_acc if acct.get("username", "").lower() not in paused_lookup]
         if not all_acc:
             warn("Todas las cuentas del alias están pausadas por hoy. Reintentá mañana.")
-            press_enter()
+            if not overnight:
+                press_enter()
             return []
 
     verified: list[Dict] = []
     needing_login: list[tuple[Dict, str]] = []
     for account in all_acc:
         username = account["username"]
-        if _has_playwright_session(username):
+        if _has_playwright_session(username, account=account):
             verified.append(account)
             continue
         if not has_session(username):
@@ -759,7 +1336,9 @@ def _build_accounts_for_alias(alias: str) -> list[Dict]:
             print("\nLas siguientes cuentas necesitan volver a iniciar sesión:")
             for account, reason in remaining:
                 print(f" - @{account['username']}: {reason}")
-            if ask("¿Iniciar sesión ahora? (s/N): ").strip().lower() == "s":
+            if overnight:
+                warn("Se omitieron las cuentas sin sesion valida (overnight).")
+            elif ask("¿Iniciar sesión ahora? (s/N): ").strip().lower() == "s":
                 for account, _ in remaining:
                     username = account["username"]
                     if auto_login_with_saved_password(username, account=account) and _ensure_session(
@@ -778,7 +1357,8 @@ def _build_accounts_for_alias(alias: str) -> list[Dict]:
 
     if not verified:
         warn("No hay cuentas con sesión válida para enviar mensajes.")
-        press_enter()
+        if not overnight:
+            press_enter()
         return []
 
     verified.sort(key=lambda acct: (acct.get("low_profile", False), acct.get("username", "")))
@@ -792,12 +1372,21 @@ def _build_accounts_for_alias(alias: str) -> list[Dict]:
             print(f" - @{acct['username']}: {reason}")
         print()
 
+    if low_profile_accounts and not overnight:
+        choice = ask("Aplicar limites conservadores automaticamente? (S/n): ").strip().lower()
+        if choice in {"n", "no"}:
+            for acct in verified:
+                if acct.get("low_profile"):
+                    acct["low_profile"] = False
+            warn("Se continuara sin limites conservadores en esta campana.")
+            print()
+
     return verified
 
 
 def _schedule_inputs(
     settings, concurrency_override: Optional[int]
-) -> Optional[tuple[int, int, int, int, list[str]]]:
+) -> Optional[tuple[int, int, int, int, list[dict[str, str]]]]:
     alias = ask("Alias/grupo: ").strip() or "default"
     listname = ask("Nombre de la lista (text/leads/<nombre>.txt): ").strip()
 
@@ -844,35 +1433,52 @@ def _schedule_inputs(
         warn("Delay máximo ajustado al mínimo indicado.")
     delay_max = max(delay_min, dmax_input)
 
-    print("Escribí plantillas (una por línea). Línea vacía para terminar:")
-    templates: list[str] = []
-    while True:
-        s = ask("")
-        if not s:
-            break
-        templates.append(s)
+    templates: list[dict[str, str]] = []
+    use_saved = ask("Usar plantillas guardadas? (s/N): ").strip().lower()
+    if use_saved == "s":
+        templates = _select_saved_templates()
     if not templates:
-        templates = ["hola!"]
+        print("Escribi plantillas (una por linea). Linea vacia para terminar:")
+        manual_lines: list[str] = []
+        while True:
+            s = ask("")
+            if not s:
+                break
+            manual_lines.append(s)
+        if not manual_lines:
+            manual_lines = ["hola!"]
+        templates = [
+            _build_template_entry("", line.strip())
+            for line in manual_lines
+            if line.strip()
+        ]
 
     return alias, listname, per_acc, concurr, delay_min, delay_max, templates
 
 
-def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
+def menu_send_rotating(
+    concurrency_override: Optional[int] = None,
+    *,
+    overnight: Optional[bool] = None,
+    headless: Optional[bool] = None,
+) -> None:
     ensure_logging(
-        quiet=SETTINGS.quiet,
+        level=logging.ERROR,
+        quiet=True,
         log_dir=SETTINGS.log_dir,
         log_file=SETTINGS.log_file,
     )
     enable_quiet_mode()
     reset_stop_event()
-    banner()
     _reset_live_counters()
     settings = SETTINGS
+    overnight_mode = _resolve_overnight(overnight)
+    headless_mode = _resolve_headless(headless, overnight_mode)
 
     send_state: Dict[str, object] = create_daily_send_state()
 
     def bump(kind: str, delta: int = 1) -> None:
-        if kind not in {"sent", "errors"}:
+        if kind not in {"sent", "errors", "skipped_no_dm", "sent_unverified"}:
             return
         try:
             _refresh_daily_state(send_state)
@@ -897,11 +1503,11 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
         templates,
     ) = inputs
 
-    accounts = _build_accounts_for_alias(alias)
+    accounts = _build_accounts_for_alias(alias, overnight=overnight_mode)
     if not accounts:
         return
 
-    sender = HumanInstagramSender(headless=True)
+    sender = HumanInstagramSender(headless=headless_mode)
 
     def _account_cap(record: Dict) -> int:
         limit = per_acc
@@ -933,12 +1539,17 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
     users = deque([u for u in load_list(listname) if not already_contacted(u)])
     if not users:
         warn("No hay leads (o todos ya fueron contactados).")
-        press_enter()
+        if not overnight_mode:
+            press_enter()
         return
 
     remaining = {a["username"]: account_caps[a["username"]] for a in accounts}
     success = defaultdict(int)
     failed = defaultdict(int)
+    no_dm_by_account = defaultdict(int)
+    sent_unverified_by_account = defaultdict(int)
+    total_target = min(len(users), sum(remaining.values()))
+    send_index = 0
     semaphore = threading.Semaphore(concurr)
     account_locks = {a["username"]: threading.Lock() for a in accounts}
     result_queue: queue.Queue[SendEvent] = queue.Queue()
@@ -946,6 +1557,37 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
     error_tracker: Dict[str, Dict[str, object]] = {}
     account_error_streaks: Dict[str, int] = defaultdict(int)
     paused_runtime: set[str] = {name.lower() for name in paused_accounts_today()}
+
+    global _CAMPAIGN_UI
+    _CAMPAIGN_UI = CampaignUI(
+        alias=alias,
+        total_leads=len(users),
+        settings=settings,
+        templates=templates,
+        concurrency=concurr,
+        delay_min=delay_min,
+        delay_max=delay_max,
+    )
+    _CAMPAIGN_UI.start()
+
+    def emit_log(account: str, lead: str, action: str, detail: str | None = None, verified: bool | None = None) -> None:
+        if _CAMPAIGN_UI is not None:
+            _CAMPAIGN_UI.emit_log(account, lead, action, detail, verified)
+
+    def prompt(text: str) -> str:
+        if overnight_mode:
+            return ""
+        if _CAMPAIGN_UI is not None:
+            return _CAMPAIGN_UI.prompt(text)
+        return ask(text)
+
+    stop_reason: str | None = None
+
+    def _request_stop(reason: str) -> None:
+        nonlocal stop_reason
+        if stop_reason is None:
+            stop_reason = reason
+        request_stop(reason)
 
     listener = start_q_listener("Presioná Q para detener la campaña.", logger)
     threads: list[threading.Thread] = []
@@ -959,9 +1601,39 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
         delay_min,
         delay_max,
     )
+    _render_progress(
+        alias,
+        len(users),
+        success,
+        failed,
+        live_table,
+        send_state,
+    )
+    _log_runner_event(
+        "start",
+        account="-",
+        lead="-",
+        status="started",
+        reason=(
+            f"accounts={len(accounts)} leads={len(users)} total={total_target} "
+            f"concurrency={concurr} per_account={per_acc}"
+        ),
+    )
 
-    def _attempt_send(account: Dict, lead: str, message: str) -> SendEvent:
+    def _attempt_send(
+        account: Dict,
+        lead: str,
+        message: str,
+        *,
+        index: int,
+        total: int,
+        template_id: str,
+        template_name: str,
+        selected_variant: str,
+    ) -> SendEvent:
         username = account["username"]
+        started_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        start_ts = time.time()
         attention_message: str | None = None
         detail = ""
         success_flag = False
@@ -969,31 +1641,25 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
         reason_label: str | None = None
         suggestion: str | None = None
         scope: str | None = None
+        verified_flag = False
+        max_retries = 12 if overnight_mode else 1
+        attempt = 0
+        retryable_failure = False
+        last_detail = ""
         delay_min_target, delay_max_target = account_delays.get(username, (delay_min, delay_max))
         jitter_window = max(0, delay_max_target - delay_min_target)
         # Attempt sending: try adapter first (if available), then fall back to
         # the existing client-based send. Keep behaviour identical to the
         # original loop: a single attempt is performed and any exception is
         # classified and returned to the caller.
-        while not STOP_EVENT.is_set():
+        while not STOP_EVENT.is_set() and attempt < max_retries:
             try:
+                attempt += 1
                 base_delay = delay_min_target + random.uniform(0, jitter_window)
                 now_ts = time.time()
                 next_at = account_next_at.get(username, now_ts)
                 scheduled_at = max(now_ts, next_at) + base_delay
                 delay_seconds = max(0.0, scheduled_at - now_ts)
-                queued, info = _enqueue_background_send(
-                    account,
-                    lead,
-                    message,
-                    delay_seconds,
-                )
-                if queued:
-                    account_next_at[username] = scheduled_at
-                    success_flag = True
-                    detail = info or "Encolado en segundo plano"
-                    break
-
                 # try adapter import lazily so import-time remains cheap
                 try:
                     from integraciones.adapter import send_message as _adapter_send  # type: ignore
@@ -1011,7 +1677,7 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                         detail = info or "Adapter failed"
                         logger.info("Adapter send reported non-success for @%s -> %s: %s", username, lead, detail)
 
-                send_result = sender.send_message_like_human(
+                send_result = sender.send_message_like_human_sync(
                     account=account,
                     target_username=lead,
                     text=message,
@@ -1019,15 +1685,48 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                     jitter_seconds=jitter_window,
                     proxy=account.get("proxy"),
                     return_detail=True,
+                    return_payload=True,
                 )
+                payload = {}
+                verified_flag = False
                 if isinstance(send_result, tuple):
-                    success_flag, info = send_result
+                    if len(send_result) == 3:
+                        success_flag, info, payload = send_result
+                    else:
+                        success_flag, info = send_result
                 else:
                     success_flag, info = send_result, None
+                skip_reason = (payload.get("skip_reason") or info or "").strip().upper()
+                if skip_reason == NO_DM_SKIP_REASON:
+                    success_flag = False
+                    detail = NO_DM_SKIP_DETAIL
+                    reason_code = NO_DM_SKIP_REASON
+                    reason_label = NO_DM_SKIP_DETAIL
+                    scope = "lead"
+                    break
+                if (
+                    payload.get("sent_unverified")
+                    or (payload.get("reason_code") or "").strip().upper() == SENT_UNVERIFIED_REASON
+                    or (info or "").strip().lower() == "sent_unverified"
+                ):
+                    success_flag = True
+                    verified_flag = False
+                    detail = info or "sent_unverified"
+                    reason_code = SENT_UNVERIFIED_REASON
+                    reason_label = "Enviado sin verificación"
+                    scope = "lead"
+                    break
+                if success_flag:
+                    verified_flag = bool(payload.get("verified", True))
                 if success_flag:
                     detail = info or "Enviado en modo humano"
                 else:
                     detail = info or "envío falló (modo humano)"
+                    last_detail = detail
+                    retryable_failure = overnight_mode and _is_retryable_send_failure(detail)
+                    if retryable_failure and attempt < max_retries:
+                        time.sleep(_retry_delay_seconds(attempt))
+                        continue
                     normalized_info = (info or "").lower()
                     if "cancel" in normalized_info:
                         reason_code = reason_code or "send_cancelled"
@@ -1041,6 +1740,11 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                 break
             except Exception as exc:  # pragma: no cover - automatización externa
                 detail, diag_attention, code, label, suggestion_hint, scope_hint = _classify_exception(exc)
+                last_detail = detail
+                retryable_failure = overnight_mode and _is_retryable_send_failure(detail)
+                if retryable_failure and attempt < max_retries:
+                    time.sleep(_retry_delay_seconds(attempt))
+                    continue
                 if code and not reason_code:
                     reason_code = code
                 if label and not reason_label:
@@ -1059,6 +1763,22 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                 )
                 break
 
+        if (
+            not success_flag
+            and overnight_mode
+            and retryable_failure
+            and attempt >= max_retries
+            and not STOP_EVENT.is_set()
+        ):
+            reason_code = "overnight_retries_exhausted"
+            reason_label = "Retries agotados"
+            scope = scope or "account"
+            detail = f"retry_exhausted ({last_detail})" if last_detail else "retry_exhausted"
+
+        duration_ms = int((time.time() - start_ts) * 1000)
+        cancelled_flag = False
+        if STOP_EVENT.is_set() and not success_flag:
+            cancelled_flag = True
         if STOP_EVENT.is_set() and not success_flag and not detail:
             detail = "envío cancelado"
         if not success_flag and not detail:
@@ -1070,6 +1790,15 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
             lead=lead,
             success=success_flag,
             detail=detail,
+            index=index,
+            total=total,
+            started_at=started_at,
+            duration_ms=duration_ms,
+            template_id=template_id,
+            template_name=template_name,
+            selected_variant=selected_variant,
+            cancelled=cancelled_flag,
+            verified=verified_flag if success_flag else False,
             attention=attention_message,
             reason_code=reason_code,
             reason_label=reason_label,
@@ -1077,11 +1806,50 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
             scope=scope,
         )
 
-    def _worker(account: Dict, lead: str, message: str, account_lock: threading.Lock) -> None:
+    def _worker(
+        account: Dict,
+        lead: str,
+        message: str,
+        account_lock: threading.Lock,
+        *,
+        index: int,
+        total: int,
+        template_id: str,
+        template_name: str,
+        selected_variant: str,
+    ) -> None:
         try:
             if STOP_EVENT.is_set():
+                started_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                event = SendEvent(
+                    username=account.get("username", ""),
+                    lead=lead,
+                    success=False,
+                    detail="envío cancelado",
+                    index=index,
+                    total=total,
+                    started_at=started_at,
+                    duration_ms=0,
+                    template_id=template_id,
+                    template_name=template_name,
+                    selected_variant=selected_variant,
+                    cancelled=True,
+                    reason_code="send_cancelled",
+                    reason_label="Envio cancelado",
+                    scope="campaign",
+                )
+                result_queue.put(event)
                 return
-            event = _attempt_send(account, lead, message)
+            event = _attempt_send(
+                account,
+                lead,
+                message,
+                index=index,
+                total=total,
+                template_id=template_id,
+                template_name=template_name,
+                selected_variant=selected_variant,
+            )
             result_queue.put(event)
         finally:
             account_lock.release()
@@ -1091,7 +1859,6 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
         last_render = 0.0
         while users and any(v > 0 for v in remaining.values()) and not STOP_EVENT.is_set():
             _refresh_daily_state(send_state)
-            need_render = False
             # procesar resultados pendientes
             try:
                 while True:
@@ -1106,8 +1873,13 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                         error_tracker,
                         account_error_streaks,
                         paused_runtime,
+                        emit_log,
+                        prompt,
+                        no_dm_by_account=no_dm_by_account,
+                        sent_unverified_by_account=sent_unverified_by_account,
+                        overnight=overnight_mode,
+                        request_stop_fn=_request_stop,
                     )
-                    need_render = True
                     if action == "stop":
                         break
             except queue.Empty:
@@ -1134,12 +1906,120 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                     continue
 
                 lead = users.popleft()
-                message = random.choice(templates)
+                send_index += 1
+                template_entry = random.choice(templates)
+                template_text = template_entry.get("text", "")
+                template_name = template_entry.get("name", "")
+                template_id = template_entry.get("id") or _template_id(template_name, template_text)
+                candidates = _template_candidates(template_text)
+                if not candidates:
+                    started_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                    event = SendEvent(
+                        username=username,
+                        lead=lead,
+                        success=False,
+                        detail="template_empty",
+                        index=send_index,
+                        total=total_target,
+                        started_at=started_at,
+                        duration_ms=0,
+                        template_id=template_id,
+                        template_name=template_name,
+                        selected_variant="",
+                        cancelled=False,
+                        reason_code="template_empty",
+                        reason_label="Plantilla vacia",
+                        scope="template",
+                    )
+                    remaining[username] -= 1
+                    _handle_event(
+                        event,
+                        success,
+                        failed,
+                        live_table,
+                        remaining,
+                        bump,
+                        error_tracker,
+                        account_error_streaks,
+                        paused_runtime,
+                        emit_log,
+                        prompt,
+                        no_dm_by_account=no_dm_by_account,
+                        sent_unverified_by_account=sent_unverified_by_account,
+                        overnight=overnight_mode,
+                        request_stop_fn=_request_stop,
+                    )
+                    need_render = True
+                    account_lock.release()
+                    semaphore.release()
+                    continue
+                if len(candidates) == 1:
+                    selected_variant = candidates[0]
+                else:
+                    try:
+                        selected_variant, _idx = next_round_robin(username, template_id, candidates)
+                    except Exception:
+                        selected_variant = random.choice(candidates)
+                selected_variant = selected_variant.strip()
+                message = _render_message(
+                    selected_variant,
+                    lead=lead,
+                    account=username,
+                ).strip()
+                if not message:
+                    started_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                    event = SendEvent(
+                        username=username,
+                        lead=lead,
+                        success=False,
+                        detail="template_selected_empty",
+                        index=send_index,
+                        total=total_target,
+                        started_at=started_at,
+                        duration_ms=0,
+                        template_id=template_id,
+                        template_name=template_name,
+                        selected_variant=selected_variant,
+                        cancelled=False,
+                        reason_code="template_selected_empty",
+                        reason_label="Plantilla vacia",
+                        scope="template",
+                    )
+                    remaining[username] -= 1
+                    _handle_event(
+                        event,
+                        success,
+                        failed,
+                        live_table,
+                        remaining,
+                        bump,
+                        error_tracker,
+                        account_error_streaks,
+                        paused_runtime,
+                        emit_log,
+                        prompt,
+                        no_dm_by_account=no_dm_by_account,
+                        sent_unverified_by_account=sent_unverified_by_account,
+                        overnight=overnight_mode,
+                        request_stop_fn=_request_stop,
+                    )
+                    need_render = True
+                    account_lock.release()
+                    semaphore.release()
+                    continue
+                emit_log(username, lead, "escribiendo", "iniciando envio", None)
                 remaining[username] -= 1
                 live_table.begin(username, lead)
                 thread = threading.Thread(
                     target=_worker,
                     args=(account, lead, message, account_lock),
+                    kwargs={
+                        "index": send_index,
+                        "total": total_target,
+                        "template_id": template_id,
+                        "template_name": template_name,
+                        "selected_variant": selected_variant,
+                    },
                     daemon=True,
                 )
                 thread.start()
@@ -1149,7 +2029,7 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                     break
 
             now = time.time()
-            if need_render or now - last_render > 0.5:
+            if now - last_render > 0.5:
                 _render_progress(
                     alias,
                     len(users),
@@ -1175,30 +2055,59 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
                     error_tracker,
                     account_error_streaks,
                     paused_runtime,
-                )
-                _render_progress(
-                    alias,
-                    len(users),
-                    success,
-                    failed,
-                    live_table,
-                    send_state,
+                    emit_log,
+                    prompt,
+                    no_dm_by_account=no_dm_by_account,
+                    sent_unverified_by_account=sent_unverified_by_account,
+                    overnight=overnight_mode,
+                    request_stop_fn=_request_stop,
                 )
             except queue.Empty:
                 break
+        _render_progress(
+            alias,
+            len(users),
+            success,
+            failed,
+            live_table,
+            send_state,
+        )
 
     except KeyboardInterrupt:
-        request_stop("interrupción con Ctrl+C")
+        _request_stop("interrupción con Ctrl+C")
     finally:
         if not users:
-            request_stop("no quedan leads por procesar")
+            _request_stop("no quedan leads por procesar")
         elif not any(v > 0 for v in remaining.values()):
-            request_stop("se alcanzó el límite de envíos por cuenta")
+            _request_stop("se alcanzó el límite de envíos por cuenta")
 
         for t in threads:
             t.join()
         if listener:
             listener.join(timeout=0.1)
+
+        while True:
+            try:
+                event = result_queue.get_nowait()
+            except queue.Empty:
+                break
+            _handle_event(
+                event,
+                success,
+                failed,
+                live_table,
+                remaining,
+                bump,
+                error_tracker,
+                account_error_streaks,
+                paused_runtime,
+                emit_log,
+                prompt,
+                no_dm_by_account=no_dm_by_account,
+                sent_unverified_by_account=sent_unverified_by_account,
+                overnight=overnight_mode,
+                request_stop_fn=_request_stop,
+            )
 
         _reset_live_counters()
         _render_progress(
@@ -1209,16 +2118,38 @@ def menu_send_rotating(concurrency_override: Optional[int] = None) -> None:
             live_table,
             send_state,
         )
+        final_reason = stop_reason or ("stop_event" if STOP_EVENT.is_set() else "completed")
+        _log_runner_event(
+            "stop",
+            account="-",
+            lead="-",
+            status="stopped" if STOP_EVENT.is_set() else "completed",
+            reason=(
+                f"{final_reason} sent={sum(success.values())} "
+                f"errors={sum(failed.values())} remaining={len(users)}"
+            ),
+        )
+        if _CAMPAIGN_UI is not None:
+            _CAMPAIGN_UI.stop()
+            _CAMPAIGN_UI = None
+        _print_final_summary(
+            alias,
+            accounts,
+            success,
+            failed,
+            no_dm_by_account,
+            sent_unverified_by_account,
+        )
 
-    print("\n== Resumen ==")
     total_ok = sum(success.values())
-    print(f"OK: {total_ok}")
+    emit_log("-", "-", "resumen", f"OK: {total_ok}", None)
     for account in accounts:
         user = account["username"]
-        print(f" - {user}: {success[user]} enviados, {failed[user]} errores")
+        emit_log(user, "-", "resumen", f"{success[user]} enviados, {failed[user]} errores", None)
     if STOP_EVENT.is_set():
         logger.info("Proceso detenido (%s).", "stop_event activo")
-    press_enter()
+    if not overnight_mode:
+        press_enter()
 
 
 if __name__ == "__main__":
@@ -1253,7 +2184,26 @@ if __name__ == "__main__":
         action="store_true",
         help="Mostrar el navegador durante el procesamiento del CSV",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Forzar headless en campaña",
+    )
+    parser.add_argument(
+        "--overnight",
+        action="store_true",
+        help="Ejecutar campaña en modo overnight (headless, sin prompts)",
+    )
     args = parser.parse_args()
+
+    if args.headed and args.headless:
+        parser.error("--headed y --headless no se pueden usar juntos")
+
+    headless_override = None
+    if args.headed:
+        headless_override = False
+    elif args.headless:
+        headless_override = True
 
     if args.csv:
         if not args.lead:
@@ -1294,4 +2244,8 @@ if __name__ == "__main__":
                 print(f" - @{item.username or 'desconocida'} → @{item.target}: {item.status} ({detail})")
         raise SystemExit(0)
 
-    menu_send_rotating(concurrency_override=args.concurrency)
+    menu_send_rotating(
+        concurrency_override=args.concurrency,
+        overnight=args.overnight,
+        headless=headless_override,
+    )

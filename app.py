@@ -1,8 +1,5 @@
 # app.py
 # -*- coding: utf-8 -*-
-
-## VERSION NUEVA - TEST UPDATE
-
 import importlib
 import os
 import time
@@ -171,25 +168,36 @@ def _print_dashboard() -> None:
 
 def current_menu_option_labels() -> list[str]:
     options = [
-        f"1) {em('🔐')} Gestionar cuentas  ",
-        f"2) {em('🗂️')} Gestionar leads (crear / importar CSV)  ",
-        f"3) {em('💬')} Enviar mensajes (rotando cuentas activas)  ",
-        f"4) {em('📜')} Ver registros de envíos  ",
-        f"5) {em('🤖')} Auto-responder con OpenAI  ",
-        f"6) {em('📊')} Estado de la conversación  ",
-        f"7) {em('📱')} Automatización por WhatsApp  ",
+        f"1) {em('🔐')} Gestionar cuentas de instagram",
+        f"2) {em('🗂️')} Gestionar leads",
+        f"3) {em('💬')} Enviar mensajes",
+        f"4) {em('📜')} Ver registros de envíos",
+        f"5) {em('🤖')} Auto-responder con OpenAI",
+        f"6) {em('📊')} Estado de la conversación",
+        f"7) {em('📱')} Automatización por WhatsApp",
     ]
     if not SETTINGS.client_distribution:
-        options.append(f"8) {em('📦')} Entregar a cliente (licencia / ZIP)  ")
-        options.append(f"9) {em('🚪')} Salir  ")
+        options.append(f"8) {em('📦')} Entregar a cliente")
+        options.append(f"9) {em('🔄')} Actualizaciones")
+        options.append(f"10) {em('🚪')} Salir")
     else:
-        options.append(f"8) {em('🚪')} Salir  ")
+        options.append(f"8) {em('🔄')} Actualizaciones")
+        options.append(f"9) {em('🚪')} Salir")
     return options
 
 
 def menu():
     if licensekit and hasattr(licensekit, "enforce_startup_validation"):
         licensekit.enforce_startup_validation()
+    
+    # Verificación automática de actualizaciones al inicio (solo si no es distribución de cliente)
+    if not SETTINGS.client_distribution:
+        try:
+            from update_system import auto_update_check
+            auto_update_check()
+        except ImportError:
+            pass  # Sistema de actualizaciones no disponible
+    
     while True:
         clear_console()
         _print_dashboard()
@@ -223,9 +231,19 @@ def menu():
             and not SETTINGS.client_distribution
         ):
             licensekit.menu_deliver()
+        elif (op == "9" and not SETTINGS.client_distribution) or (
+            op == "8" and SETTINGS.client_distribution
+        ):
+            try:
+                from update_system import menu_updates
+                clear_console()
+                menu_updates()
+            except ImportError:
+                warn("Sistema de actualizaciones no disponible.")
+                press_enter()
         elif (
-            (op == "8" and SETTINGS.client_distribution)
-            or (op == "9" and not SETTINGS.client_distribution)
+            (op == "9" and SETTINGS.client_distribution)
+            or (op == "10" and not SETTINGS.client_distribution)
         ):
             print("Saliendo...")
             time.sleep(0.3)

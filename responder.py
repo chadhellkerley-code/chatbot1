@@ -1,11 +1,15 @@
+# -*- coding: utf-8 -*-  NUEVA VERSION MATI, SI FUNCIONA ESTO!
 import base64
 import importlib
+import getpass
 import json
 import logging
 import re
+import random
 import subprocess
 import sys
 import time
+import threading
 import unicodedata
 import uuid
 import warnings
@@ -13,16 +17,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, time as dt_time, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from accounts import (
-    auto_login_with_saved_password,
+    _account_password,
+    _store_account_password,
     get_account,
-    has_valid_session_settings,
     list_all,
     mark_connected,
-    prompt_login,
 )
 from config import (
     SETTINGS,
@@ -32,7 +35,7 @@ from config import (
     update_app_config,
     update_env_local,
 )
-from proxy_manager import apply_proxy_to_client, record_proxy_failure, should_retry_proxy
+from proxy_manager import record_proxy_failure, should_retry_proxy
 from paths import runtime_base
 from runtime import (
     STOP_EVENT,
@@ -42,10 +45,11 @@ from runtime import (
     sleep_with_stop,
     start_q_listener,
 )
-from session_store import has_session, load_into
 from storage import get_auto_state, log_conversation_status, save_auto_state
 from ui import Fore, full_line, style_text
-from client_factory import get_instagram_client
+from src.auth.onboarding import build_proxy, login_account_playwright
+from src.auth.persistent_login import check_session
+from src.dm_playwright_client import PlaywrightDMClient
 from utils import ask, ask_int, banner, ok, press_enter, warn
 
 _ZONEINFO_CLASS_SENTINEL = object()
@@ -58,7 +62,7 @@ def _load_zoneinfo_class():
     global _ZONEINFO_CLASS
     if _ZONEINFO_CLASS is _ZONEINFO_CLASS_SENTINEL:
         zoneinfo_class = None
-        try:  # pragma: no cover - depende de la versión de Python
+        try:  # pragma: no cover - depende de la versia�n de Python
             from zoneinfo import ZoneInfo as builtin_zoneinfo  # type: ignore[attr-defined]
             zoneinfo_class = builtin_zoneinfo
         except Exception:
@@ -80,7 +84,7 @@ except Exception:  # pragma: no cover - fallback si falta dependencia
 try:  # pragma: no cover - depende de dependencia opcional
     import requests
     from requests import RequestException
-except Exception:  # pragma: no cover - fallback si requests no está
+except Exception:  # pragma: no cover - fallback si requests no esta�
     requests = None  # type: ignore
     RequestException = Exception  # type: ignore
 
@@ -100,7 +104,7 @@ except Exception:  # pragma: no cover - si falta dependencia opcional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROMPT = "Respondé cordial, breve y como humano."
+DEFAULT_PROMPT = "Responde� cordial, breve y como humano."
 PROMPT_KEY = "autoresponder_system_prompt"
 ACTIVE_ALIAS: str | None = None
 MAX_SYSTEM_PROMPT_CHARS = 50000
@@ -108,7 +112,7 @@ _AUTORESPONDER_STUB_WARNED = False
 
 
 def _safe_parse_datetime(*args, **kwargs) -> Optional[datetime]:
-    """Parsea una fecha utilizando dateutil si está disponible."""
+    """Parsea una fecha utilizando dateutil si esta� disponible."""
     if date_parser is None:
         return None
     try:
@@ -118,70 +122,30 @@ def _safe_parse_datetime(*args, **kwargs) -> Optional[datetime]:
 
 _GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
 _GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\a?\d[\d\s().-]{7,}\d)")
+_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%a-]a@[A-Z0-9.-]a\.[A-Z]{2,}", re.IGNORECASE)
 _GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 _DEFAULT_GOHIGHLEVEL_PROMPT = (
-    "Sos un asistente que evalúa conversaciones de Instagram y determina si un lead está "
-    "calificado para enviarse automáticamente al CRM GoHighLevel. Respondé únicamente "
+    "Sos un asistente que evala�a conversaciones de Instagram y determina si un lead esta� "
+    "calificado para enviarse automa�ticamente al CRM GoHighLevel. Responde� a�nicamente "
     "con 'SI' cuando corresponda enviarlo y 'NO' cuando no cumpla con los criterios. "
-    "Considerá el contexto, el interés real del lead y si el equipo comercial debería "
+    "Considera� el contexto, el intera�s real del lead y si el equipo comercial debera�a "
     "contactarlo."
 )
 
 _PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
 _PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
-_PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
-_PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
-_PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
-_PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
-_PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
-_PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
-_PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
-_PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
-_PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
-_PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
 _GOOGLE_CALENDAR_FILE = (
     runtime_base(Path(__file__).resolve().parent) / "storage" / "google_calendar.json"
@@ -211,22 +175,15 @@ _WEEKDAY_KEYWORDS = {
     "lunes": 0,
     "martes": 1,
     "miercoles": 2,
-    "miércoles": 2,
+    "mia�rcoles": 2,
     "jueves": 3,
     "viernes": 4,
     "sabado": 5,
-    "sábado": 5,
+    "si�bado": 5,
     "domingo": 6,
 }
 
-_PROMPT_STORAGE_DIR = runtime_base(Path(__file__).resolve().parent) / "data" / "autoresponder"
-_PROMPT_DEFAULT_ALIAS = "default"
 
-_GOHIGHLEVEL_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "gohighlevel.json"
-_GOHIGHLEVEL_BASE = "https://rest.gohighlevel.com/v1"
-_PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)")
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_GOHIGHLEVEL_STATE: Dict[str, dict] | None = None
 
 _GOOGLE_CALENDAR_FILE = (
     runtime_base(Path(__file__).resolve().parent) / "storage" / "google_calendar.json"
@@ -254,11 +211,11 @@ _WEEKDAY_KEYWORDS = {
     "lunes": 0,
     "martes": 1,
     "miercoles": 2,
-    "miércoles": 2,
+    "mia�rcoles": 2,
     "jueves": 3,
     "viernes": 4,
     "sabado": 5,
-    "sábado": 5,
+    "si�bado": 5,
     "domingo": 6,
 }
 
@@ -267,17 +224,581 @@ _FOLLOWUP_FILE = (
 )
 _FOLLOWUP_STATE: Dict[str, dict] | None = None
 _DEFAULT_FOLLOWUP_PROMPT = (
-    "Diseñá un plan de seguimiento amable para leads de Instagram. "
-    "Enviá el primer recordatorio cuando hayan pasado al menos 6 horas sin respuesta. "
-    "Si después de 12 horas más no responden, enviá un segundo y último mensaje. "
-    "No envíes más de dos seguimientos y evitá sonar insistente."
+    "Disea�a� un plan de seguimiento amable para leads de Instagram. "
+    "Envia� el primer recordatorio cuando hayan pasado al menos 6 horas sin respuesta. "
+    "Si despua�s de 12 horas ma�s no responden, envia� un segundo y a�ltimo mensaje. "
+    "No enva�es ma�s de dos seguimientos y evita� sonar insistente."
 )
 _FOLLOWUP_MIN_INTERVAL = 300
 _FOLLOWUP_HISTORY_MAX_AGE = 14 * 24 * 3600
 
+_CONVERSATION_ENGINE_FILE = (
+    runtime_base(Path(__file__).resolve().parent) / "storage" / "conversation_engine.json"
+)
+_CONVERSATION_ENGINE_CACHE: Dict[str, dict] | None = None
+
+_MESSAGE_LOG_FILE = (
+    runtime_base(Path(__file__).resolve().parent) / "storage" / "message_log.jsonl"
+)
+_MESSAGE_LOG_LOCK = threading.Lock()
+
+_STAGE_INITIAL = "initial"
+_STAGE_FOLLOWUP = "followup"
+_STAGE_WAITING = "waiting"
+_STAGE_CLOSED = "closed"
+_STAGE_ACTIVE = "active"
+
+_MIN_TIME_BETWEEN_MESSAGES = 60
+_MIN_TIME_FOR_FOLLOWUP = 4 * 3600
+_MIN_TIME_FOR_REACTIVATION = 24 * 3600
+
+# Forzar comportamiento solicitado por el usuario: responder siempre y evaluar seguimientos.
+_FORCE_ALWAYS_RESPOND = True
+_FORCE_ALWAYS_FOLLOWUP = True
+
 
 def _normalize_username(value: str) -> str:
     return value.strip().lstrip("@").lower()
+
+
+def _get_conversation_key(account: str, thread_id: str) -> str:
+    account_norm = _normalize_username(account)
+    thread_str = str(thread_id).strip()
+    return f"{account_norm}|{thread_str}"
+
+
+def _load_conversation_engine(refresh: bool = False) -> Dict[str, dict]:
+    global _CONVERSATION_ENGINE_CACHE
+    if refresh or _CONVERSATION_ENGINE_CACHE is None:
+        data: Dict[str, dict] = {"conversations": {}}
+        if _CONVERSATION_ENGINE_FILE.exists():
+            try:
+                loaded = json.loads(_CONVERSATION_ENGINE_FILE.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data.update(loaded)
+                    if "conversations" not in data:
+                        data["conversations"] = {}
+            except Exception as exc:
+                logger.warning("Error cargando conversation_engine.json: %s", exc, exc_info=False)
+                data = {"conversations": {}}
+        _CONVERSATION_ENGINE_CACHE = data
+    return _CONVERSATION_ENGINE_CACHE
+
+
+def _save_conversation_engine() -> None:
+    if _CONVERSATION_ENGINE_CACHE is None:
+        return
+    try:
+        _CONVERSATION_ENGINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CONVERSATION_ENGINE_FILE.write_text(
+            json.dumps(_CONVERSATION_ENGINE_CACHE, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as exc:
+        logger.warning("Error guardando conversation_engine.json: %s", exc, exc_info=False)
+
+
+def _append_message_log(event: Dict[str, Any]) -> None:
+    record = dict(event or {})
+    record.setdefault("ts", int(time.time()))
+    record.setdefault("iso", datetime.utcnow().isoformat())
+    try:
+        payload = json.dumps(record, ensure_ascii=False)
+    except Exception:
+        return
+    try:
+        _MESSAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _MESSAGE_LOG_LOCK:
+            with open(_MESSAGE_LOG_FILE, "a", encoding="utf-8") as handle:
+                handle.write(f"{payload}\n")
+    except Exception:
+        logger.debug("No se pudo registrar message_log.jsonl", exc_info=False)
+
+def _get_conversation_state(account: str, thread_id: str) -> Dict[str, Any]:
+    engine = _load_conversation_engine()
+    conversations = engine.get("conversations", {})
+    key = _get_conversation_key(account, thread_id)
+    return conversations.get(key, {})
+
+
+def _update_conversation_state(
+    account: str,
+    thread_id: str,
+    updates: Dict[str, Any],
+    recipient_username: Optional[str] = None,
+) -> Dict[str, Any]:
+    engine = _load_conversation_engine()
+    conversations = engine.setdefault("conversations", {})
+    key = _get_conversation_key(account, thread_id)
+    current = conversations.get(key, {})
+    if not current:
+        current = {
+            "account": account,
+            "thread_id": str(thread_id),
+            "recipient_username": recipient_username or current.get("recipient_username", ""),
+            "stage": _STAGE_INITIAL,
+            "messages_sent": [],
+            "last_message_sent_at": None,
+            "last_message_received_at": None,
+            "last_message_id_seen": None,
+            "last_message_sender": None,
+            "followup_stage": 0,
+            "last_followup_sent_at": None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+    current.update(updates)
+    current["updated_at"] = time.time()
+    
+    if recipient_username:
+        current["recipient_username"] = recipient_username
+    
+    conversations[key] = current
+    _CONVERSATION_ENGINE_CACHE = engine
+    _save_conversation_engine()
+    return current
+
+
+def _load_all_conversations_to_memory(
+    client,
+    account: str,
+    max_age_days: int = 7,
+    threads_limit: int = 20,
+) -> None:
+    now = time.time()
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
+    print(style_text(f"[Memoria] Cargando conversaciones para @{account}...", color=Fore.CYAN))
+    start_ts = time.time()
+    max_seconds = 20
+    
+    try:
+        print(style_text(f"[Memoria] Solicitando threads para @{account}...", color=Fore.CYAN))
+        threads = client.list_threads(amount=threads_limit, filter_unread=False)
+    except Exception as exc:
+        logger.warning("No se pudieron obtener threads para cargar memoria de @%s: %s", account, exc, exc_info=False)
+        print(style_text(f"[Memoria] Error obteniendo threads para @{account}", color=Fore.YELLOW))
+        return
+    
+    if not threads:
+        print(style_text(f"[Memoria] No hay threads para @{account}", color=Fore.YELLOW))
+        return
+    
+    logger.info("Cargando memoria: analizando %d threads para @%s", len(threads), account)
+    loaded_count = 0
+
+    for idx, thread in enumerate(threads):
+        if STOP_EVENT.is_set():
+            break
+        if time.time() - start_ts > max_seconds:
+            print(style_text(f"[Memoria] Tiempo maximo alcanzado para @{account}", color=Fore.YELLOW))
+            break
+        
+        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
+        if thread_id_val is None:
+            continue
+        thread_id = str(thread_id_val)
+        
+        try:
+            messages = client.get_messages(thread, amount=20)
+        except Exception as exc:
+            logger.debug("No se pudieron obtener mensajes del thread %s: %s", thread_id, exc, exc_info=False)
+            continue
+        
+        if not messages:
+            continue
+        
+        # Obtener información del participante
+        participants = getattr(thread, "users", None) or []
+        recipient_id: Optional[str] = None
+        recipient_username = ""
+        for participant in participants:
+            pk_val = getattr(participant, "pk", None) or getattr(participant, "id", None)
+            pk = str(pk_val) if pk_val is not None else ""
+            if pk and pk != str(client.user_id):
+                recipient_id = pk
+                recipient_username = getattr(participant, "username", None) or pk
+                break
+        
+        if not recipient_id:
+            continue
+        
+        outbound_messages = []
+        inbound_messages = []
+        
+        for msg in messages:
+            msg_ts = _message_timestamp(msg)
+            if msg_ts is None:
+                continue
+            
+            if max_age_seconds and (now - msg_ts) > max_age_seconds:
+                continue
+            
+            msg_text = getattr(msg, "text", "") or ""
+            msg_id = getattr(msg, "id", None)
+            
+            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id):
+                outbound_messages.append({
+                    "text": msg_text,
+                    "timestamp": msg_ts,
+                    "message_id": str(msg_id) if msg_id else "",
+                })
+            else:
+                inbound_messages.append({
+                    "text": msg_text,
+                    "timestamp": msg_ts,
+                    "message_id": str(msg_id) if msg_id else "",
+                })
+        
+        outbound_messages.sort(key=lambda x: x["timestamp"])
+        inbound_messages.sort(key=lambda x: x["timestamp"])
+        
+        conv_state = _get_conversation_state(account, thread_id)
+        
+        first_sent_message = outbound_messages[0] if outbound_messages else None
+        first_sent_at = first_sent_message["timestamp"] if first_sent_message else None
+        
+        last_received_message = inbound_messages[-1] if inbound_messages else None
+        last_received_at = last_received_message["timestamp"] if last_received_message else None
+        
+        last_sent_message = outbound_messages[-1] if outbound_messages else None
+        last_sent_at = last_sent_message["timestamp"] if last_sent_message else None
+        
+        updates = {
+            "recipient_username": recipient_username,
+            "first_message_sent_at": first_sent_at,
+            "last_message_sent_at": last_sent_at,
+            "last_message_received_at": last_received_at,
+        }
+        
+        # No marcar como "visto" durante el cargado inicial de memoria.
+        # Esto evita ignorar mensajes reales que aún no fueron respondidos.
+        
+        if outbound_messages and inbound_messages:
+            if last_sent_at and last_received_at:
+                updates["last_message_sender"] = "bot" if last_sent_at > last_received_at else "lead"
+            elif last_sent_at:
+                updates["last_message_sender"] = "bot"
+            elif last_received_at:
+                updates["last_message_sender"] = "lead"
+        elif outbound_messages:
+            updates["last_message_sender"] = "bot"
+        elif inbound_messages:
+            updates["last_message_sender"] = "lead"
+        
+        messages_sent_in_json = conv_state.get("messages_sent", [])
+        for outbound_msg in outbound_messages:
+            msg_text = outbound_msg["text"].strip()
+            if not msg_text:
+                continue
+            
+            found = False
+            for sent_msg in messages_sent_in_json:
+                if sent_msg.get("text", "").strip().lower() == msg_text.lower():
+                    if first_sent_at and sent_msg.get("first_sent_at") is None:
+                        sent_msg["first_sent_at"] = first_sent_at
+                    found = True
+                    break
+            
+            if not found and first_sent_at:
+                is_first = outbound_msg["timestamp"] == first_sent_at
+                if is_first:
+                    messages_sent_in_json.append({
+                        "text": msg_text,
+                        "first_sent_at": first_sent_at,
+                        "last_sent_at": outbound_msg["timestamp"],
+                        "message_id": outbound_msg["message_id"],
+                        "times_sent": 1,
+                        "is_followup": False,
+                    })
+        
+        updates["messages_sent"] = messages_sent_in_json
+        
+        if not outbound_messages:
+            updates["stage"] = _STAGE_INITIAL
+        elif not inbound_messages:
+            updates["stage"] = _STAGE_FOLLOWUP
+        elif first_sent_at and last_received_at:
+            if last_received_at > first_sent_at:
+                if last_received_at > last_sent_at:
+                    updates["stage"] = _STAGE_ACTIVE
+                else:
+                    updates["stage"] = _STAGE_WAITING
+            else:
+                updates["stage"] = _STAGE_FOLLOWUP
+        elif last_received_at and last_sent_at and last_received_at > last_sent_at:
+            updates["stage"] = _STAGE_ACTIVE
+        elif last_sent_at and last_received_at and last_sent_at > last_received_at:
+            updates["stage"] = _STAGE_FOLLOWUP
+        else:
+            pass
+        
+        _update_conversation_state(account, thread_id, updates, recipient_username)
+        loaded_count += 1
+        
+        if (idx + 1) % 10 == 0:
+            _save_conversation_engine()
+            print(style_text(f"[Memoria] Progreso @{account}: {idx + 1}/{len(threads)}", color=Fore.CYAN))
+    
+    logger.info("Memoria cargada: %d conversaciones sincronizadas para @%s", loaded_count, account)
+    _save_conversation_engine()
+    print(style_text(f"[Memoria] Listo @{account}: {loaded_count} conversaciones", color=Fore.GREEN))
+
+
+def _determine_followup_stage_from_initial_message(
+    account: str,
+    thread_id: str,
+    now: float,
+    schedule_hours: Optional[List[int]] = None,
+) -> tuple[Optional[int], Optional[float]]:
+    state = _get_conversation_state(account, thread_id)
+    
+    first_sent_at = state.get("first_message_sent_at")
+    if not first_sent_at:
+        messages_sent = state.get("messages_sent", [])
+        if messages_sent:
+            non_followup_messages = [m for m in messages_sent if not m.get("is_followup", False)]
+            if non_followup_messages:
+                first_msg = min(non_followup_messages, key=lambda m: m.get("first_sent_at", m.get("last_sent_at", float("inf"))))
+                first_sent_at = first_msg.get("first_sent_at") or first_msg.get("last_sent_at")
+            else:
+                first_msg = min(messages_sent, key=lambda m: m.get("first_sent_at", m.get("last_sent_at", float("inf"))))
+                first_sent_at = first_msg.get("first_sent_at") or first_msg.get("last_sent_at")
+    
+    if not first_sent_at:
+        return None, None
+    
+    last_received_at = state.get("last_message_received_at")
+    if last_received_at and last_received_at > first_sent_at:
+        return None, None
+    
+    time_since_initial = now - first_sent_at
+    hours_since_initial = time_since_initial / 3600.0
+    
+    messages_sent = state.get("messages_sent", [])
+    followups_sent = [m for m in messages_sent if m.get("is_followup", False)]
+    
+    followups_sent_sorted = sorted(followups_sent, key=lambda m: m.get("last_sent_at", m.get("first_sent_at", 0)))
+    
+    num_followups_sent = len(followups_sent_sorted)
+    schedule = [h for h in (schedule_hours or []) if isinstance(h, int) and h > 0]
+    if schedule:
+        schedule = sorted(set(schedule))
+        if num_followups_sent >= len(schedule):
+            return None, None
+        required_hours = schedule[num_followups_sent]
+        if hours_since_initial >= required_hours:
+            return num_followups_sent + 1, time_since_initial
+        return None, None
+
+    if hours_since_initial >= 5:
+        if num_followups_sent == 0:
+            return 1, time_since_initial
+        elif hours_since_initial >= 24 and num_followups_sent == 1:
+            return 2, time_since_initial
+        elif hours_since_initial >= 48 and num_followups_sent == 2:
+            return 3, time_since_initial
+        elif hours_since_initial >= 72 and num_followups_sent == 3:
+            return 4, time_since_initial
+        elif num_followups_sent >= 4:
+            return None, None
+        else:
+            return None, None
+
+    return None, None
+
+
+def _record_message_sent(
+    account: str,
+    thread_id: str,
+    message_text: str,
+    message_id: Optional[str] = None,
+    recipient_username: Optional[str] = None,
+    is_followup: bool = False,
+    followup_stage: Optional[int] = None,
+) -> None:
+    now = time.time()
+    state = _get_conversation_state(account, thread_id)
+    
+    messages_sent = state.get("messages_sent", [])
+    message_normalized = message_text.strip().lower()
+    message_found = False
+    for sent_msg in messages_sent:
+        if sent_msg.get("text", "").strip().lower() == message_normalized:
+            sent_msg["last_sent_at"] = now
+            sent_msg["times_sent"] = sent_msg.get("times_sent", 0) + 1
+            if message_id:
+                sent_msg["last_message_id"] = message_id
+            if is_followup:
+                sent_msg["is_followup"] = True
+            message_found = True
+            break
+    
+    if not message_found:
+        new_message = {
+            "text": message_text,
+            "first_sent_at": now,
+            "last_sent_at": now,
+            "message_id": message_id or "",
+            "times_sent": 1,
+            "is_followup": is_followup,
+        }
+        messages_sent.append(new_message)
+    
+    updates = {
+        "messages_sent": messages_sent,
+        "last_message_sent_at": now,
+        "last_message_sender": "bot",
+    }
+    
+    if is_followup and followup_stage is not None:
+        updates["followup_stage"] = followup_stage
+        updates["last_followup_sent_at"] = now
+    
+    _update_conversation_state(
+        account,
+        thread_id,
+        updates,
+        recipient_username=recipient_username,
+    )
+    _append_message_log(
+        {
+            "action": "message_sent",
+            "account": account,
+            "thread_id": str(thread_id),
+            "lead": recipient_username or "",
+            "is_followup": bool(is_followup),
+            "followup_stage": followup_stage if is_followup else None,
+            "message_id": message_id or "",
+            "message_text": message_text,
+        }
+    )
+
+
+def _record_message_received(
+    account: str,
+    thread_id: str,
+    message_id: Optional[str] = None,
+    recipient_username: Optional[str] = None,
+) -> None:
+    now = time.time()
+    state = _get_conversation_state(account, thread_id)
+    
+    updates = {
+        "last_message_received_at": now,
+        "last_message_sender": "lead",
+    }
+    
+    if message_id:
+        updates["last_message_id_seen"] = message_id
+    
+    if state.get("last_message_sent_at") and state.get("stage") in (_STAGE_INITIAL, _STAGE_FOLLOWUP, _STAGE_WAITING):
+        updates["stage"] = _STAGE_ACTIVE
+        updates["followup_stage"] = 0
+    
+    _update_conversation_state(account, thread_id, updates, recipient_username=recipient_username)
+    _append_message_log(
+        {
+            "action": "message_received",
+            "account": account,
+            "thread_id": str(thread_id),
+            "lead": recipient_username or "",
+            "message_id": message_id or "",
+        }
+    )
+
+
+def _determine_conversation_stage(
+    account: str,
+    thread_id: str,
+    has_new_inbound: bool,
+    time_since_last_sent: Optional[float],
+    time_since_last_received: Optional[float],
+) -> str:
+    state = _get_conversation_state(account, thread_id)
+    current_stage = state.get("stage", _STAGE_INITIAL)
+    messages_sent = state.get("messages_sent", [])
+    
+    if not messages_sent:
+        return _STAGE_INITIAL
+    
+    if has_new_inbound:
+        return _STAGE_ACTIVE
+    
+    if current_stage == _STAGE_CLOSED:
+        return _STAGE_CLOSED
+    
+    if time_since_last_received is None or time_since_last_received > _MIN_TIME_FOR_FOLLOWUP:
+        if time_since_last_sent is None or time_since_last_sent > _MIN_TIME_FOR_FOLLOWUP:
+            return _STAGE_FOLLOWUP
+        return _STAGE_WAITING
+    
+    if time_since_last_received and time_since_last_received < 3600:
+        return _STAGE_ACTIVE
+    
+    return current_stage
+
+
+def _can_send_message(
+    account: str,
+    thread_id: str,
+    message_text: str,
+    force: bool = False,
+) -> tuple[bool, str]:
+    if force:
+        return True, "forced"
+    state = _get_conversation_state(account, thread_id)
+    now = time.time()
+    
+    messages_sent = state.get("messages_sent", [])
+    message_normalized = message_text.strip().lower()
+    
+    for sent_msg in messages_sent:
+        if sent_msg.get("text", "").strip().lower() == message_normalized:
+            last_sent = sent_msg.get("last_sent_at", 0)
+            times_sent = sent_msg.get("times_sent", 0)
+            
+            if now - last_sent < 3600:
+                return False, f"Mensaje ya enviado hace {int((now - last_sent) / 60)} minutos"
+            
+            if times_sent >= 3:
+                return False, "Mensaje ya enviado 3 veces, evitar repetición"
+    
+    last_sent_at = state.get("last_message_sent_at")
+    if last_sent_at and not force:
+        time_since_last = now - last_sent_at
+        if time_since_last < _MIN_TIME_BETWEEN_MESSAGES:
+            remaining = int(_MIN_TIME_BETWEEN_MESSAGES - time_since_last)
+            return False, f"Esperar {remaining} segundos antes de enviar otro mensaje"
+    
+    if state.get("stage") == _STAGE_CLOSED:
+        return False, "Conversación cerrada, no enviar más mensajes"
+    
+    return True, "ok"
+
+
+def _should_process_old_lead(
+    account: str,
+    thread_id: str,
+    time_since_last_activity: float,
+) -> bool:
+    state = _get_conversation_state(account, thread_id)
+    stage = state.get("stage", _STAGE_INITIAL)
+    
+    if not state.get("messages_sent"):
+        return True
+    
+    if stage == _STAGE_CLOSED:
+        return False
+    
+    if time_since_last_activity > _MIN_TIME_FOR_REACTIVATION:
+        return True
+    
+    if stage == _STAGE_FOLLOWUP and time_since_last_activity > _MIN_TIME_FOR_FOLLOWUP:
+        return True
+    
+    if stage == _STAGE_ACTIVE:
+        return True
+    
+    return False
 
 
 def _read_followup_state(refresh: bool = False) -> Dict[str, dict]:
@@ -345,7 +866,7 @@ def _get_followup_entry(alias: str) -> Dict[str, object]:
 def _set_followup_entry(alias: str, updates: Dict[str, object]) -> None:
     alias = alias.strip()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inva�lido.")
         return
     state = _read_followup_state()
     aliases: Dict[str, dict] = state.setdefault("aliases", {})
@@ -401,14 +922,14 @@ def _followup_status_lines() -> List[str]:
         if accounts:
             preview_accounts = [f"@{acc}" for acc in accounts[:3]]
             if len(accounts) > 3:
-                preview_accounts.append(f"+{len(accounts) - 3}")
+                preview_accounts.append(f"a{len(accounts) - 3}")
             accounts_label = ", ".join(preview_accounts)
         else:
             accounts_label = "todas las cuentas del alias"
         prompt_preview = _preview_prompt(str(entry.get("prompt") or ""))
         status_label = "Activo" if enabled else "Inactivo"
         rows.append(
-            f" - {alias_label}: {status_label} • Cuentas: {accounts_label} • Prompt: {prompt_preview}"
+            f" - {alias_label}: {status_label} ��� Cuentas: {accounts_label} ��� Prompt: {prompt_preview}"
         )
     return rows
 
@@ -461,9 +982,25 @@ def _followup_enabled_entry_for(username: str) -> tuple[Optional[str], Dict[str,
     return None, {}
 
 
+def _followup_allowed_thread_ids(user: str) -> set[str]:
+    alias, entry = _followup_enabled_entry_for(user)
+    if not alias or not entry or not entry.get('enabled'):
+        return set()
+    history_source = entry.get('history')
+    history = history_source if isinstance(history_source, dict) else {}
+    account_norm = _normalize_username(user)
+    allowed: set[str] = set()
+    prefix = f'{account_norm}|'
+    for key in history.keys():
+        if not isinstance(key, str):
+            continue
+        if key.startswith(prefix):
+            allowed.add(key.split('|', 1)[1])
+    return allowed
+
 def _followup_configure_accounts() -> None:
     banner()
-    print(style_text("Seguimiento automático • Cuentas", color=Fore.CYAN, bold=True))
+    print(style_text("Seguimiento automa�tico ��� Cuentas", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _followup_status_lines():
         print(line)
@@ -479,14 +1016,14 @@ def _followup_configure_accounts() -> None:
     entry = _get_followup_entry(alias)
     stored_accounts = set(entry.get("accounts") or [])
     use_all = entry.get("enabled") and not stored_accounts
-    print("Seleccioná las cuentas que usarán seguimiento automático:")
+    print("Selecciona� las cuentas que usara�n seguimiento automa�tico:")
     for idx, account in enumerate(available, start=1):
         selected = use_all or account in stored_accounts
         marker = "[x]" if selected else "[ ]"
         print(f" {idx:>2}) {marker} @{account}")
     print("  0) Todas las cuentas del alias")
     choice = ask(
-        "Números separados por coma (vacío cancela, 0 = todas): "
+        "Na�meros separados por coma (vaca�o cancela, 0 = todas): "
     ).strip()
     if not choice:
         warn("No se realizaron cambios.")
@@ -497,7 +1034,7 @@ def _followup_configure_accounts() -> None:
         ok("Seguimiento habilitado para todas las cuentas del alias.")
         press_enter()
         return
-    tokens = re.split(r"[\s,;]+", choice)
+    tokens = re.split(r"[\s,;]a", choice)
     indices: List[int] = []
     for token in tokens:
         if not token:
@@ -509,7 +1046,7 @@ def _followup_configure_accounts() -> None:
             if idx not in indices:
                 indices.append(idx)
     if not indices:
-        warn("No se seleccionaron cuentas válidas.")
+        warn("No se seleccionaron cuentas validas.")
         press_enter()
         return
     selected_accounts = [available[i - 1] for i in indices]
@@ -520,7 +1057,7 @@ def _followup_configure_accounts() -> None:
 
 def _followup_configure_prompt() -> None:
     banner()
-    print(style_text("Seguimiento automático • Prompt", color=Fore.CYAN, bold=True))
+    print(style_text("Seguimiento automatico Prompt", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _followup_status_lines():
         print(line)
@@ -533,33 +1070,33 @@ def _followup_configure_prompt() -> None:
     print(style_text("Prompt actual:", color=Fore.BLUE))
     print(current_prompt.strip() or "(sin definir)")
     print(full_line(color=Fore.BLUE))
-    print("Elegí una opción:")
+    print("Elige una opcian:")
     print("  E) Editar prompt")
     print("  D) Restaurar valor predeterminado")
     print("  Enter) Cancelar")
-    action = ask("Acción: ").strip().lower()
+    action = ask("Accian: ").strip().lower()
     if not action:
         warn("No se realizaron cambios.")
         press_enter()
         return
     if action in {"d", "default", "predeterminado"}:
         _set_followup_entry(alias, {"prompt": _DEFAULT_FOLLOWUP_PROMPT})
-        ok("Se restauró el prompt predeterminado de seguimiento.")
+        ok("Se restauro el prompt predeterminado de seguimiento.")
         press_enter()
         return
     if action not in {"e", "editar"}:
-        warn("Opción inválida.")
+        warn("Opcian invalida.")
         press_enter()
         return
     print(
         style_text(
-            "Pegá el nuevo prompt y finalizá con una línea que diga <<<END>>>.",
+            "Pega el nuevo prompt y finaliza con una lanea que diga <<<END>>>.",
             color=Fore.CYAN,
         )
     )
     lines: List[str] = []
     while True:
-        line = ask("› ")
+        line = ask("Ǧ ")
         if line.strip() == "<<<END>>>":
             break
         lines.append(line.replace("\r", ""))
@@ -568,13 +1105,13 @@ def _followup_configure_prompt() -> None:
     if new_prompt:
         ok(f"Prompt actualizado. Longitud: {len(new_prompt)} caracteres.")
     else:
-        ok("Se eliminó el prompt personalizado. Se usará el valor predeterminado.")
+        ok("Se elimino� el prompt personalizado. Se usara� el valor predeterminado.")
     press_enter()
 
 
 def _followup_disable() -> None:
     banner()
-    print(style_text("Seguimiento automático • Desactivar", color=Fore.CYAN, bold=True))
+    print(style_text("Seguimiento automa�tico ��� Desactivar", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _followup_status_lines():
         print(line)
@@ -584,7 +1121,7 @@ def _followup_disable() -> None:
         return
     entry = _get_followup_entry(alias)
     if not entry or not entry.get("enabled"):
-        warn("El seguimiento ya está inactivo para ese alias.")
+        warn("El seguimiento ya esta� inactivo para ese alias.")
         press_enter()
         return
     _set_followup_entry(alias, {"enabled": False, "history": {}})
@@ -595,7 +1132,7 @@ def _followup_disable() -> None:
 def _followup_menu() -> None:
     while True:
         banner()
-        print(style_text("Seguimiento automático", color=Fore.CYAN, bold=True))
+        print(style_text("Seguimiento automa�tico", color=Fore.CYAN, bold=True))
         print(full_line(color=Fore.BLUE))
         for line in _followup_status_lines():
             print(line)
@@ -604,7 +1141,7 @@ def _followup_menu() -> None:
         print("2) Configurar prompt de seguimiento")
         print("3) Desactivar seguimiento para un alias")
         print("4) Volver")
-        choice = ask("Opción: ").strip()
+        choice = ask("Opcia�n: ").strip()
         if choice == "1":
             _followup_configure_accounts()
         elif choice == "2":
@@ -614,7 +1151,7 @@ def _followup_menu() -> None:
         elif choice == "4":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opcia�n inva�lida.")
             press_enter()
 
 
@@ -646,15 +1183,15 @@ def _followup_decision(
 
     system_prompt = (
         "Sos un asistente que decide si enviar un mensaje de seguimiento en Instagram. "
-        "Debés seguir estrictamente las reglas provistas y responder SOLO con un objeto "
-        "JSON con las claves 'enviar' (booleano), 'mensaje' (texto) y 'etapa' (número entero). "
-        "Si no corresponde enviar, devolvé enviar=false, mensaje=\"\" y usá la etapa actual."
+        "Deba�s seguir estrictamente las reglas provistas y responder SOLO con un objeto "
+        "JSON con las claves 'enviar' (booleano), 'mensaje' (texto) y 'etapa' (na�mero entero). "
+        "Si no corresponde enviar, devuelve� enviar=false, mensaje=\"\" y usa� la etapa actual."
     )
     context_lines = ["Prompt de seguimiento personalizado:", prompt_text, "", "Contexto:"]
     for key, value in metadata.items():
         context_lines.append(f"- {key}: {value}")
     context_lines.append("")
-    context_lines.append("Conversación completa (orden cronológico):")
+    context_lines.append("Conversacia�n completa (orden cronola�gico):")
     context_lines.append(conversation)
     user_content = "\n".join(context_lines)
 
@@ -690,7 +1227,7 @@ def _followup_decision(
         return None
     enviar = data.get("enviar")
     if isinstance(enviar, str):
-        enviar = enviar.strip().lower() in {"true", "1", "si", "sí", "yes"}
+        enviar = enviar.strip().lower() in {"true", "1", "si", "si�", "yes"}
     if not enviar:
         return None
     message = str(data.get("mensaje") or "").strip()
@@ -705,17 +1242,29 @@ def _followup_decision(
     return message, etapa_int
 
 
-def _process_followups(client, user: str, api_key: str) -> None:
+def _process_followups(
+    client,
+    user: str,
+    api_key: str,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+    threads_limit: int = 15,
+    followup_schedule_hours: Optional[List[int]] = None,
+) -> None:
+    _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
+    
     alias, entry = _followup_enabled_entry_for(user)
     if not alias or not entry or not entry.get("enabled"):
-        return
+        if not _FORCE_ALWAYS_FOLLOWUP:
+            return
+        alias = alias or ACTIVE_ALIAS or user
+        entry = _get_followup_entry(alias) if alias else {}
     prompt_text = str(entry.get("prompt") or _DEFAULT_FOLLOWUP_PROMPT)
     if not prompt_text.strip():
         return
-    history_source = entry.get("history")
-    history: Dict[str, dict] = dict(history_source) if isinstance(history_source, dict) else {}
     try:
-        threads = client.direct_threads(amount=15)
+        threads = client.list_threads(amount=threads_limit, filter_unread=False)
     except Exception as exc:  # pragma: no cover - depende de SDK externo
         logger.debug(
             "No se pudieron obtener hilos para seguimiento de @%s: %s",
@@ -725,8 +1274,7 @@ def _process_followups(client, user: str, api_key: str) -> None:
         )
         return
     now_ts = time.time()
-    account_norm = _normalize_username(user)
-    updated = False
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     for thread in threads:
         if STOP_EVENT.is_set():
             break
@@ -741,19 +1289,20 @@ def _process_followups(client, user: str, api_key: str) -> None:
         if unread_int > 0:
             continue
         participants = getattr(thread, "users", None)
-        recipient_id: Optional[int] = None
+        recipient_id: Optional[str] = None
         recipient_username = ""
         if isinstance(participants, list):
             for participant in participants:
-                pk = getattr(participant, "pk", None)
-                if pk and pk != client.user_id:
+                pk_val = getattr(participant, "pk", None) or getattr(participant, "id", None)
+                pk = str(pk_val) if pk_val is not None else ""
+                if pk and pk != str(client.user_id):
                     recipient_id = pk
-                    recipient_username = getattr(participant, "username", str(pk))
+                    recipient_username = getattr(participant, "username", pk)
                     break
         if not recipient_id:
             continue
         try:
-            messages = client.direct_messages(thread_id, amount=20)
+            messages = client.get_messages(thread, amount=20)
         except Exception as exc:  # pragma: no cover - depende de SDK externo
             logger.debug(
                 "No se pudieron obtener mensajes del hilo %s para seguimiento: %s",
@@ -764,8 +1313,16 @@ def _process_followups(client, user: str, api_key: str) -> None:
             continue
         if not messages:
             continue
+        latest_ts = None
+        for msg in messages:
+            msg_ts = _message_timestamp(msg)
+            if msg_ts is None:
+                continue
+            latest_ts = msg_ts if latest_ts is None else max(latest_ts, msg_ts)
+        if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
+            continue
         last_message = messages[0]
-        if last_message.user_id != client.user_id:
+        if not _same_user_id(getattr(last_message, 'user_id', ''), client.user_id):
             continue
 
         def _msg_ts(msg: object) -> Optional[float]:
@@ -780,94 +1337,215 @@ def _process_followups(client, user: str, api_key: str) -> None:
         last_outbound_ts = _msg_ts(last_message)
         if last_outbound_ts and now_ts - last_outbound_ts < 60:
             continue
+        if last_outbound_ts and now_ts - last_outbound_ts < _MIN_TIME_FOR_FOLLOWUP:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "last_bot_message_too_recent",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                    "seconds_since_last_sent": int(now_ts - last_outbound_ts),
+                }
+            )
+            continue
+
+        outbound_ts_values = [
+            _msg_ts(msg)
+            for msg in messages
+            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and _msg_ts(msg) is not None
+        ]
+        first_outbound_ts = min(outbound_ts_values) if outbound_ts_values else None
+        engine_state = _get_conversation_state(user, thread_id)
+        if first_outbound_ts is None:
+            first_outbound_ts = engine_state.get("first_message_sent_at")
 
         inbound_messages = [
             msg
             for msg in messages
-            if msg.user_id != client.user_id and isinstance(getattr(msg, "text", None), str)
+            if not _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and isinstance(getattr(msg, "text", None), str)
         ]
-        if not inbound_messages:
-            continue
-        last_inbound = inbound_messages[0]
-        last_inbound_ts = _msg_ts(last_inbound)
-        if last_inbound_ts and now_ts - last_inbound_ts < 60:
-            continue
+        has_inbound = bool(inbound_messages)
+        last_inbound = inbound_messages[0] if has_inbound else None
+        last_inbound_ts = _msg_ts(last_inbound) if last_inbound else None
+        if has_inbound:
+            if last_inbound_ts and now_ts - last_inbound_ts < 60:
+                continue
 
-        history_key = f"{account_norm}|{thread_id}"
-        record = history.get(history_key, {})
-        last_eval_ts = record.get("last_eval_ts")
         try:
-            last_eval_float = float(last_eval_ts)
+            thread_messages = client.get_messages(thread, amount=50)
+            if thread_messages:
+                outbound = [
+                    m for m in thread_messages
+                    if _same_user_id(getattr(m, "user_id", ""), client.user_id)
+                ]
+                inbound = [
+                    m for m in thread_messages
+                    if not _same_user_id(getattr(m, "user_id", ""), client.user_id)
+                ]
+                
+                if outbound:
+                    first_outbound_ts = min(_message_timestamp(m) or now_ts for m in outbound)
+                    last_outbound_ts = max(_message_timestamp(m) or now_ts for m in outbound)
+                    conv_state = _get_conversation_state(user, thread_id)
+                    if not conv_state.get("first_message_sent_at"):
+                        _update_conversation_state(user, thread_id, {"first_message_sent_at": first_outbound_ts}, recipient_username)
         except Exception:
-            last_eval_float = 0.0
-        if now_ts - last_eval_float < _FOLLOWUP_MIN_INTERVAL:
+            pass
+        
+        conv_state = _get_conversation_state(user, thread_id)
+        last_sent_at = conv_state.get("last_message_sent_at")
+        last_received_at = conv_state.get("last_message_received_at")
+        last_sender = conv_state.get("last_message_sender")
+        current_followup_stage = conv_state.get("followup_stage", 0)
+        
+        if last_sender == "lead" and last_received_at:
+            time_since_last_received = now_ts - last_received_at
+            if time_since_last_received < 60:
+                continue
+        
+        followup_stage, time_since_initial = _determine_followup_stage_from_initial_message(
+            user, thread_id, now_ts, followup_schedule_hours
+        )
+        
+        if followup_stage is None:
+            continue
+        
+        last_followup_sent_at = conv_state.get("last_followup_sent_at")
+        if last_followup_sent_at:
+            time_since_last_followup = now_ts - last_followup_sent_at
+            if time_since_last_followup < _FOLLOWUP_MIN_INTERVAL:
+                continue
+            schedule = [h for h in (followup_schedule_hours or []) if isinstance(h, int) and h > 0]
+            schedule = sorted(set(schedule))
+            if schedule and followup_stage:
+                if followup_stage > 1 and len(schedule) >= followup_stage:
+                    min_gap_hours = schedule[followup_stage - 1] - schedule[followup_stage - 2]
+                    if min_gap_hours > 0 and time_since_last_followup < min_gap_hours * 3600:
+                        continue
+        
+        last_eval_ts = conv_state.get("last_eval_ts")
+        if last_eval_ts and now_ts - last_eval_ts < _FOLLOWUP_MIN_INTERVAL:
             continue
 
-        followups_sent = int(record.get("count", 0) or 0)
-        last_followup_ts = record.get("last_sent_ts")
-        try:
-            last_followup_float = float(last_followup_ts)
-        except Exception:
-            last_followup_float = 0.0
-
+        messages_sent = conv_state.get("messages_sent", [])
+        followups_sent = len([m for m in messages_sent if m.get("is_followup", False)])
+        
         conversation_lines: List[str] = []
         for msg in reversed(messages[:40]):
-            text = getattr(msg, "text", "") or ""
-            prefix = "YO" if msg.user_id == client.user_id else "ELLOS"
-            conversation_lines.append(f"{prefix}: {text}")
+            text_value = getattr(msg, "text", "") or ""
+            prefix = "YO" if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) else "ELLOS"
+            conversation_lines.append(f"{prefix}: {text_value}")
         conversation_text = "\n".join(conversation_lines[-40:])
 
+        time_since_last_followup = (now_ts - conv_state.get("last_followup_sent_at")) if conv_state.get("last_followup_sent_at") else None
+        time_since_last_sent = (now_ts - last_sent_at) if last_sent_at else None
+        time_since_last_received = (now_ts - last_received_at) if last_received_at else None
+        first_sent_at = conv_state.get("first_message_sent_at")
+        hours_since_initial = (time_since_initial / 3600.0) if time_since_initial else None
+        
         metadata = {
             "alias": alias,
             "cuenta_origen": f"@{user}",
             "lead": recipient_username or str(recipient_id),
+            "etapa_actual": followup_stage,
             "seguimientos_previos": followups_sent,
-            "segundos_desde_ultimo_seguimiento": int(now_ts - last_followup_float)
-            if last_followup_float
-            else "nunca",
-            "segundos_desde_ultima_respuesta": int(now_ts - last_inbound_ts)
-            if last_inbound_ts
-            else "desconocido",
-            "segundos_desde_ultimo_mensaje_enviado": int(now_ts - last_outbound_ts)
-            if last_outbound_ts
-            else "desconocido",
+            "ultimo_mensaje_de": last_sender or "desconocido",
+            "horas_desde_mensaje_inicial": round(hours_since_initial, 1) if hours_since_initial else "desconocido",
+            "horas_desde_ultimo_seguimiento": round(time_since_last_followup / 3600.0, 1) if time_since_last_followup else "nunca",
+            "horas_desde_ultimo_mensaje_enviado": round(time_since_last_sent / 3600.0, 1) if time_since_last_sent else "nunca",
+            "horas_desde_ultima_respuesta": round(time_since_last_received / 3600.0, 1) if time_since_last_received else "desconocido",
+            "segundos_desde_mensaje_inicial": int(time_since_initial) if time_since_initial else "desconocido",
+            "segundos_desde_ultimo_seguimiento": int(time_since_last_followup) if time_since_last_followup else "nunca",
+            "segundos_desde_ultima_respuesta": int(time_since_last_received) if time_since_last_received else "desconocido",
+            "segundos_desde_ultimo_mensaje_enviado": int(time_since_last_sent) if time_since_last_sent else "desconocido",
         }
+        
+        _update_conversation_state(user, thread_id, {"last_eval_ts": now_ts}, recipient_username)
+        
         decision = _followup_decision(api_key, prompt_text, conversation_text, metadata)
-        record["last_eval_ts"] = now_ts
         if not decision:
-            history[history_key] = record
-            updated = True
             continue
+            
         message_text, stage = decision
+        
+        stage_int = followup_stage
+        
+        can_send, reason = _can_send_message(
+            user,
+            thread_id,
+            message_text,
+            force=_FORCE_ALWAYS_FOLLOWUP,
+        )
+        if not can_send:
+            logger.info(
+                "Omitiendo seguimiento para @%s → @%s: %s",
+                user,
+                recipient_username,
+                reason,
+            )
+            continue
+
+        logger.info(
+            "Decision seguimiento @%s thread=%s stage=%s reason=%s",
+            user,
+            thread_id,
+            stage_int,
+            reason,
+        )
+        
+        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
         try:
-            dm = client.direct_send(message_text, [recipient_id])
-            message_id = getattr(dm, "id", "")
+            message_id = client.send_message(thread, message_text)
         except Exception as exc:  # pragma: no cover - depende de SDK externo
             logger.warning(
-                "No se pudo enviar seguimiento automático a %s desde @%s: %s",
+                "No se pudo enviar seguimiento automatico a %s desde @%s: %s",
                 recipient_username or recipient_id,
                 user,
                 exc,
                 exc_info=False,
             )
-            record["last_error"] = str(exc)
-            history[history_key] = record
-            updated = True
             continue
-        record["count"] = stage
-        record["last_sent_ts"] = now_ts
-        record["last_message_id"] = message_id or ""
-        record.pop("last_error", None)
-        history[history_key] = record
-        updated = True
+        if not message_id:
+            logger.warning(
+                "Seguimiento no verificado para @%s -> @%s (thread %s)",
+                user,
+                recipient_username or recipient_id,
+                thread_id,
+            )
+            continue
+        
+        _record_message_sent(
+            user,
+            thread_id,
+            message_text,
+            str(message_id),
+            recipient_username,
+            is_followup=True,
+            followup_stage=stage_int,
+        )
+        _update_conversation_state(
+            user,
+            thread_id,
+            {
+                "stage": _STAGE_FOLLOWUP,
+            },
+            recipient_username,
+        )
+        
+        logger.info(
+            "Seguimiento enviado por @%s → @%s: etapa %d (último mensaje del bot hace %.1f horas)",
+            user,
+            recipient_username,
+            stage_int,
+            (now_ts - last_sent_at) / 3600.0 if last_sent_at else 0,
+        )
         print(
             style_text(
-                f"[Seguimiento] @{user} → @{recipient_username}: mensaje etapa {stage}",
+                f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}",
                 color=Fore.MAGENTA,
             )
         )
-    if updated:
-        _set_followup_entry(alias, {"history": history})
 
 _POSITIVE_KEYWORDS = (
     "si",
@@ -884,13 +1562,13 @@ _NEGATIVE_KEYWORDS = (
 _INFO_KEYWORDS = (
     "info",
     "informacion",
-    "información",
+    "informacia�n",
     "detalle",
     "detalles",
     "precio",
     "costo",
     "mas info",
-    "más info",
+    "ma�s info",
 )
 _CALL_KEYWORDS = (
     "agenda",
@@ -900,7 +1578,7 @@ _CALL_KEYWORDS = (
     "cita",
     "call",
     "reunion",
-    "reunión",
+    "reunia�n",
 )
 _DEFAULT_LEAD_TAG = "Lead sin clasificar"
 
@@ -949,7 +1627,7 @@ def _safe_timezone(label: str):
 def _print_response_summary(
     index: int, sender: str, recipient: str, success: bool, extra: Optional[str] = None
 ) -> None:
-    icon = "✔️" if success else "❌"
+    icon = "ԣ����" if success else "���"
     status = "OK" if success else "ERROR"
     print(
         f"[{icon}] Respuesta {index} | Emisor: {_format_handle(sender)} | "
@@ -994,6 +1672,12 @@ def _safe_unread_count(thread: object) -> Optional[int]:
         return None
 
 
+
+
+def _same_user_id(a: object, b: object) -> bool:
+    return str(a) == str(b)
+
+
 def _message_timestamp(msg: object) -> Optional[float]:
     ts_obj = getattr(msg, "timestamp", None)
     if isinstance(ts_obj, datetime):
@@ -1003,6 +1687,47 @@ def _message_timestamp(msg: object) -> Optional[float]:
     except Exception:
         return None
 
+
+def _random_delay_seconds(delay_min: float, delay_max: float) -> float:
+    try:
+        min_value = float(delay_min)
+    except Exception:
+        min_value = 0.0
+    try:
+        max_value = float(delay_max)
+    except Exception:
+        max_value = min_value
+    if max_value < min_value:
+        max_value = min_value
+    if max_value <= 0:
+        return 0.0
+    if min_value <= 0:
+        min_value = 0.0
+    return random.uniform(min_value, max_value)
+
+def _sleep_between_replies_sync(delay_min: float, delay_max: float, label: str = 'reply_delay') -> None:
+    delay = _random_delay_seconds(delay_min, delay_max)
+    if delay <= 0:
+        return
+    logger.info('%s sleep=%.1fs', label, delay)
+    sleep_with_stop(delay)
+
+def _parse_followup_schedule_hours(value: str, default: Optional[List[int]] = None) -> List[int]:
+    raw = (value or "").strip()
+    if not raw:
+        return list(default or [])
+    parts = [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
+    hours: List[int] = []
+    for item in parts:
+        try:
+            num = int(float(item))
+        except Exception:
+            continue
+        if num > 0:
+            hours.append(num)
+    if not hours:
+        return list(default or [])
+    return sorted(set(hours))
 
 def _latest_inbound_message(messages: List[object], client_user_id: object) -> Optional[object]:
     candidates = [msg for msg in messages if getattr(msg, "user_id", None) != client_user_id]
@@ -1016,20 +1741,50 @@ def _latest_inbound_message(messages: List[object], client_user_id: object) -> O
         return scored[-1][2]
     return candidates[-1]
 
+def _latest_message(messages: List[object]) -> Optional[object]:
+    if not messages:
+        return None
+    scored = []
+    for idx, msg in enumerate(messages):
+        scored.append((_message_timestamp(msg), idx, msg))
+    if any(score[0] is not None for score in scored):
+        scored.sort(key=lambda item: ((item[0] is not None), item[0] or 0, item[1]))
+        return scored[-1][2]
+    return messages[-1]
+
 
 def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
+    collected: List[object] = []
     try:
-        threads = client.direct_threads(selected_filter="unread", amount=amount)
+        threads = client.list_threads(amount=amount, filter_unread=True)
         if threads:
-            return threads
+            collected.extend(threads)
     except TypeError:
         pass
     except Exception:
         pass
     try:
-        return client.direct_threads(amount=amount)
+        threads = client.list_threads(amount=amount, filter_unread=False)
+        if threads:
+            collected.extend(threads)
     except Exception:
+        pass
+    if not collected:
         return []
+    seen_ids: set[str] = set()
+    deduped: List[object] = []
+    for thread in collected:
+        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
+        if thread_id_val is None:
+            continue
+        thread_id = str(thread_id_val)
+        if thread_id in seen_ids:
+            continue
+        seen_ids.add(thread_id)
+        deduped.append(thread)
+        if len(deduped) >= amount:
+            break
+    return deduped
 
 
 def _contains_token(text: str, token: str) -> bool:
@@ -1059,24 +1814,35 @@ def _classify_response(message: str) -> str | None:
     return None
 
 
-def _resolve_username(client, thread, target_user_id: int) -> str:
+def _resolve_username(client, thread, target_user_id: str) -> str:
+    target = str(target_user_id) if target_user_id is not None else ""
+    client_id = str(getattr(client, "user_id", "") or "")
     try:
-        for participant in getattr(thread, "users", []) or []:
-            pk = getattr(participant, "pk", None) or getattr(participant, "id", None)
-            if pk == target_user_id:
+        participants = getattr(thread, "users", []) or []
+        if participants:
+            for participant in participants:
+                pk = getattr(participant, "pk", None) or getattr(participant, "id", None)
+                pk_str = str(pk) if pk is not None else ""
+                if pk_str and pk_str == target:
+                    username = getattr(participant, "username", None)
+                    if username:
+                        return username
+            for participant in participants:
+                pk = getattr(participant, "pk", None) or getattr(participant, "id", None)
+                pk_str = str(pk) if pk is not None else ""
+                username = getattr(participant, "username", None)
+                if username and pk_str and pk_str != client_id:
+                    return username
+            for participant in participants:
                 username = getattr(participant, "username", None)
                 if username:
                     return username
     except Exception:
         pass
-    try:
-        info = client.user_info(target_user_id)
-        username = getattr(info, "username", None)
-        if username:
-            return username
-    except Exception:
-        pass
-    return str(target_user_id)
+    title = getattr(thread, "title", None)
+    if title:
+        return str(title)
+    return "unknown"
 
 
 @dataclass
@@ -1107,60 +1873,93 @@ class BotStats:
         self.accounts.add(account)
 
 
-def _client_for(username: str):
-    global _AUTORESPONDER_STUB_WARNED
-    account = get_account(username)
-    try:
-        cl = get_instagram_client(account=account, engine="instagrapi")
-    except Exception as exc:
-        logger.warning(
-            "Instagrapi no disponible para auto-responder; usando engine default: %s",
-            exc,
-            exc_info=False,
-        )
-        cl = get_instagram_client(account=account)
-    if (
-        cl.__class__.__name__ == "InstagramStubClient"
-        and not _AUTORESPONDER_STUB_WARNED
-    ):
-        _AUTORESPONDER_STUB_WARNED = True
-        warn(
-            "Auto-responder en modo stub: no se enviaran mensajes reales. "
-            "Configura INSTAGRAM_ENGINE=instagrapi y guarda sesion."
-        )
-    binding = None
-    try:
-        binding = apply_proxy_to_client(cl, username, account, reason="autoresponder")
-    except Exception as exc:
-        if account and account.get("proxy_url"):
-            record_proxy_failure(username, exc)
-            raise RuntimeError(f"El proxy de @{username} no respondió: {exc}") from exc
-        logger.warning("Proxy no disponible para @%s: %s", username, exc, exc_info=False)
+def _playwright_storage_state_path(username: str) -> Path:
+    return PlaywrightDMClient.storage_state_path(username)
 
+
+def _proxy_payload_for_playwright(account: Optional[Dict]) -> Optional[Dict[str, str]]:
+    if not account:
+        return None
+    if account.get("proxy"):
+        return account.get("proxy")
+    payload = {
+        "url": account.get("proxy_url"),
+        "username": account.get("proxy_user"),
+        "password": account.get("proxy_pass"),
+    }
     try:
-        load_into(cl, username)
-    except FileNotFoundError as exc:
-        mark_connected(username, False)
-        raise RuntimeError(f"No hay sesión para {username}.") from exc
+        return build_proxy(payload)
+    except Exception:
+        return None
+
+
+def _has_playwright_session(username: str, *, account: Optional[Dict] = None) -> bool:
+    if not username:
+        return False
+    proxy = _proxy_payload_for_playwright(account)
+    try:
+        ok, reason = check_session(username, proxy=proxy, headless=True)
     except Exception as exc:
-        if binding and should_retry_proxy(exc):
-            record_proxy_failure(username, exc)
+        logger.warning("Playwright session check failed for @%s: %s", username, exc)
+        return False
+    logger.info("Playwright session check for @%s: %s (%s)", username, ok, reason)
+    return bool(ok)
+
+
+def _prompt_playwright_login(username: str, *, alias: Optional[str] = None) -> bool:
+    account = get_account(username)
+    if not account:
+        warn("No existe la cuenta indicada.")
+        return False
+
+    stored_password = _account_password(account).strip()
+    if not stored_password:
+        stored_password = getpass.getpass(f"Password @{username}: ")
+    if not stored_password:
+        warn("Se cancelo el inicio de sesion.")
+        return False
+
+    payload = dict(account)
+    payload["username"] = username
+    payload["password"] = stored_password
+    try:
+        result = login_account_playwright(payload, alias or username, headful=True)
+    except Exception as exc:
+        warn(f"No se pudo iniciar login con Playwright: {exc}")
+        return False
+
+    ok = (result.get("status") == "ok")
+    if ok:
+        try:
+            _store_account_password(username, stored_password)
+        except Exception:
+            pass
+    return ok
+
+
+def _client_for(username: str):
+    account = get_account(username)
+    if not account:
+        raise RuntimeError(f"No se encontro la cuenta {username}.")
+    logger.info("autoresponder_dm_engine=playwright account=@%s", username)
+    client = PlaywrightDMClient(account=account, headless=True)
+    try:
+        client.ensure_ready()
+    except Exception:
+        try:
+            client.close()
+        except Exception:
+            pass
         mark_connected(username, False)
         raise
-    if not has_valid_session_settings(cl):
-        mark_connected(username, False)
-        raise RuntimeError(
-            f"La sesión guardada para {username} no contiene credenciales activas. Iniciá sesión nuevamente."
-        )
-
     mark_connected(username, True)
-    return cl
+    return client
 
 
 def _ensure_session(username: str) -> bool:
     try:
-        _client_for(username)
-        return True
+        account = get_account(username)
+        return _has_playwright_session(username, account=account)
     except Exception:
         return False
 
@@ -1179,10 +1978,10 @@ def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
             temperature=0.6,
             max_output_tokens=180,
         )
-        return (msg.output_text or "").strip() or "Gracias por tu mensaje 🙌 ¿Cómo te puedo ayudar?"
+        return (msg.output_text or "").strip() or "Gracias por tu mensaje ���� -aCa�mo te puedo ayudar?"
     except Exception as e:  # pragma: no cover - depende de red externa
         logger.warning("Fallo al generar respuesta con OpenAI: %s", e, exc_info=False)
-        return "Gracias por tu mensaje 🙌 ¿Cómo te puedo ayudar?"
+        return "Gracias por tu mensaje ���� -aCa�mo te puedo ayudar?"
 
 
 def _choose_targets(alias: str) -> list[str]:
@@ -1217,43 +2016,40 @@ def _choose_targets(alias: str) -> list[str]:
     return deduped
 
 
-def _filter_valid_sessions(targets: list[str]) -> list[str]:
+def _filter_valid_sessions(targets: list[str], *, alias: Optional[str] = None) -> list[str]:
     verified: list[str] = []
     needing_login: list[tuple[str, str]] = []
     for user in targets:
-        if not has_session(user):
-            needing_login.append((user, "sin sesión guardada"))
+        account = get_account(user)
+        if not account:
+            needing_login.append((user, "cuenta no encontrada"))
+            continue
+        if not _playwright_storage_state_path(user).exists():
+            needing_login.append((user, "sin sesion guardada"))
             continue
         if not _ensure_session(user):
-            needing_login.append((user, "sesión expirada"))
+            needing_login.append((user, "sesion expirada"))
             continue
         verified.append(user)
 
     if needing_login:
         remaining: list[tuple[str, str]] = []
         for user, reason in needing_login:
-            if auto_login_with_saved_password(user) and _ensure_session(user):
-                if user not in verified:
-                    verified.append(user)
-            else:
-                remaining.append((user, reason))
+            remaining.append((user, reason))
 
         if remaining:
-            print("\nLas siguientes cuentas necesitan volver a iniciar sesión:")
+            print("\nLas siguientes cuentas necesitan volver a iniciar sesion:")
             for user, reason in remaining:
                 print(f" - @{user}: {reason}")
-            if ask("¿Iniciar sesión ahora? (s/N): ").strip().lower() == "s":
+            if ask("-aIniciar sesion ahora? (s/N): ").strip().lower() == "s":
                 for user, _ in remaining:
-                    if auto_login_with_saved_password(user) and _ensure_session(user):
-                        if user not in verified:
-                            verified.append(user)
-                        continue
-                    if prompt_login(user, interactive=False) and _ensure_session(user):
+                    if _prompt_playwright_login(user, alias=alias) and _ensure_session(user):
                         if user not in verified:
                             verified.append(user)
             else:
-                warn("Se omitieron las cuentas sin sesión válida.")
+                warn("Se omitieron las cuentas sin sesion valida.")
     return verified
+
 
 
 def _mask_key(value: str) -> str:
@@ -1261,8 +2057,8 @@ def _mask_key(value: str) -> str:
     if not value:
         return ""
     if len(value) <= 6:
-        return value[:2] + "…"
-    return f"{value[:4]}…{value[-2:]}"
+        return value[:2] + "�Ǫ"
+    return f"{value[:4]}�Ǫ{value[-2:]}"
 
 
 def _system_prompt_file(alias: str | None = None) -> Path:
@@ -1312,64 +2108,69 @@ def _load_preferences() -> tuple[str, str]:
     return api_key, prompt
 
 
+def _read_state_json(path: Path, default: Dict[str, dict]) -> Dict[str, dict]:
+    data: Dict[str, dict] = dict(default)
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data.update(loaded)
+        except Exception:
+            data = dict(default)
+    return data
+
+
+def _write_state_json(path: Path, data: Dict[str, dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _ensure_alias_container(data: Dict[str, dict]) -> Dict[str, dict]:
+    if "aliases" not in data or not isinstance(data["aliases"], dict):
+        data["aliases"] = {}
+    return data
+
+
 def _read_gohighlevel_state(refresh: bool = False) -> Dict[str, dict]:
     global _GOHIGHLEVEL_STATE
     if refresh or _GOHIGHLEVEL_STATE is None:
-        data: Dict[str, dict] = {"aliases": {}}
-        if _GOHIGHLEVEL_FILE.exists():
-            try:
-                loaded = json.loads(_GOHIGHLEVEL_FILE.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    data.update(loaded)
-            except Exception:
-                data = {"aliases": {}}
-        if "aliases" not in data or not isinstance(data["aliases"], dict):
-            data["aliases"] = {}
-        _GOHIGHLEVEL_STATE = data
+        data = _read_state_json(_GOHIGHLEVEL_FILE, {"aliases": {}})
+        _GOHIGHLEVEL_STATE = _ensure_alias_container(data)
     return _GOHIGHLEVEL_STATE
 
 
 def _write_gohighlevel_state(state: Dict[str, dict]) -> None:
     state.setdefault("aliases", {})
-    _GOHIGHLEVEL_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _GOHIGHLEVEL_FILE.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _write_state_json(_GOHIGHLEVEL_FILE, state)
     _read_gohighlevel_state(refresh=True)
 
 
 def _read_google_calendar_state(refresh: bool = False) -> Dict[str, dict]:
     global _GOOGLE_STATE
     if refresh or _GOOGLE_STATE is None:
-        data: Dict[str, dict] = {"aliases": {}}
-        if _GOOGLE_CALENDAR_FILE.exists():
-            try:
-                loaded = json.loads(_GOOGLE_CALENDAR_FILE.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    data.update(loaded)
-            except Exception:
-                data = {"aliases": {}}
-        if "aliases" not in data or not isinstance(data["aliases"], dict):
-            data["aliases"] = {}
-        _GOOGLE_STATE = data
+        data = _read_state_json(_GOOGLE_CALENDAR_FILE, {"aliases": {}})
+        _GOOGLE_STATE = _ensure_alias_container(data)
     return _GOOGLE_STATE
 
 
 def _write_google_calendar_state(state: Dict[str, dict]) -> None:
     state.setdefault("aliases", {})
-    _GOOGLE_CALENDAR_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _GOOGLE_CALENDAR_FILE.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _write_state_json(_GOOGLE_CALENDAR_FILE, state)
     _read_google_calendar_state(refresh=True)
 
 
+def _normalize_key(value: str) -> str:
+    return value.strip().lower()
+
+
 def _normalize_alias_key(alias: str) -> str:
-    return alias.strip().lower()
+    return _normalize_key(alias)
 
 
 def _normalize_lead_id(lead: str) -> str:
-    return lead.strip().lower()
+    return _normalize_key(lead)
 
 
 def _sanitize_location_ids(raw: object) -> List[str]:
@@ -1377,7 +2178,7 @@ def _sanitize_location_ids(raw: object) -> List[str]:
         return []
     tokens: List[str] = []
     if isinstance(raw, str):
-        parts = re.split(r"[\s,;]+", raw)
+        parts = re.split(r"[\s,;]a", raw)
         tokens = [part.strip() for part in parts if part.strip()]
     elif isinstance(raw, (list, tuple, set)):
         for item in raw:
@@ -1426,7 +2227,7 @@ def _get_gohighlevel_entry(alias: str) -> Dict[str, dict]:
 def _set_gohighlevel_entry(alias: str, updates: Dict[str, object]) -> None:
     alias = alias.strip()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inva�lido.")
         return
     state = _read_gohighlevel_state()
     aliases: Dict[str, dict] = state.setdefault("aliases", {})
@@ -1455,7 +2256,7 @@ def _get_google_calendar_entry(alias: str) -> Dict[str, object]:
     if isinstance(entry, dict):
         entry.setdefault("alias", alias.strip())
         entry.setdefault("scheduled", {})
-        entry.setdefault("event_name", "{{username}} - Sistema de adquisición con IA")
+        entry.setdefault("event_name", "{{username}} - Sistema de adquisicia�n con IA")
         entry.setdefault("duration_minutes", 30)
         entry.setdefault("timezone", _default_timezone_label())
         entry.setdefault("auto_meet", True)
@@ -1467,7 +2268,7 @@ def _get_google_calendar_entry(alias: str) -> Dict[str, object]:
 def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
     alias = alias.strip()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inva�lido.")
         return
     state = _read_google_calendar_state()
     aliases: Dict[str, dict] = state.setdefault("aliases", {})
@@ -1475,7 +2276,7 @@ def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
     entry = aliases.get(key, {})
     entry.setdefault("alias", alias)
     entry.setdefault("scheduled", {})
-    entry.setdefault("event_name", "{{username}} - Sistema de adquisición con IA")
+    entry.setdefault("event_name", "{{username}} - Sistema de adquisicia�n con IA")
     entry.setdefault("duration_minutes", 30)
     entry.setdefault("timezone", _default_timezone_label())
     entry.setdefault("auto_meet", True)
@@ -1495,7 +2296,7 @@ def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
                 _ = _safe_timezone(tz_value)
                 normalized_updates[key_name] = tz_value
             except Exception:
-                warn("Zona horaria inválida; se mantiene el valor previo.")
+                warn("Zona horaria inva�lida; se mantiene el valor previo.")
                 continue
         elif key_name == "schedule_prompt":
             normalized_updates[key_name] = str(value)
@@ -1509,10 +2310,10 @@ def _set_google_calendar_entry(alias: str, updates: Dict[str, object]) -> None:
 def _mask_google_calendar_status(entry: Dict[str, object]) -> str:
     connected = bool(entry.get("connected"))
     enabled = bool(entry.get("enabled"))
-    status = "🟢 Activo" if connected and enabled else "🟡 Conectado" if connected else "⚪ Inactivo"
+    status = "���� Activo" if connected and enabled else "���� Conectado" if connected else "�ܬ Inactivo"
     summary = entry.get("event_name") or "(sin nombre)"
     tz_label = entry.get("timezone") or "UTC"
-    return f"{status} • Evento: {summary} • TZ: {tz_label}"
+    return f"{status} ��� Evento: {summary} ��� TZ: {tz_label}"
 
 
 def _google_calendar_status_lines() -> List[str]:
@@ -1787,7 +2588,7 @@ def _google_calendar_credentials_from_entry(
             client_secret=str(entry.get("client_secret") or "") or None,
             scopes=[_GOOGLE_SCOPE],
         )
-    except Exception as exc:  # pragma: no cover - depende de librerías externas
+    except Exception as exc:  # pragma: no cover - depende de librera�as externas
         logger.warning(
             "No se pudieron preparar credenciales de Google Calendar: %s",
             exc,
@@ -1822,7 +2623,7 @@ def _google_calendar_create_event_via_service(
         return None
     try:
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         logger.warning(
             "No se pudo inicializar el cliente de Google Calendar: %s",
             exc,
@@ -1838,7 +2639,7 @@ def _google_calendar_create_event_via_service(
             .insert(calendarId="primary", body=payload, **kwargs)
             .execute()
         )
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         logger.warning(
             "Error al crear evento de Google Calendar mediante googleapiclient: %s",
             exc,
@@ -1927,7 +2728,7 @@ def _google_calendar_fetch_event_via_service(
         return None
     try:
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         logger.warning(
             "No se pudo inicializar el cliente de Google Calendar para leer evento: %s",
             exc,
@@ -1940,7 +2741,7 @@ def _google_calendar_fetch_event_via_service(
             .get(calendarId="primary", eventId=event_id)
             .execute()
         )
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         logger.warning(
             "Error al obtener evento de Google Calendar mediante googleapiclient: %s",
             exc,
@@ -2058,7 +2859,7 @@ def _google_calendar_update_event_via_service(
         return None
     try:
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         logger.warning(
             "No se pudo inicializar el cliente de Google Calendar para actualizar evento: %s",
             exc,
@@ -2074,7 +2875,7 @@ def _google_calendar_update_event_via_service(
             .patch(calendarId="primary", eventId=event_id, body=payload, **kwargs)
             .execute()
         )
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         logger.warning(
             "Error al actualizar evento de Google Calendar mediante googleapiclient: %s",
             exc,
@@ -2143,7 +2944,7 @@ def _google_calendar_update_event_via_requests(
     if response.status_code not in {200}:  # 200 OK al actualizar
         if response.status_code == 404:
             logger.info(
-                "El evento de Google Calendar no existe; se creará uno nuevo. (%s)",
+                "El evento de Google Calendar no existe; se creara� uno nuevo. (%s)",
                 event_id,
             )
             return None
@@ -2243,14 +3044,14 @@ def _google_calendar_lead_qualifies(
 
     system_prompt = (
         prompt_text
-        + "\n\nResponde únicamente con 'SI' o 'NO' indicando si se debe crear un evento en Google Calendar."
+        + "\n\nResponde a�nicamente con 'SI' o 'NO' indicando si se debe crear un evento en Google Calendar."
     )
     context_lines = [
         f"Estado detectado: {status or 'desconocido'}",
-        "Teléfonos detectados: "
-        + (", ".join(phone_numbers) if phone_numbers else "(sin teléfono)"),
+        "Tela�fonos detectados: "
+        + (", ".join(phone_numbers) if phone_numbers else "(sin tela�fono)"),
         f"Fecha/hora detectada: {meeting_dt.isoformat()}",
-        "Conversación completa:",
+        "Conversacia�n completa:",
         conversation,
     ]
     user_content = "\n".join(context_lines)
@@ -2280,7 +3081,7 @@ def _google_calendar_lead_qualifies(
 def _mask_gohighlevel_status(entry: Dict[str, object]) -> str:
     api_key = str(entry.get("api_key") or "")
     enabled = bool(entry.get("enabled"))
-    status = "🟢 Activo" if enabled else "⚪ Inactivo"
+    status = "���� Activo" if enabled else "�ܬ Inactivo"
     location_ids = _sanitize_location_ids(entry.get("location_ids"))
     locations_text = (
         f"{len(location_ids)} Location ID(s)"
@@ -2288,8 +3089,8 @@ def _mask_gohighlevel_status(entry: Dict[str, object]) -> str:
         else "Location IDs: (sin definir)"
     )
     return (
-        f"{status} • API Key: {_mask_key(api_key) or '(sin definir)'}"
-        f" • {locations_text}"
+        f"{status} ��� API Key: {_mask_key(api_key) or '(sin definir)'}"
+        f" ��� {locations_text}"
     )
 
 
@@ -2392,13 +3193,13 @@ def _gohighlevel_lead_qualifies(
 
     system_prompt = (
         prompt_text
-        + "\n\nResponde únicamente con 'SI' o 'NO' indicando si se debe enviar el lead a GoHighLevel."
+        + "\n\nResponde a�nicamente con 'SI' o 'NO' indicando si se debe enviar el lead a GoHighLevel."
     )
     context_lines = [
         f"Estado detectado: {status or 'desconocido'}",
-        "Teléfonos detectados: "
-        + (", ".join(phone_numbers) if phone_numbers else "(sin teléfono)"),
-        "Conversación completa:",
+        "Tela�fonos detectados: "
+        + (", ".join(phone_numbers) if phone_numbers else "(sin tela�fono)"),
+        "Conversacia�n completa:",
         conversation,
     ]
     user_content = "\n".join(context_lines)
@@ -2427,7 +3228,7 @@ def _gohighlevel_lead_qualifies(
 
 def _require_requests() -> bool:
     if requests is None:  # pragma: no cover - entorno sin dependencia
-        warn("La librería 'requests' no está disponible. Instalála para usar GoHighLevel.")
+        warn("La librera�a 'requests' no esta� disponible. Instala�la para usar GoHighLevel.")
         press_enter()
         return False
     return True
@@ -2436,7 +3237,7 @@ def _require_requests() -> bool:
 def _gohighlevel_select_alias() -> Optional[str]:
     alias = _prompt_alias_selection()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inva�lido.")
         press_enter()
         return None
     return alias
@@ -2444,7 +3245,7 @@ def _gohighlevel_select_alias() -> Optional[str]:
 
 def _gohighlevel_configure_key() -> None:
     banner()
-    print(style_text("GoHighLevel • Configurar API Key", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel ��� Configurar API Key", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2454,9 +3255,9 @@ def _gohighlevel_configure_key() -> None:
         return
     current = _get_gohighlevel_entry(alias)
     print(f"Actual: {_mask_key(str(current.get('api_key') or '')) or '(sin definir)'}")
-    new_key = ask("Ingresá la API Key de GoHighLevel (vacío para cancelar): ").strip()
+    new_key = ask("Ingresi� la API Key de GoHighLevel (vaca�o para cancelar): ").strip()
     if not new_key:
-        warn("No se modificó la API Key de GoHighLevel.")
+        warn("No se modifica� la API Key de GoHighLevel.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"api_key": new_key})
@@ -2466,7 +3267,7 @@ def _gohighlevel_configure_key() -> None:
 
 def _gohighlevel_configure_locations() -> None:
     banner()
-    print(style_text("GoHighLevel • Configurar Location IDs", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel ��� Configurar Location IDs", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2484,9 +3285,9 @@ def _gohighlevel_configure_locations() -> None:
         print("Actual: (sin definir)")
     print()
     prompt = (
-        "Ingresá uno o más Location IDs (separados por coma o espacio).\n"
-        "Escribí 'eliminar N' para borrar uno específico (usa el número de la lista),\n"
-        "'limpiar' para eliminar todos o dejá vacío para cancelar: "
+        "Ingresi� uno o ma�s Location IDs (separados por coma o espacio).\n"
+        "Escriba� 'eliminar N' para borrar uno especa�fico (usa el na�mero de la lista),\n"
+        "'limpiar' para eliminar todos o deja� vaca�o para cancelar: "
     )
     raw = ask(prompt).strip()
     if not raw:
@@ -2498,9 +3299,9 @@ def _gohighlevel_configure_locations() -> None:
             warn("No hay Location IDs para eliminar.")
             press_enter()
             return
-        indexes = [token for token in re.split(r"[^0-9]+", raw) if token.isdigit()]
+        indexes = [token for token in re.split(r"[^0-9]a", raw) if token.isdigit()]
         if not indexes:
-            warn("Indicá el número del Location ID a eliminar.")
+            warn("Indica� el na�mero del Location ID a eliminar.")
             press_enter()
             return
         to_remove: set[int] = set()
@@ -2512,7 +3313,7 @@ def _gohighlevel_configure_locations() -> None:
             if 1 <= idx <= len(current_ids):
                 to_remove.add(idx - 1)
         if not to_remove:
-            warn("Los números indicados no coinciden con Location IDs existentes.")
+            warn("Los na�meros indicados no coinciden con Location IDs existentes.")
             press_enter()
             return
         remaining = [value for idx, value in enumerate(current_ids) if idx not in to_remove]
@@ -2530,7 +3331,7 @@ def _gohighlevel_configure_locations() -> None:
         return
     location_ids = _sanitize_location_ids(raw)
     if not location_ids:
-        warn("No se detectaron Location IDs válidos.")
+        warn("No se detectaron Location IDs va�lidos.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"location_ids": location_ids})
@@ -2540,7 +3341,7 @@ def _gohighlevel_configure_locations() -> None:
 
 def _gohighlevel_configure_prompt() -> None:
     banner()
-    print(style_text("GoHighLevel • Criterios de envío", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel ��� Criterios de enva�o", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2553,40 +3354,40 @@ def _gohighlevel_configure_prompt() -> None:
     print(style_text("Prompt actual:", color=Fore.BLUE))
     print(current_prompt or "(sin definir)")
     print(full_line(color=Fore.BLUE))
-    print("Elegí una opción:")
+    print("Elige� una opcia�n:")
     print("  E) Editar prompt")
     print("  D) Restaurar prompt predeterminado")
     print("  Enter) Cancelar")
-    action = ask("Acción: ").strip().lower()
+    action = ask("Accia�n: ").strip().lower()
     if not action:
-        warn("No se modificó el prompt de calificación.")
+        warn("No se modifica� el prompt de calificacia�n.")
         press_enter()
         return
     if action in {"d", "default", "predeterminado"}:
         _set_gohighlevel_entry(alias, {"qualify_prompt": _DEFAULT_GOHIGHLEVEL_PROMPT})
-        ok("Se restauró el prompt predeterminado para GoHighLevel.")
+        ok("Se restauro� el prompt predeterminado para GoHighLevel.")
         press_enter()
         return
     if action not in {"e", "editar"}:
-        warn("Opción inválida. No se modificó el prompt de calificación.")
+        warn("Opcia�n inva�lida. No se modifica� el prompt de calificacia�n.")
         press_enter()
         return
     print(
         style_text(
-            "Pegá el nuevo prompt y finalizá con una línea que diga <<<END>>>."
-            " Dejá vacío para cancelar.",
+            "Pega� el nuevo prompt y finaliza� con una la�nea que diga <<<END>>>."
+            " Deja� vaca�o para cancelar.",
             color=Fore.CYAN,
         )
     )
     lines: List[str] = []
     while True:
-        line = ask("› ")
+        line = ask("�Ǧ ")
         if line.strip() == "<<<END>>>":
             break
         lines.append(line.replace("\r", ""))
     new_prompt = "\n".join(lines).strip()
     if not new_prompt:
-        warn("No se modificó el prompt de calificación.")
+        warn("No se modifica� el prompt de calificacia�n.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"qualify_prompt": new_prompt})
@@ -2598,7 +3399,7 @@ def _gohighlevel_activate() -> None:
     if not _require_requests():
         return
     banner()
-    print(style_text("GoHighLevel • Activar envío automático", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel ��� Activar enva�o automa�tico", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2609,17 +3410,17 @@ def _gohighlevel_activate() -> None:
     entry = _get_gohighlevel_entry(alias)
     api_key = str(entry.get("api_key") or "")
     if not api_key:
-        warn("Configurá la API Key antes de activar la conexión.")
+        warn("Configura� la API Key antes de activar la conexia�n.")
         press_enter()
         return
     _set_gohighlevel_entry(alias, {"enabled": True})
-    ok(f"Conexión GoHighLevel activada para {alias}.")
+    ok(f"Conexia�n GoHighLevel activada para {alias}.")
     press_enter()
 
 
 def _gohighlevel_deactivate() -> None:
     banner()
-    print(style_text("GoHighLevel • Desactivar conexión", color=Fore.CYAN, bold=True))
+    print(style_text("GoHighLevel ��� Desactivar conexia�n", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _gohighlevel_status_lines():
         print(line)
@@ -2628,7 +3429,7 @@ def _gohighlevel_deactivate() -> None:
     if not alias:
         return
     _set_gohighlevel_entry(alias, {"enabled": False})
-    ok(f"Conexión GoHighLevel desactivada para {alias}.")
+    ok(f"Conexia�n GoHighLevel desactivada para {alias}.")
     press_enter()
 
 
@@ -2642,12 +3443,12 @@ def _gohighlevel_menu() -> None:
         print(full_line(color=Fore.BLUE))
         print("1) Ingresar API Key de GoHighLevel")
         print("2) Configurar Location IDs de GoHighLevel")
-        print("3) Activar el envío automático de leads calificados al CRM de GoHighLevel")
-        print("4) Desactivar conexión")
-        print("5) Configurar criterios de calificación")
-        print("6) Volver al submenú anterior")
+        print("3) Activar el enva�o automa�tico de leads calificados al CRM de GoHighLevel")
+        print("4) Desactivar conexia�n")
+        print("5) Configurar criterios de calificacia�n")
+        print("6) Volver al submena� anterior")
         print(full_line(color=Fore.BLUE))
-        choice = ask("Opción: ").strip()
+        choice = ask("Opcia�n: ").strip()
         if choice == "1":
             _gohighlevel_configure_key()
         elif choice == "2":
@@ -2661,14 +3462,14 @@ def _gohighlevel_menu() -> None:
         elif choice == "6":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opcia�n inva�lida.")
             press_enter()
 
 
 def _google_calendar_select_alias() -> Optional[str]:
     alias = _prompt_alias_selection()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias inva�lido.")
         press_enter()
         return None
     return alias
@@ -2686,7 +3487,7 @@ def _google_calendar_perform_device_flow(
             timeout=15,
         )
     except RequestException as exc:  # pragma: no cover - depende de red externa
-        warn(f"No se pudo iniciar la autorización de Google: {exc}")
+        warn(f"No se pudo iniciar la autorizacia�n de Google: {exc}")
         press_enter()
         return None
     if response.status_code != 200:
@@ -2696,20 +3497,20 @@ def _google_calendar_perform_device_flow(
     payload = response.json()
     device_code = payload.get("device_code")
     if not device_code:
-        warn("Google no devolvió device_code válido.")
+        warn("Google no devolvia� device_code va�lido.")
         press_enter()
         return None
     verification_url = payload.get("verification_url") or payload.get("verification_uri")
     user_code = payload.get("user_code")
     print(style_text("Para continuar:", color=Fore.CYAN, bold=True))
     if verification_url and user_code:
-        print(f"1. Visitá {verification_url}")
-        print(f"2. Ingresá el código: {user_code}")
+        print(f"1. Visita� {verification_url}")
+        print(f"2. Ingresi� el ca�digo: {user_code}")
     elif user_code:
-        print(f"Ingresá el código: {user_code}")
+        print(f"Ingresi� el ca�digo: {user_code}")
     else:
-        print("Abrí la URL indicada por Google y autorizá el acceso.")
-    print("Esperando confirmación...")
+        print("Abra� la URL indicada por Google y autoriza� el acceso.")
+    print("Esperando confirmacia�n...")
     interval = int(payload.get("interval", 5))
     expires_at = time.time() + int(payload.get("expires_in", 1800))
     data = {
@@ -2740,13 +3541,13 @@ def _google_calendar_perform_device_flow(
             interval = min(interval + 2, 15)
             continue
         if error_code in {"expired_token", "access_denied"}:
-            warn("La autorización no fue completada.")
+            warn("La autorizacia�n no fue completada.")
             press_enter()
             return None
         warn(f"Error al obtener token de Google: {token_response.text}")
         press_enter()
         return None
-    warn("El código de autorización expiró. Intentá nuevamente.")
+    warn("El ca�digo de autorizacia�n expira�. Intenta� nuevamente.")
     press_enter()
     return None
 
@@ -2755,12 +3556,12 @@ def _google_calendar_validate_client_payload(
     payload: Dict[str, object]
 ) -> tuple[Optional[Dict[str, object]], Optional[str]]:
     if not isinstance(payload, dict):
-        return None, "El archivo JSON no contiene una estructura válida."
+        return None, "El archivo JSON no contiene una estructura va�lida."
     installed = payload.get("installed")
     if not isinstance(installed, dict):
         return (
             None,
-            "El archivo JSON debe corresponder a una 'Aplicación de escritorio' generada en Google Cloud Console.",
+            "El archivo JSON debe corresponder a una 'Aplicacia�n de escritorio' generada en Google Cloud Console.",
         )
     redirect_uris = installed.get("redirect_uris")
     normalized_uris: set[str] = set()
@@ -2777,7 +3578,7 @@ def _google_calendar_validate_client_payload(
         )
     client_id = installed.get("client_id")
     if not client_id:
-        return None, "El archivo JSON no contiene un Client ID válido."
+        return None, "El archivo JSON no contiene un Client ID va�lido."
     return installed, None
 
 
@@ -2797,8 +3598,8 @@ def _google_calendar_extract_client_credentials(
 
 def _google_calendar_report_oauth_error(exc: Exception) -> None:
     base_message = (
-        "Error de autenticación. Verificá que el JSON cargado sea válido, "
-        "que estés autorizado como tester y que el proyecto esté correctamente configurado."
+        "Error de autenticacia�n. Verifica� que el JSON cargado sea va�lido, "
+        "que esta�s autorizado como tester y que el proyecto esta� correctamente configurado."
     )
     details = str(exc).strip()
     if details:
@@ -2815,20 +3616,20 @@ def _ensure_google_auth_oauthlib() -> bool:
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow as flow_cls  # type: ignore
     except Exception:
-        warn("Esta opción requiere la librería google-auth-oauthlib.")
+        warn("Esta opcia�n requiere la librera�a google-auth-oauthlib.")
         confirm = (
-            ask("¿Deseás que la instalemos automáticamente ahora? (s/n): ")
+            ask("-aDesea�s que la instalemos automa�ticamente ahora? (s/n): ")
             .strip()
             .lower()
         )
-        if confirm not in {"s", "si", "sí", "y", "yes"}:
-            warn("Instalación cancelada. Instalá google-auth-oauthlib para continuar.")
+        if confirm not in {"s", "si", "si�", "y", "yes"}:
+            warn("Instalacia�n cancelada. Instala� google-auth-oauthlib para continuar.")
             press_enter()
             return False
         python_bin = sys.executable or "python3"
         print(
             style_text(
-                "Instalando google-auth-oauthlib, por favor esperá...",
+                "Instalando google-auth-oauthlib, por favor espera�...",
                 color=Fore.YELLOW,
             )
         )
@@ -2837,18 +3638,18 @@ def _ensure_google_auth_oauthlib() -> bool:
                 [python_bin, "-m", "pip", "install", "google-auth-oauthlib"]
             )
         except Exception as exc:
-            warn(f"No se pudo instalar google-auth-oauthlib automáticamente: {exc}")
+            warn(f"No se pudo instalar google-auth-oauthlib automa�ticamente: {exc}")
             press_enter()
             return False
         try:
             from google_auth_oauthlib.flow import InstalledAppFlow as flow_cls  # type: ignore
         except Exception as exc:
-            warn(f"La librería google-auth-oauthlib no pudo cargarse: {exc}")
+            warn(f"La librera�a google-auth-oauthlib no pudo cargarse: {exc}")
             press_enter()
             return False
-        ok("La librería google-auth-oauthlib se instaló correctamente.")
+        ok("La librera�a google-auth-oauthlib se instala� correctamente.")
     if flow_cls is None:
-        warn("No se pudo cargar la librería google-auth-oauthlib.")
+        warn("No se pudo cargar la librera�a google-auth-oauthlib.")
         press_enter()
         return False
     InstalledAppFlow = flow_cls
@@ -2861,7 +3662,7 @@ def _google_calendar_load_credentials_json() -> None:
     banner()
     print(
         style_text(
-            "Google Calendar • Cargar credenciales JSON",
+            "Google Calendar ��� Cargar credenciales JSON",
             color=Fore.CYAN,
             bold=True,
         )
@@ -2874,10 +3675,10 @@ def _google_calendar_load_credentials_json() -> None:
     if not alias:
         return
     path_input = ask(
-        "Ruta del archivo JSON de Google (vacío para cancelar): "
+        "Ruta del archivo JSON de Google (vaca�o para cancelar): "
     ).strip()
     if not path_input:
-        warn("No se cargó ningún archivo de credenciales.")
+        warn("No se carga� ninga�n archivo de credenciales.")
         press_enter()
         return
     file_path = Path(path_input).expanduser()
@@ -2900,7 +3701,7 @@ def _google_calendar_load_credentials_json() -> None:
     client_secret_value = config.get("client_secret")
     client_secret = str(client_secret_value) if client_secret_value else None
     if not client_id:
-        warn("El archivo JSON no contiene un Client ID válido.")
+        warn("El archivo JSON no contiene un Client ID va�lido.")
         press_enter()
         return
     _set_google_calendar_entry(
@@ -2916,20 +3717,20 @@ def _google_calendar_load_credentials_json() -> None:
         except Exception:
             # Algunos objetos Flow no exponen redirect_uri hasta ejecutar run_*.
             pass
-    except Exception as exc:  # pragma: no cover - depende de librería externa
+    except Exception as exc:  # pragma: no cover - depende de librera�a externa
         warn(f"No se pudo inicializar el flujo OAuth: {exc}")
         press_enter()
         return
     try:
         credentials = flow.run_local_server(port=0)
-    except Exception as exc_local:  # pragma: no cover - depende de librería externa
+    except Exception as exc_local:  # pragma: no cover - depende de librera�a externa
         logger.debug(
             "Fallo run_local_server para Google OAuth, se intenta modo consola",
             exc_info=exc_local,
         )
         try:
             credentials = flow.run_console()
-        except Exception as exc_console:  # pragma: no cover - depende de librería externa
+        except Exception as exc_console:  # pragma: no cover - depende de librera�a externa
             _google_calendar_report_oauth_error(exc_console)
             press_enter()
             return
@@ -2939,7 +3740,7 @@ def _google_calendar_load_credentials_json() -> None:
     if entry.get("connected"):
         ok(f"Google Calendar conectado para {alias}.")
     else:
-        warn("No se pudo completar la conexión con Google Calendar.")
+        warn("No se pudo completar la conexia�n con Google Calendar.")
     press_enter()
 
 
@@ -2947,7 +3748,7 @@ def _google_calendar_connect() -> None:
     if not _require_requests():
         return
     banner()
-    print(style_text("Google Calendar • Conectar cuenta", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar ��� Conectar cuenta", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -2959,15 +3760,15 @@ def _google_calendar_connect() -> None:
     current_client_id = str(entry.get("client_id") or "")
     current_client_secret = str(entry.get("client_secret") or "")
     print(f"Client ID actual: {current_client_id or '(sin definir)'}")
-    client_id = ask("Ingresá el Client ID de OAuth (vacío mantiene actual): ").strip()
+    client_id = ask("Ingresi� el Client ID de OAuth (vaca�o mantiene actual): ").strip()
     if not client_id:
         client_id = current_client_id
     if not client_id:
-        warn("Se requiere un Client ID válido para continuar.")
+        warn("Se requiere un Client ID va�lido para continuar.")
         press_enter()
         return
     client_secret = ask(
-        "Ingresá el Client Secret (vacío mantiene actual o se omite si no aplica): "
+        "Ingresi� el Client Secret (vaca�o mantiene actual o se omite si no aplica): "
     ).strip()
     if not client_secret:
         client_secret = current_client_secret
@@ -2980,13 +3781,13 @@ def _google_calendar_connect() -> None:
     if entry.get("connected"):
         ok(f"Google Calendar conectado para {alias}.")
     else:
-        warn("No se pudo completar la conexión con Google Calendar.")
+        warn("No se pudo completar la conexia�n con Google Calendar.")
     press_enter()
 
 
 def _google_calendar_configure_event() -> None:
     banner()
-    print(style_text("Google Calendar • Configuración de eventos", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar ��� Configuracia�n de eventos", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -2995,7 +3796,7 @@ def _google_calendar_configure_event() -> None:
     if not alias:
         return
     entry = _get_google_calendar_entry(alias)
-    current_name = str(entry.get("event_name") or "{{username}} - Sistema de adquisición con IA")
+    current_name = str(entry.get("event_name") or "{{username}} - Sistema de adquisicia�n con IA")
     current_duration = int(entry.get("duration_minutes") or 30)
     current_timezone = str(entry.get("timezone") or _default_timezone_label())
     current_auto_meet = bool(entry.get("auto_meet", True))
@@ -3005,28 +3806,28 @@ def _google_calendar_configure_event() -> None:
     if new_name:
         updates["event_name"] = new_name
     duration_input = ask(
-        f"Duración en minutos (actual {current_duration}, Enter mantiene): "
+        f"Duracia�n en minutos (actual {current_duration}, Enter mantiene): "
     ).strip()
     if duration_input:
         try:
             updates["duration_minutes"] = max(5, int(duration_input))
         except Exception:
-            warn("Duración inválida; se mantiene el valor actual.")
+            warn("Duracia�n inva�lida; se mantiene el valor actual.")
     tz_input = ask(
         f"Zona horaria (actual {current_timezone}, Enter mantiene): "
     ).strip()
     if tz_input:
         updates["timezone"] = tz_input
     auto_meet_input = ask(
-        f"Generar enlace de Google Meet automáticamente? (S/N, actual {'S' if current_auto_meet else 'N'}): "
+        f"Generar enlace de Google Meet automa�ticamente? (S/N, actual {'S' if current_auto_meet else 'N'}): "
     ).strip().lower()
-    if auto_meet_input in {"s", "si", "sí"}:
+    if auto_meet_input in {"s", "si", "si�"}:
         updates["auto_meet"] = True
     elif auto_meet_input in {"n", "no"}:
         updates["auto_meet"] = False
     if updates:
         _set_google_calendar_entry(alias, updates)
-        ok("Configuración de eventos actualizada.")
+        ok("Configuracia�n de eventos actualizada.")
     else:
         warn("No se realizaron cambios.")
     press_enter()
@@ -3036,7 +3837,7 @@ def _google_calendar_configure_prompt() -> None:
     banner()
     print(
         style_text(
-            "Google Calendar • Criterio para creación de eventos",
+            "Google Calendar ��� Criterio para creacia�n de eventos",
             color=Fore.CYAN,
             bold=True,
         )
@@ -3053,13 +3854,13 @@ def _google_calendar_configure_prompt() -> None:
     print(style_text("Prompt actual:", color=Fore.BLUE))
     print(current_prompt.strip() or "(sin definir)")
     print(full_line(color=Fore.BLUE))
-    print("Elegí una opción:")
+    print("Elige� una opcia�n:")
     print("  E) Editar prompt")
     print("  D) Restaurar valor predeterminado")
     print("  Enter) Cancelar")
-    action = ask("Acción: ").strip().lower()
+    action = ask("Accia�n: ").strip().lower()
     if not action:
-        warn("No se modificó el criterio de calendario.")
+        warn("No se modifica� el criterio de calendario.")
         press_enter()
         return
     if action in {"d", "default", "predeterminado"}:
@@ -3067,25 +3868,25 @@ def _google_calendar_configure_prompt() -> None:
             alias,
             {"schedule_prompt": _DEFAULT_GOOGLE_CALENDAR_PROMPT},
         )
-        ok("Se restauró el criterio predeterminado de Google Calendar.")
+        ok("Se restauro� el criterio predeterminado de Google Calendar.")
         press_enter()
         return
     if action not in {"e", "editar"}:
-        warn("Opción inválida. No se modificó el criterio de calendario.")
+        warn("Opcia�n inva�lida. No se modifica� el criterio de calendario.")
         press_enter()
         return
     print(
         style_text(
             (
-                "Pegá el nuevo criterio y finalizá con una línea que diga <<<END>>>."
-                " Dejá vacío para cancelar."
+                "Pega� el nuevo criterio y finaliza� con una la�nea que diga <<<END>>>."
+                " Deja� vaca�o para cancelar."
             ),
             color=Fore.CYAN,
         )
     )
     lines: List[str] = []
     while True:
-        line = ask("› ")
+        line = ask("�Ǧ ")
         if line.strip() == "<<<END>>>":
             break
         lines.append(line.replace("\r", ""))
@@ -3094,13 +3895,13 @@ def _google_calendar_configure_prompt() -> None:
     if new_prompt:
         ok(f"Criterio actualizado. Longitud: {len(new_prompt)} caracteres.")
     else:
-        ok("Se eliminó el criterio personalizado. Se usará la lógica automática predeterminada.")
+        ok("Se elimino� el criterio personalizado. Se usara� la la�gica automa�tica predeterminada.")
     press_enter()
 
 
 def _google_calendar_activate() -> None:
     banner()
-    print(style_text("Google Calendar • Activar creación automática", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar ��� Activar creacia�n automa�tica", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -3110,17 +3911,17 @@ def _google_calendar_activate() -> None:
         return
     entry = _get_google_calendar_entry(alias)
     if not entry.get("connected"):
-        warn("Conectá Google Calendar antes de activar la lógica automática.")
+        warn("Conecta� Google Calendar antes de activar la la�gica automa�tica.")
         press_enter()
         return
     _set_google_calendar_entry(alias, {"enabled": True})
-    ok(f"Lógica automática activada para {alias}.")
+    ok(f"La�gica automa�tica activada para {alias}.")
     press_enter()
 
 
 def _google_calendar_deactivate() -> None:
     banner()
-    print(style_text("Google Calendar • Desactivar creación automática", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar ��� Desactivar creacia�n automa�tica", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -3129,13 +3930,13 @@ def _google_calendar_deactivate() -> None:
     if not alias:
         return
     _set_google_calendar_entry(alias, {"enabled": False})
-    ok(f"Lógica automática desactivada para {alias}.")
+    ok(f"La�gica automa�tica desactivada para {alias}.")
     press_enter()
 
 
 def _google_calendar_revoke() -> None:
     banner()
-    print(style_text("Google Calendar • Revocar conexión", color=Fore.CYAN, bold=True))
+    print(style_text("Google Calendar ��� Revocar conexia�n", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     for line in _google_calendar_status_lines():
         print(line)
@@ -3149,7 +3950,7 @@ def _google_calendar_revoke() -> None:
         try:
             requests.post(_GOOGLE_REVOKE_URL, params={"token": token}, timeout=15)
         except RequestException:
-            logger.warning("No se pudo notificar la revocación a Google.", exc_info=False)
+            logger.warning("No se pudo notificar la revocacia�n a Google.", exc_info=False)
     _set_google_calendar_entry(
         alias,
         {
@@ -3161,7 +3962,7 @@ def _google_calendar_revoke() -> None:
             "enabled": False,
         },
     )
-    ok(f"Conexión revocada para {alias}.")
+    ok(f"Conexia�n revocada para {alias}.")
     press_enter()
 
 
@@ -3174,15 +3975,15 @@ def _google_calendar_menu() -> None:
             print(line)
         print(full_line(color=Fore.BLUE))
         print("1) Conectar cuenta mediante OAuth")
-        print("2) Configurar parámetros del evento")
-        print("3) Configurar criterio para creación de evento")
-        print("4) Activar creación automática de eventos")
-        print("5) Desactivar creación automática de eventos")
-        print("6) Revocar conexión")
+        print("2) Configurar para�metros del evento")
+        print("3) Configurar criterio para creacia�n de evento")
+        print("4) Activar creacia�n automa�tica de eventos")
+        print("5) Desactivar creacia�n automa�tica de eventos")
+        print("6) Revocar conexia�n")
         print("7) Cargar credenciales JSON (Google OAuth 2.0)")
-        print("8) Volver al submenú anterior")
+        print("8) Volver al submena� anterior")
         print(full_line(color=Fore.BLUE))
-        choice = ask("Opción: ").strip()
+        choice = ask("Opcia�n: ").strip()
         if choice == "1":
             _google_calendar_connect()
         elif choice == "2":
@@ -3200,7 +4001,7 @@ def _google_calendar_menu() -> None:
         elif choice == "8":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opcia�n inva�lida.")
             press_enter()
 
 
@@ -3210,7 +4011,7 @@ def _configure_api_key() -> None:
     print(style_text("Configurar OPENAI_API_KEY", color=Fore.CYAN, bold=True))
     print(f"Actual: {(_mask_key(current_key) or '(sin definir)')}")
     print()
-    new_key = ask("Nueva API Key (vacío para cancelar): ").strip()
+    new_key = ask("Nueva API Key (vaca�o para cancelar): ").strip()
     if not new_key:
         warn("Se mantuvo la API Key actual.")
         press_enter()
@@ -3236,31 +4037,31 @@ def _configure_prompt() -> None:
         print("3) Ver primeros 400 caracteres")
         print("4) Volver")
         print(full_line(color=Fore.BLUE))
-        choice = ask("Opción: ").strip()
+        choice = ask("Opcia�n: ").strip()
 
         if choice == "1":
             print(style_text(
-                "Pegá tu System Prompt y cerrá con una línea que diga <<<END>>>.",
+                "Pega� tu System Prompt y cerra� con una la�nea que diga <<<END>>>.",
                 color=Fore.CYAN,
             ))
             lines: list[str] = []
             while True:
-                line = ask("› ")
+                line = ask("�Ǧ ")
                 if line.strip() == "<<<END>>>":
                     break
                 lines.append(line.replace("\r", ""))
             new_prompt = "\n".join(lines)
             if not _normalize_system_prompt_text(new_prompt):
-                warn("No se modificó el prompt.")
+                warn("No se modifica� el prompt.")
                 press_enter()
                 continue
             saved_prompt = _persist_system_prompt(new_prompt)
             ok(f"System Prompt guardado. Longitud: {len(saved_prompt)} caracteres.")
             press_enter()
         elif choice == "2":
-            path_input = ask("Ruta del archivo .txt (vacío para cancelar): ").strip()
+            path_input = ask("Ruta del archivo .txt (vaca�o para cancelar): ").strip()
             if not path_input:
-                warn("No se modificó el prompt.")
+                warn("No se modifica� el prompt.")
                 press_enter()
                 continue
             file_path = Path(path_input).expanduser()
@@ -3275,7 +4076,7 @@ def _configure_prompt() -> None:
                 press_enter()
                 continue
             if not _normalize_system_prompt_text(file_contents):
-                warn("No se modificó el prompt.")
+                warn("No se modifica� el prompt.")
                 press_enter()
                 continue
             saved_prompt = _persist_system_prompt(file_contents)
@@ -3289,12 +4090,12 @@ def _configure_prompt() -> None:
             else:
                 print(preview)
                 if len(current_prompt or "") > 400:
-                    print(style_text("… (truncado)", color=Fore.YELLOW))
+                    print(style_text("�Ǫ (truncado)", color=Fore.YELLOW))
             press_enter()
         elif choice == "4":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opcia�n inva�lida.")
             press_enter()
 
 
@@ -3313,9 +4114,9 @@ def _preview_prompt(prompt: str) -> str:
         return "(sin definir)"
     first_line = prompt.splitlines()[0]
     if len(first_line) > 60:
-        return first_line[:57] + "…"
+        return first_line[:57] + "�Ǫ"
     if len(prompt.splitlines()) > 1:
-        return first_line + " …"
+        return first_line + " �Ǫ"
     return first_line
 
 
@@ -3364,27 +4165,28 @@ def _prompt_alias_selection() -> str | None:
     print("Alias/grupos disponibles:")
     for idx, alias in enumerate(options, start=1):
         print(f" {idx}) {alias}")
-    raw = ask("Seleccioná alias (número o texto, Enter=ALL): ").strip()
+    raw = ask("Selecciona� alias (na�mero o texto, Enter=ALL): ").strip()
     if not raw:
         return "ALL"
     if raw.isdigit():
         idx = int(raw)
         if 1 <= idx <= len(options):
             return options[idx - 1]
-        warn("Número fuera de rango.")
+        warn("Na�mero fuera de rango.")
         return None
     return raw
 
 
 def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
     message = str(exc).lower()
+    detail = f"{exc.__class__.__name__}: {exc}"
     if should_retry_proxy(exc):
-        label = style_text(f"[WARN][@{user}] proxy falló", color=Fore.YELLOW, bold=True)
+        label = style_text(f"[WARN][@{user}] proxy falla�", color=Fore.YELLOW, bold=True)
         record_proxy_failure(user, exc)
         print(label)
-        warn("Revisá la opción 1 para actualizar o quitar el proxy de esta cuenta.")
-    elif "login_required" in message:
-        label = style_text(f"[ERROR][@{user}] sesión inválida", color=Fore.RED, bold=True)
+        warn("Revisi� la opcia�n 1 para actualizar o quitar el proxy de esta cuenta.")
+    elif "login_required" in message or "login requerido" in message:
+        label = style_text(f"[ERROR][@{user}] sesia�n inva�lida", color=Fore.RED, bold=True)
         print(label)
     elif any(key in message for key in ("challenge", "checkpoint")):
         label = style_text(f"[WARN][@{user}] checkpoint requerido", color=Fore.YELLOW, bold=True)
@@ -3395,13 +4197,27 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
     else:
         label = style_text(f"[WARN][@{user}] error inesperado", color=Fore.YELLOW, bold=True)
         print(label)
+    try:
+        warn(detail)
+    except Exception:
+        print(detail)
+    try:
+        _append_message_log(
+            {
+                "action": "account_error",
+                "account": user,
+                "error": detail,
+            }
+        )
+    except Exception:
+        pass
     logger.warning("Incidente con @%s en auto-responder: %s", user, exc, exc_info=False)
 
     while True:
-        choice = ask("¿Continuar sin esta cuenta (C) / Reintentar (R) / Pausar (P)? ").strip().lower()
+        choice = ask("- Continuar sin esta cuenta (C) / Reintentar (R) / Pausar (P)? ").strip().lower()
         if choice in {"c", "r", "p"}:
             break
-        warn("Elegí C, R o P.")
+        warn("Elige� C, R o P.")
 
     if choice == "c":
         if user in active:
@@ -3411,16 +4227,16 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
         return
 
     if choice == "p":
-        request_stop("pausa solicitada desde menú del bot")
+        request_stop("pausa solicitada desde mena� del bot")
         return
 
     while choice == "r":
-        if prompt_login(user, interactive=False) and _ensure_session(user):
+        if _prompt_playwright_login(user, alias=ACTIVE_ALIAS or user) and _ensure_session(user):
             mark_connected(user, True)
-            ok(f"Sesión renovada para @{user}")
+            ok(f"Sesia�n renovada para @{user}")
             return
-        warn("La sesión sigue fallando. Intentá nuevamente o elegí otra opción.")
-        choice = ask("¿Reintentar (R) / Continuar sin la cuenta (C) / Pausar (P)? ").strip().lower()
+        warn("La sesia�n sigue fallando. Intenta� nuevamente o elega� otra opcia�n.")
+        choice = ask("- Reintentar (R) / Continuar sin la cuenta (C) / Pausar (P)? ").strip().lower()
         if choice == "c":
             if user in active:
                 active.remove(user)
@@ -3428,7 +4244,7 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
             warn(f"Se excluye @{user} del ciclo actual.")
             return
         if choice == "p":
-            request_stop("pausa solicitada desde menú del bot")
+            request_stop("pausa solicitada desde mena� del bot")
             return
 
 
@@ -3436,11 +4252,11 @@ def _normalize_phone(raw: str) -> str:
     raw = raw.strip()
     if not raw:
         return ""
-    has_plus = raw.startswith("+")
+    has_plus = raw.startswith("a")
     digits = "".join(ch for ch in raw if ch.isdigit())
     if not digits:
         return ""
-    return f"+{digits}" if has_plus else digits
+    return f"a{digits}" if has_plus else digits
 
 
 def _extract_phone_numbers(text: str) -> List[str]:
@@ -3450,7 +4266,7 @@ def _extract_phone_numbers(text: str) -> List[str]:
     numbers: List[str] = []
     for match in matches:
         normalized = _normalize_phone(match)
-        if normalized and len(normalized.replace("+", "")) >= 8:
+        if normalized and len(normalized.replace("a", "")) >= 8:
             if normalized not in numbers:
                 numbers.append(normalized)
     return numbers
@@ -3482,9 +4298,9 @@ def _infer_lead_tag(
             return "Listo para agendar llamada"
         return "Listo para agendar llamada"
     if any(_contains_token(normalized, keyword) for keyword in _POSITIVE_KEYWORDS):
-        return "Interesado sin número"
+        return "Interesado sin na�mero"
     if any(keyword in normalized for keyword in _INFO_KEYWORDS) or "?" in conversation:
-        return "Solicita más info"
+        return "Solicita ma�s info"
     if normalized.strip():
         return _DEFAULT_LEAD_TAG
     return _DEFAULT_LEAD_TAG
@@ -3569,7 +4385,7 @@ def _detect_meeting_datetime(conversation: str, tz_label: str) -> Optional[datet
 
 
 def _render_calendar_summary(template: str, username: str) -> str:
-    template = template or "{{username}} - Sistema de adquisición con IA"
+    template = template or "{{username}} - Sistema de adquisicia�n con IA"
     return template.replace("{{username}}", username or "Lead")
 
 
@@ -3661,7 +4477,7 @@ def _send_lead_to_gohighlevel(
     openai_api_key: Optional[str] = None,
 ) -> None:
     if requests is None:
-        logger.warning("GoHighLevel no disponible: falta la librería requests.")
+        logger.warning("GoHighLevel no disponible: falta la librera�a requests.")
         return
     if not phone_numbers:
         return
@@ -3721,14 +4537,14 @@ def _send_lead_to_gohighlevel(
                     location_id,
                 )
                 print(
-                    f"❌ Falló el envío a GHL (Location {location_id}): no se recibió identificador del contacto"
+                    f"��� Falla� el enva�o a GHL (Location {location_id}): no se recibia� identificador del contacto"
                 )
                 continue
             _attach_gohighlevel_note(api_key, contact_id, note_text)
             successes.append(location_id)
             action = "creado" if created else "actualizado"
             print(
-                f"✅ Lead enviado a GHL (Location {location_id}) — contacto {action} (ID {contact_id})"
+                f"ԣ� Lead enviado a GHL (Location {location_id}) ��� contacto {action} (ID {contact_id})"
             )
         except RequestException as exc:  # pragma: no cover - depende de red externa
             logger.warning(
@@ -3737,7 +4553,7 @@ def _send_lead_to_gohighlevel(
                 exc,
                 exc_info=False,
             )
-            print(f"❌ Falló el envío a GHL (Location {location_id}): {exc}")
+            print(f"��� Falla� el enva�o a GHL (Location {location_id}): {exc}")
         except Exception as exc:  # pragma: no cover - manejo defensivo
             logger.warning(
                 "Fallo inesperado con GoHighLevel (location %s): %s",
@@ -3745,7 +4561,7 @@ def _send_lead_to_gohighlevel(
                 exc,
                 exc_info=False,
             )
-            print(f"❌ Falló el envío a GHL (Location {location_id}): {exc}")
+            print(f"��� Falla� el enva�o a GHL (Location {location_id}): {exc}")
     if not successes:
         return
 
@@ -3820,7 +4636,7 @@ def _maybe_schedule_google_calendar_event(
     access_token = _google_calendar_ensure_token(alias, entry)
     if not access_token and requests is None and (Credentials is None or build is None):
         return None
-    summary_template = str(entry.get("event_name") or "{{username}} - Sistema de adquisición con IA")
+    summary_template = str(entry.get("event_name") or "{{username}} - Sistema de adquisicia�n con IA")
     summary = _render_calendar_summary(summary_template, recipient or "Lead")
     try:
         duration = int(entry.get("duration_minutes") or 30)
@@ -3832,21 +4648,21 @@ def _maybe_schedule_google_calendar_event(
     end_dt = start_dt + timedelta(minutes=duration)
     email = _extract_email_from_text(conversation)
     description_lines = [
-        "Evento generado automáticamente desde el bot de Instagram.",
+        "Evento generado automa�ticamente desde el bot de Instagram.",
         f"Cuenta IG: @{account}",
     ]
     if recipient:
         description_lines.append(f"Usuario IG: @{recipient}")
     if main_phone:
-        description_lines.append(f"Teléfono: {main_phone}")
+        description_lines.append(f"Tela�fono: {main_phone}")
     else:
-        description_lines.append("Teléfono: (sin proporcionar)")
+        description_lines.append("Tela�fono: (sin proporcionar)")
     if email:
         description_lines.append(f"Email: {email}")
     if status:
         description_lines.append(f"Estado detectado: {status}")
     description_lines.append("")
-    description_lines.append("Historial de la conversación:")
+    description_lines.append("Historial de la conversacia�n:")
     description_lines.append(conversation)
     description = "\n".join(description_lines)
     payload: Dict[str, object] = {
@@ -3967,7 +4783,7 @@ def _maybe_schedule_google_calendar_event(
     recipient_handle = _format_handle(recipient or main_phone or None)
     if event_action == "updated":
         message_lines = [
-            f"Perfecto, actualicé nuestra llamada para {formatted_dt} ({tz_label}).",
+            f"Perfecto, actualica� nuestra llamada para {formatted_dt} ({tz_label}).",
         ]
     else:
         message_lines = [
@@ -3979,11 +4795,11 @@ def _maybe_schedule_google_calendar_event(
         )
     elif stored_link:
         message_lines.append(
-            f"Te compartí los detalles de la reunión en nuestro calendario: {stored_link}"
+            f"Te comparta� los detalles de la reunia�n en nuestro calendario: {stored_link}"
         )
     else:
-        message_lines.append("Te compartí los detalles de la reunión en nuestro calendario.")
-    status_line = f"✅ Reunión agendada en Google Calendar para {recipient_handle}"
+        message_lines.append("Te comparta� los detalles de la reunia�n en nuestro calendario.")
+    status_line = f"ԣ� Reunia�n agendada en Google Calendar para {recipient_handle}"
     log_conversation_status(
         account,
         recipient or normalized_lead,
@@ -4000,35 +4816,147 @@ def _process_inbox(
     api_key: str,
     system_prompt: str,
     stats: BotStats,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+    allowed_thread_ids: Optional[set[str]] = None,
+    threads_limit: int = 20,
 ) -> None:
-    inbox = _fetch_inbox_threads(client, amount=10)
+    print(style_text(f"[Barrido] Iniciando scan de @{user}", color=Fore.CYAN))
+    _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
+    
+    inbox = _fetch_inbox_threads(client, amount=threads_limit)
     if not inbox:
+        print(style_text(f"[Barrido] Sin chats visibles para @{user}", color=Fore.YELLOW))
+        logger.warning(
+            "No threads visibles para @%s: ver screenshot/html en storage/logs (dm_debug_...)",
+            user,
+        )
         return
     state.setdefault(user, {})
-    for thread in inbox:
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
+    now = time.time()
+    
+    total_threads = len(inbox)
+    print(style_text(f"[Barrido] Threads visibles: {total_threads}", color=Fore.CYAN))
+    for idx, thread in enumerate(inbox, start=1):
         if STOP_EVENT.is_set():
             break
-        thread_id = getattr(thread, "id", None) or getattr(thread, "pk", None)
-        messages = client.direct_messages(thread_id, amount=10)
+        print(style_text(f"[Barrido] Thread {idx}/{total_threads} en progreso", color=Fore.CYAN))
+        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
+        if thread_id_val is None:
+            continue
+        thread_id = str(thread_id_val)
+        if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
+            continue
+        messages = client.get_messages(thread, amount=10)
         if not messages:
             continue
-        unread_count = _safe_unread_count(thread)
-        if unread_count is not None and unread_count <= 0:
-            continue
-        last = _latest_inbound_message(messages, client.user_id)
+        last = _latest_message(messages)
         if not last:
             continue
-        last_seen = state[user].get(thread_id)
+        last_seen_id = None
         last_id = getattr(last, "id", None)
-        if last_id and last_seen == last_id:
+        if last_id is None:
+            last_id = getattr(last, "message_id", None)
+        if last_id is None:
+            logger.info(
+                "PlaywrightDM hook account=@%s thread_id=%s latest_id=- last_seen=%s decision=skip_no_message_id",
+                user,
+                thread_id,
+                last_seen_id,
+            )
             continue
+        last_id_str = str(last_id)
+        sender_id = getattr(last, "user_id", None)
+        inbound: Optional[bool] = None
+        if sender_id is not None:
+            inbound = not _same_user_id(sender_id, client.user_id)
+        else:
+            from_me = getattr(last, "from_me", None)
+            is_outgoing = getattr(last, "is_outgoing", None)
+            direction = getattr(last, "direction", None)
+            if isinstance(from_me, bool):
+                inbound = not from_me
+            elif isinstance(is_outgoing, bool):
+                inbound = not is_outgoing
+            elif isinstance(direction, str):
+                lowered = direction.lower()
+                if lowered in {"outgoing", "sent", "outbound", "from_me"}:
+                    inbound = False
+                elif lowered in {"incoming", "inbound", "received", "from_them", "from_lead"}:
+                    inbound = True
+        if inbound is None:
+            logger.info(
+                "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=skip_unknown_direction",
+                user,
+                thread_id,
+                last_id_str,
+                last_seen_id,
+            )
+            continue
+        if not inbound:
+            logger.info(
+                "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=skip_outbound",
+                user,
+                thread_id,
+                last_id_str,
+                last_seen_id,
+            )
+            continue
+        last_ts = _message_timestamp(last)
+        if max_age_seconds:
+            if last_ts is None or (now - last_ts) > max_age_seconds:
+                continue
+
+        conv_state = _get_conversation_state(user, thread_id)
+        last_seen_id = conv_state.get("last_message_id_seen")
+        if last_seen_id is not None and str(last_seen_id) == last_id_str:
+            logger.info(
+                "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=skip_seen",
+                user,
+                thread_id,
+                last_id_str,
+                last_seen_id,
+            )
+            continue
+
+        recipient_username = None
+        if sender_id is not None:
+            recipient_username = _resolve_username(client, thread, sender_id) or str(sender_id)
+        if recipient_username is None:
+            recipient_username = conv_state.get("recipient_username") or "unknown"
+        logger.info(
+            "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=persist",
+            user,
+            thread_id,
+            last_id_str,
+            last_seen_id,
+        )
+        _record_message_received(user, thread_id, last_id_str, recipient_username)
+        
         convo = "\n".join(
             [
-                f"{'YO' if msg.user_id == client.user_id else 'ELLOS'}: {msg.text or ''}"
+                f"{'YO' if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) else 'ELLOS'}: {msg.text or ''}"
                 for msg in reversed(messages)
             ]
         )
-        recipient_username = _resolve_username(client, thread, last.user_id) or str(last.user_id)
+        
+        last_sent_at = conv_state.get("last_message_sent_at")
+        last_received_at = conv_state.get("last_message_received_at")
+        time_since_last_sent = (now - last_sent_at) if last_sent_at else None
+        time_since_last_received = (now - last_received_at) if last_received_at else None
+        
+        stage = _determine_conversation_stage(
+            user,
+            thread_id,
+            has_new_inbound=True,
+            time_since_last_sent=time_since_last_sent,
+            time_since_last_received=time_since_last_received,
+        )
+        
+        _update_conversation_state(user, thread_id, {"stage": stage}, recipient_username)
+        
         status = _classify_response(last.text or "")
         if status and recipient_username:
             msg_ts = getattr(last, "timestamp", None)
@@ -4036,6 +4964,11 @@ def _process_inbox(
             if isinstance(msg_ts, datetime):
                 ts_value = int(msg_ts.timestamp())
             log_conversation_status(user, recipient_username, status, timestamp=ts_value)
+            
+            if status == "No interesado":
+                _update_conversation_state(user, thread_id, {"stage": _STAGE_CLOSED})
+                continue
+        
         phone_numbers = _extract_phone_numbers(last.text or "")
         if not phone_numbers:
             phone_numbers = _extract_phone_numbers(convo)
@@ -4061,11 +4994,65 @@ def _process_inbox(
             )
             if calendar_result:
                 calendar_message, calendar_status_line = calendar_result
+        
         try:
             reply = _gen_response(api_key, system_prompt, convo)
-            client.direct_send(reply, [last.user_id])
+            
+            can_send, reason = _can_send_message(
+                user,
+                thread_id,
+                reply,
+                force=_FORCE_ALWAYS_RESPOND,
+            )
+            if not can_send:
+                logger.info(
+                    "Omitiendo envío para @%s → @%s: %s",
+                    user,
+                    recipient_username,
+                    reason,
+                )
+                if last_id:
+                    state[user][thread_id] = last_id
+                save_auto_state(state)
+                continue
+
+            logger.info(
+                "Decision responder @%s thread=%s stage=%s reason=%s",
+                user,
+                thread_id,
+                stage,
+                reason,
+            )
+            
+            _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+            
+            message_id = client.send_message(thread, reply)
+            if not message_id:
+                logger.warning(
+                    "Envio no verificado para @%s -> @%s (thread %s)",
+                    user,
+                    recipient_username,
+                    thread_id,
+                )
+                continue
+
+            _record_message_sent(user, thread_id, reply, str(message_id), recipient_username, is_followup=False)
+            
             if calendar_message:
-                client.direct_send(calendar_message, [last.user_id])
+                calendar_id = client.send_message(thread, calendar_message)
+                if calendar_id:
+                    _record_message_sent(user, thread_id, calendar_message, calendar_id, recipient_username, is_followup=False)
+                    _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+            
+            _update_conversation_state(user, thread_id, {"stage": _STAGE_WAITING})
+            
+            logger.info(
+                "Mensaje enviado por @%s → @%s (último mensaje del lead hace %.1f horas)",
+                user,
+                recipient_username,
+                time_since_last_received / 3600.0 if time_since_last_received else 0,
+            )
+            
         except Exception as exc:
             setattr(exc, "_autoresponder_sender", user)
             setattr(exc, "_autoresponder_recipient", recipient_username)
@@ -4074,10 +5061,11 @@ def _process_inbox(
         if last_id:
             state[user][thread_id] = last_id
         save_auto_state(state)
+        
         index = stats.record_success(user)
-        logger.info("Respuesta enviada por @%s en hilo %s", user, thread_id)
+        logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
-
+    print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
 def _print_bot_summary(stats: BotStats) -> None:
     print(full_line(color=Fore.MAGENTA))
@@ -4094,13 +5082,13 @@ def _activate_bot() -> None:
     global ACTIVE_ALIAS
     api_key, system_prompt = _load_preferences()
     if not api_key:
-        warn("Configurá OPENAI_API_KEY antes de activar el bot.")
+        warn("Configura OPENAI_API_KEY antes de activar el bot.")
         press_enter()
         return
 
     alias = _prompt_alias_selection()
     if not alias:
-        warn("Alias inválido.")
+        warn("Alias invalido.")
         press_enter()
         return
 
@@ -4110,50 +5098,115 @@ def _activate_bot() -> None:
         press_enter()
         return
 
-    active_accounts = _filter_valid_sessions(targets)
+    active_accounts = _filter_valid_sessions(targets, alias=alias)
     if not active_accounts:
-        warn("Ninguna cuenta tiene sesión válida.")
+        warn("Ninguna cuenta tiene sesion valida.")
         press_enter()
         return
 
     settings = refresh_settings()
-    delay_default = max(1, settings.autoresponder_delay)
-    delay = ask_int(
-        f"Delay entre chequeos (segundos) [{delay_default}]: ",
+    delay_min_default = max(1, settings.autoresponder_delay)
+    delay_min = ask_int(
+        f"Delay minimo entre mensajes (segundos) [{delay_min_default}]: ",
         1,
-        default=delay_default,
+        default=delay_min_default,
     )
+    delay_max = ask_int(
+        f"Delay maximo entre mensajes (segundos) [{delay_min}]: ",
+        delay_min,
+        default=delay_min,
+    )
+    if delay_max < delay_min:
+        delay_max = delay_min
+    max_concurrent = ask_int(
+        "Cuentas en simultaneo [1]: ",
+        1,
+        default=1,
+    )
+    if max_concurrent > len(active_accounts):
+        max_concurrent = len(active_accounts)
+    print(style_text("[Mientras mas threads, mas lenta sera la busqueda]", color=Fore.YELLOW))
+    threads_limit = ask_int(
+        "Cuantos threads quieres leer? [20]: ",
+        1,
+        default=20,
+    )
+    raw_schedule = ask(
+        "Horas de seguimiento (ej: 4,8,12,24) [4,8,12,24]: "
+    ).strip()
+    followup_schedule_hours = _parse_followup_schedule_hours(
+        raw_schedule, default=[4, 8, 12, 24]
+    )
+    followup_only_raw = ask("Solo seguimiento (S/N) [N]: ").strip().lower()
+    followup_only = followup_only_raw in {"s", "si", "y", "yes"}
+    max_age_days = 7
 
     ensure_logging(quiet=settings.quiet, log_dir=settings.log_dir, log_file=settings.log_file)
     reset_stop_event()
     state = get_auto_state()
     stats = BotStats(alias=alias)
     ACTIVE_ALIAS = alias
-    listener = start_q_listener("Presioná Q para detener el auto-responder.", logger)
+    listener = start_q_listener("Presiona Q para detener el auto-responder.", logger)
     print(style_text(f"Bot activo para {alias} ({len(active_accounts)} cuentas)", color=Fore.GREEN, bold=True))
     logger.info(
-        "Auto-responder activo para %d cuentas (alias %s). Delay: %ss",
+        "Auto-responder activo para %d cuentas (alias %s). Delay: %.1fs-%.1fs concurrent=%d followup_only=%s",
         len(active_accounts),
         alias,
-        delay,
+        delay_min,
+        delay_max,
+        max_concurrent,
+        "si" if followup_only else "no",
     )
 
+    account_queue = list(active_accounts)
     try:
         with _suppress_console_noise():
-            while not STOP_EVENT.is_set() and active_accounts:
-                for user in list(active_accounts):
+            while not STOP_EVENT.is_set() and account_queue:
+                batch = account_queue[:max_concurrent]
+                for user in list(batch):
                     if STOP_EVENT.is_set():
                         break
+                    if user not in account_queue:
+                        continue
+                    client = None
                     try:
                         client = _client_for(user)
                     except Exception as exc:
                         stats.record_error(user)
                         _handle_account_issue(user, exc, active_accounts)
+                        if user not in active_accounts and user in account_queue:
+                            account_queue.remove(user)
                         continue
 
+                    allowed_thread_ids = None
+                    if followup_only:
+                        allowed_thread_ids = _followup_allowed_thread_ids(user)
+
                     try:
-                        _process_inbox(client, user, state, api_key, system_prompt, stats)
-                        _process_followups(client, user, api_key)
+                        if not followup_only or allowed_thread_ids:
+                            _process_inbox(
+                                client,
+                                user,
+                                state,
+                                api_key,
+                                system_prompt,
+                                stats,
+                                delay_min,
+                                delay_max,
+                                max_age_days,
+                                allowed_thread_ids=allowed_thread_ids if followup_only else None,
+                                threads_limit=threads_limit,
+                            )
+                        _process_followups(
+                            client,
+                            user,
+                            api_key,
+                            delay_min,
+                            delay_max,
+                            max_age_days,
+                            threads_limit=threads_limit,
+                            followup_schedule_hours=followup_schedule_hours,
+                        )
                     except KeyboardInterrupt:
                         raise
                     except Exception as exc:  # pragma: no cover - depende de SDK/insta
@@ -4171,16 +5224,26 @@ def _activate_bot() -> None:
                             exc_info=not settings.quiet,
                         )
                         _handle_account_issue(user, exc, active_accounts)
+                    finally:
+                        if client is not None:
+                            try:
+                                client.close()
+                            except Exception:
+                                pass
 
-                if active_accounts and not STOP_EVENT.is_set():
-                    sleep_with_stop(delay)
+                    if user not in active_accounts and user in account_queue:
+                        account_queue.remove(user)
 
-        if not active_accounts:
+                if account_queue and not STOP_EVENT.is_set():
+                    account_queue = account_queue[max_concurrent:] + account_queue[:max_concurrent]
+                    _sleep_between_replies_sync(delay_min, delay_max, label="scan_delay")
+
+        if not account_queue:
             warn("No quedan cuentas activas; el bot se detiene.")
             request_stop("sin cuentas activas para responder")
 
     except KeyboardInterrupt:
-        request_stop("interrupción con Ctrl+C")
+        request_stop("interrupcion con CtrlaC")
     finally:
         request_stop("auto-responder detenido")
         if listener:
@@ -4188,20 +5251,19 @@ def _activate_bot() -> None:
         ACTIVE_ALIAS = None
         _print_bot_summary(stats)
 
-
 def _manual_stop() -> None:
     if STOP_EVENT.is_set():
-        warn("El bot ya está detenido.")
+        warn("El bot ya esta� detenido.")
     else:
-        request_stop("detención solicitada desde el menú")
-        warn("Si el bot está activo, finalizará al terminar el ciclo en curso.")
+        request_stop("detencia�n solicitada desde el mena�")
+        warn("Si el bot esta� activo, finalizara� al terminar el ciclo en curso.")
     press_enter()
 
 
-def menu_autoresponder():
+def menu_autoresponder(app_context=None):
     while True:
         _print_menu_header()
-        choice = ask("Opción: ").strip()
+        choice = ask("Opcia�n: ").strip()
         if choice == "1":
             _configure_api_key()
         elif choice == "2":
@@ -4219,5 +5281,507 @@ def menu_autoresponder():
         elif choice == "8":
             break
         else:
-            warn("Opción inválida.")
+            warn("Opcia�n inva�lida.")
             press_enter()
+
+
+# ------------- Extensiones para seguimiento con estado persistente ------------
+import json as _json_mod_for_state
+import os as _os_mod_for_state
+from pathlib import Path as _Path_for_state
+from typing import Dict as _Dict_for_state, List as _List_for_state, Optional as _Optional_for_state
+import time as _time_for_state
+from datetime import datetime as _datetime_for_state
+
+# Determinamos la ruta del archivo de estado.  Si 'runtime_base' est� disponible,
+# la utilizamos para resolver un directorio consistente; de lo contrario,
+# usamos el directorio actual.
+try:
+    _CONV_STATE_PATH = runtime_base((_Path_for_state(__file__).resolve().parent)) / "storage" / "conversation_state.json"
+except Exception:
+    _CONV_STATE_PATH = _Path_for_state(__file__).resolve().parent / "storage" / "conversation_state.json"
+
+# Constantes de limpieza (en d�as y segundos)
+_CLEANUP_AFTER_DAYS_CLOSED = 90
+_CLEANUP_AFTER_DAYS_FINISHED = 14
+_CLEANUP_INTERVAL = 24 * 3600  # 24 horas
+
+def _load_conversation_state() -> _Dict_for_state[str, object]:
+    # Carga el estado de conversaciones desde el archivo JSON
+    try:
+        if _os_mod_for_state.path.exists(_CONV_STATE_PATH):
+            with open(_CONV_STATE_PATH, "r", encoding="utf-8") as f:
+                data = _json_mod_for_state.load(f)
+            if isinstance(data, dict):
+                data.setdefault("version", "1.0")
+                data.setdefault("last_cleanup_ts", 0)
+                if not isinstance(data.get("conversations"), dict):
+                    data["conversations"] = {}
+                return data
+    except Exception as exc:
+        try:
+            logger.warning("No se pudo cargar el estado de conversaciones: %s", exc)
+        except Exception:
+            pass
+    return {"version": "1.0", "last_cleanup_ts": 0, "conversations": {}}
+
+def _save_conversation_state(state: _Dict_for_state[str, object]) -> None:
+    # Guarda el estado de conversaciones en el archivo JSON de manera segura
+    try:
+        _os_mod_for_state.makedirs(_CONV_STATE_PATH.parent, exist_ok=True)
+        tmp_path = _CONV_STATE_PATH.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            _json_mod_for_state.dump(state, f, ensure_ascii=False, indent=2)
+        _os_mod_for_state.replace(tmp_path, _CONV_STATE_PATH)
+    except Exception as exc:
+        try:
+            logger.warning("No se pudo guardar el estado de conversaciones: %s", exc)
+        except Exception:
+            pass
+
+def _clean_conversation_state(state: _Dict_for_state[str, object]) -> _Dict_for_state[str, object]:
+    # Elimina conversaciones antiguas del estado seg�n las reglas de limpieza
+    now_ts = _time_for_state.time()
+    last_cleanup_ts = state.get("last_cleanup_ts", 0) or 0
+    try:
+        last_cleanup_float = float(last_cleanup_ts)
+    except Exception:
+        last_cleanup_float = 0.0
+    if now_ts - last_cleanup_float < _CLEANUP_INTERVAL:
+        return state
+    conversations = state.get("conversations", {})
+    if not isinstance(conversations, dict):
+        conversations = {}
+    new_conversations: _Dict_for_state[str, object] = {}
+    for key, rec in conversations.items():
+        try:
+            last_contact = rec.get("ultimo_contacto_ts") or rec.get("last_contact_ts")
+            last_contact_float = float(last_contact) if last_contact else 0.0
+        except Exception:
+            last_contact_float = 0.0
+        cerrado = bool(rec.get("cerrado"))
+        if last_contact_float <= 0:
+            new_conversations[key] = rec
+            continue
+        days_since = (now_ts - last_contact_float) / 86400.0
+        if cerrado:
+            if days_since <= _CLEANUP_AFTER_DAYS_CLOSED:
+                new_conversations[key] = rec
+        else:
+            if days_since <= _CLEANUP_AFTER_DAYS_FINISHED:
+                new_conversations[key] = rec
+    state["conversations"] = new_conversations
+    state["last_cleanup_ts"] = now_ts
+    return state
+
+def _process_followups_extended(
+    client,
+    user: str,
+    api_key: str,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+    threads_limit: int = 15,
+    followup_schedule_hours: Optional[List[int]] = None,
+) -> None:
+    # Implementaci�n extendida de seguimientos con memoria persistente
+    alias, entry = _followup_enabled_entry_for(user)
+    if not alias or not entry or not entry.get("enabled"):
+        if not _FORCE_ALWAYS_FOLLOWUP:
+            return
+        alias = alias or ACTIVE_ALIAS or user
+        entry = _get_followup_entry(alias) if alias else {}
+    prompt_text = str(entry.get("prompt") or _DEFAULT_FOLLOWUP_PROMPT)
+    if not prompt_text.strip():
+        return
+
+    conv_state = _load_conversation_state()
+    conv_state = _clean_conversation_state(conv_state)
+
+    history_source = entry.get("history")
+    history: _Dict_for_state[str, dict] = dict(history_source) if isinstance(history_source, dict) else {}
+
+    now_ts = _time_for_state.time()
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
+    account_norm = _normalize_username(user)
+
+    updated_history = False
+    updated_state = False
+
+    try:
+        threads = client.list_threads(amount=threads_limit, filter_unread=False)
+    except Exception as exc:
+        logger.debug(
+            "No se pudieron obtener hilos para seguimiento de @%s: %s",
+            user,
+            exc,
+            exc_info=False,
+        )
+        return
+
+    for thread in threads:
+        if STOP_EVENT.is_set():
+            break
+        thread_id = getattr(thread, "id", None)
+        if not thread_id:
+            continue
+        unread_count = getattr(thread, "unread_count", None)
+        try:
+            unread_int = int(unread_count)
+        except Exception:
+            unread_int = 0
+        if unread_int > 0:
+            continue
+
+        participants = getattr(thread, "users", None)
+        recipient_id: str | None = None
+        recipient_username = ""
+        if isinstance(participants, list):
+            for participant in participants:
+                pk_val = getattr(participant, "pk", None) or getattr(participant, "id", None)
+                pk = str(pk_val) if pk_val is not None else ""
+                if pk and pk != str(client.user_id):
+                    recipient_id = pk
+                    recipient_username = getattr(participant, "username", pk)
+                    break
+        if not recipient_id:
+            continue
+
+        try:
+            messages = client.get_messages(thread, amount=20)
+        except Exception as exc:
+            logger.debug(
+                "No se pudieron obtener mensajes del hilo %s para seguimiento: %s",
+                thread_id,
+                exc,
+                exc_info=False,
+            )
+            continue
+        if not messages:
+            continue
+
+        latest_ts = None
+        for msg in messages:
+            msg_ts = _message_timestamp(msg)
+            if msg_ts is None:
+                continue
+            latest_ts = msg_ts if latest_ts is None else max(latest_ts, msg_ts)
+        if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
+            continue
+
+        last_message = messages[0]
+        if not _same_user_id(getattr(last_message, 'user_id', ''), client.user_id):
+            continue
+
+        def _msg_ts(msg: object) -> float | None:
+            ts_obj = getattr(msg, "timestamp", None)
+            if isinstance(ts_obj, _datetime_for_state):
+                return ts_obj.timestamp()
+            try:
+                return float(ts_obj)
+            except Exception:
+                return None
+
+        last_outbound_ts = _msg_ts(last_message)
+        if last_outbound_ts and now_ts - last_outbound_ts < 60:
+            continue
+        outbound_ts_values = [
+            _msg_ts(msg)
+            for msg in messages
+            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and _msg_ts(msg) is not None
+        ]
+        first_outbound_ts = min(outbound_ts_values) if outbound_ts_values else None
+
+        inbound_messages = [
+            msg
+            for msg in messages
+            if not _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and isinstance(getattr(msg, "text", None), str)
+        ]
+        has_inbound = bool(inbound_messages)
+        last_inbound = inbound_messages[0] if has_inbound else None
+        last_inbound_ts = _msg_ts(last_inbound) if last_inbound else None
+        if has_inbound and last_inbound_ts and now_ts - last_inbound_ts < 60:
+            continue
+
+        engine_state = _get_conversation_state(user, thread_id)
+        last_sent_at = engine_state.get("last_message_sent_at")
+        last_received_at = engine_state.get("last_message_received_at")
+        if last_received_at and last_sent_at and last_received_at > last_sent_at:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "lead_replied_after_last_bot_message",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                }
+            )
+            continue
+        if last_sent_at and now_ts - last_sent_at < _MIN_TIME_FOR_FOLLOWUP:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "last_bot_message_too_recent",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                    "seconds_since_last_sent": int(now_ts - last_sent_at),
+                }
+            )
+            continue
+
+        conv_key = f"{account_norm}|{thread_id}"
+        convs = conv_state.setdefault("conversations", {})
+        conv_record = convs.get(conv_key)
+        if not isinstance(conv_record, dict):
+            conv_record = {
+                "seguimiento_actual": 0,
+                "last_sent_ts": 0.0,
+                "last_eval_ts": 0.0,
+                "ultimo_contacto_ts": 0.0,
+                "cerrado": False,
+                "ultima_actualizacion_ts": now_ts,
+            }
+            convs[conv_key] = conv_record
+            updated_state = True
+
+        if conv_record.get("cerrado"):
+            continue
+
+        if has_inbound:
+            conv_record["seguimiento_actual"] = 0
+            conv_record["ultimo_contacto_ts"] = last_inbound_ts or now_ts
+            conv_record["ultima_actualizacion_ts"] = now_ts
+            updated_state = True
+
+        try:
+            last_eval_float = float(conv_record.get("last_eval_ts", 0) or 0)
+        except Exception:
+            last_eval_float = 0.0
+        if now_ts - last_eval_float < _FOLLOWUP_MIN_INTERVAL:
+            continue
+
+        followups_sent = int(conv_record.get("seguimiento_actual", 0) or 0)
+        last_followup_ts = conv_record.get("last_sent_ts") or 0.0
+        try:
+            last_followup_float = float(last_followup_ts)
+        except Exception:
+            last_followup_float = 0.0
+
+        if first_outbound_ts is None:
+            first_outbound_ts = conv_record.get("first_sent_ts") or last_outbound_ts
+        if first_outbound_ts:
+            conv_record.setdefault("first_sent_ts", first_outbound_ts)
+        schedule = [h for h in (followup_schedule_hours or []) if isinstance(h, int) and h > 0]
+        schedule = sorted(set(schedule))
+        if schedule:
+            if followups_sent >= len(schedule):
+                continue
+            if not first_outbound_ts:
+                _append_message_log(
+                    {
+                        "action": "followup_skip",
+                        "reason": "missing_first_sent_ts",
+                        "account": user,
+                        "thread_id": str(thread_id),
+                        "lead": recipient_username or str(recipient_id),
+                    }
+                )
+                continue
+            hours_since_initial = (now_ts - first_outbound_ts) / 3600.0
+            required_hours = schedule[followups_sent]
+            if hours_since_initial < required_hours:
+                _append_message_log(
+                    {
+                        "action": "followup_skip",
+                        "reason": "schedule_not_reached",
+                        "account": user,
+                        "thread_id": str(thread_id),
+                        "lead": recipient_username or str(recipient_id),
+                        "hours_since_initial": round(hours_since_initial, 2),
+                        "required_hours": required_hours,
+                    }
+                )
+                continue
+
+        if last_followup_float:
+            time_since_last_followup = now_ts - last_followup_float
+            min_gap_hours = None
+            if schedule:
+                next_stage = followups_sent + 1
+                if next_stage > 1 and len(schedule) >= next_stage:
+                    min_gap_hours = schedule[next_stage - 1] - schedule[next_stage - 2]
+            if min_gap_hours is None:
+                min_gap_known = _MIN_TIME_FOR_FOLLOWUP
+            else:
+                min_gap_known = max(1, int(min_gap_hours * 3600))
+            if time_since_last_followup < min_gap_known:
+                _append_message_log(
+                    {
+                        "action": "followup_skip",
+                        "reason": "min_interval_not_met",
+                        "account": user,
+                        "thread_id": str(thread_id),
+                        "lead": recipient_username or str(recipient_id),
+                        "seconds_since_last_followup": int(time_since_last_followup),
+                    }
+                )
+                continue
+
+        conversation_lines: _List_for_state[str] = []
+        for msg in reversed(messages[:40]):
+            text_value = getattr(msg, "text", "") or ""
+            prefix = "YO" if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) else "ELLOS"
+            conversation_lines.append(f"{prefix}: {text_value}")
+        # Construimos el texto de la conversaci�n uniendo l�neas
+        conversation_text = "\n".join(conversation_lines[-40:])
+
+        metadata = {
+            "alias": alias,
+            "cuenta_origen": f"@{user}",
+            "lead": recipient_username or str(recipient_id),
+            "seguimientos_previos": followups_sent,
+            "segundos_desde_ultimo_seguimiento": int(now_ts - last_followup_float)
+            if last_followup_float
+            else "nunca",
+            "segundos_desde_ultima_respuesta": int(now_ts - last_inbound_ts)
+            if last_inbound_ts
+            else "desconocido",
+            "segundos_desde_ultimo_mensaje_enviado": int(now_ts - last_outbound_ts)
+            if last_outbound_ts
+            else "desconocido",
+        }
+
+        _append_message_log(
+            {
+                "action": "followup_eval",
+                "account": user,
+                "thread_id": str(thread_id),
+                "lead": recipient_username or str(recipient_id),
+                "seguimientos_previos": followups_sent,
+            }
+        )
+        decision = _followup_decision(api_key, prompt_text, conversation_text, metadata)
+        conv_record["last_eval_ts"] = now_ts
+        updated_state = True
+
+        if not decision:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "no_decision",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                }
+            )
+            convs[conv_key] = conv_record
+            record = history.get(conv_key, {})
+            record["last_eval_ts"] = now_ts
+            history[conv_key] = record
+            updated_history = True
+            continue
+
+        message_text, stage = decision
+        try:
+            stage_int = int(stage)
+        except Exception:
+            stage_int = followups_sent + 1
+        stage_int = max(1, stage_int)
+
+        expected_stage = followups_sent + 1
+        if stage_int != expected_stage:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "stage_mismatch",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                    "stage_requested": stage_int,
+                    "stage_expected": expected_stage,
+                }
+            )
+            continue
+
+        logger.info(
+            "Decision seguimiento @%s thread=%s stage=%s reason=%s",
+            user,
+            thread_id,
+            stage_int,
+            "ok",
+        )
+
+        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+
+        try:
+            message_id = client.send_message(thread, message_text)
+        except Exception as exc:
+            logger.warning(
+                "No se pudo enviar seguimiento automatico a %s desde @%s: %s",
+                recipient_username or recipient_id,
+                user,
+                exc,
+                exc_info=False,
+            )
+            conv_record["last_error"] = str(exc)
+            convs[conv_key] = conv_record
+            updated_state = True
+            record = history.get(conv_key, {})
+            record["last_error"] = str(exc)
+            history[conv_key] = record
+            updated_history = True
+            continue
+        if not message_id:
+            logger.warning(
+                "Seguimiento no verificado para @%s -> @%s (thread %s)",
+                user,
+                recipient_username or recipient_id,
+                thread_id,
+            )
+            continue
+
+        _append_message_log(
+            {
+                "action": "followup_sent",
+                "account": user,
+                "thread_id": str(thread_id),
+                "lead": recipient_username or str(recipient_id),
+                "followup_stage": stage_int,
+                "message_id": message_id or "",
+                "message_text": message_text,
+            }
+        )
+        conv_record["seguimiento_actual"] = stage_int
+        conv_record["last_sent_ts"] = now_ts
+        conv_record.pop("last_error", None)
+        conv_record["ultima_actualizacion_ts"] = now_ts
+        convs[conv_key] = conv_record
+        updated_state = True
+
+        record = history.get(conv_key, {})
+        record["count"] = stage_int
+        record["last_sent_ts"] = now_ts
+        record["last_message_id"] = message_id or ""
+        record.pop("last_error", None)
+        history[conv_key] = record
+        updated_history = True
+
+        try:
+            print(
+                style_text(
+                    f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}",
+                    color=Fore.MAGENTA,
+                )
+            )
+        except Exception:
+            print(f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}")
+
+    # Guardamos cambios al terminar
+    if updated_state:
+        _save_conversation_state(conv_state)
+    if updated_history:
+        _set_followup_entry(alias, {"history": history})
+
+# Sustituimos la implementaci�n original por la extendida
+_process_followups = _process_followups_extended

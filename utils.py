@@ -79,15 +79,24 @@ def ask_int(prompt: str, min_value: int = 0, default: Optional[int] = None) -> i
 
 
 def ok(msg: str) -> None:
-    print(f"{Fore.GREEN}✔ {msg}{Style.RESET_ALL}")
+    try:
+        print(f"{Fore.GREEN}✔ {msg}{Style.RESET_ALL}")
+    except UnicodeEncodeError:
+        print(f"{Fore.GREEN}[OK] {msg}{Style.RESET_ALL}")
 
 
 def warn(msg: str) -> None:
-    print(f"{Fore.YELLOW}⚠ {msg}{Style.RESET_ALL}")
+    try:
+        print(f"{Fore.YELLOW}⚠ {msg}{Style.RESET_ALL}")
+    except UnicodeEncodeError:
+        print(f"{Fore.YELLOW}[ADVERTENCIA] {msg}{Style.RESET_ALL}")
 
 
 def err(msg: str) -> None:
-    print(f"{Fore.RED}✖ {msg}{Style.RESET_ALL}")
+    try:
+        print(f"{Fore.RED}✖ {msg}{Style.RESET_ALL}")
+    except UnicodeEncodeError:
+        print(f"{Fore.RED}[ERROR] {msg}{Style.RESET_ALL}")
 
 
 def title(msg: str) -> None:

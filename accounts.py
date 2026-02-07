@@ -63,6 +63,7 @@ from totp_store import rename_secret as rename_totp_secret
 from totp_store import save_secret as save_totp_secret
 from utils import ask, banner, em, ok, press_enter, title, warn
 from paths import runtime_base
+from src.playwright_service import BASE_PROFILES
 
 BASE = runtime_base(Path(__file__).resolve().parent)
 BASE.mkdir(parents=True, exist_ok=True)
@@ -689,7 +690,49 @@ def _playwright_onboarding(username: str, password: str, proxy_settings: Optiona
     if not _onboarding_backend_ready():
         raise RuntimeError("Backend de onboarding no disponible.")
     payload = _playwright_account_payload(username, password, proxy_settings)
-    return login_and_persist(payload, headless=True)
+    return login_and_persist(payload, headless=False)
+
+
+def _build_playwright_login_payload(
+    username: str,
+    password: str,
+    proxy_settings: Optional[Dict],
+    *,
+    alias: str,
+    totp_secret: Optional[str] = None,
+    row_number: Optional[int] = None,
+) -> Dict[str, Any]:
+    payload = _playwright_account_payload(username, password, proxy_settings)
+    payload["alias"] = alias
+    payload["strict_login"] = True
+    if totp_secret:
+        payload["totp_secret"] = totp_secret
+    if row_number is not None:
+        payload["row_number"] = row_number
+    return payload
+
+
+def login_accounts_with_playwright(alias: str, accounts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    try:
+        from src.auth.onboarding import login_account_playwright, write_onboarding_results
+    except Exception as exc:
+        warn(f"No se pudo iniciar login con Playwright: {exc}")
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for account in accounts:
+        result = login_account_playwright(account, alias)
+        results.append(result)
+        if result.get("status") == "ok":
+            username = (result.get("username") or account.get("username") or "").strip()
+            if username:
+                mark_connected(username, True)
+
+    try:
+        write_onboarding_results(results)
+    except Exception:
+        pass
+    return results
 
 
 @dataclass(frozen=True)
@@ -926,7 +969,7 @@ def _launch_hashtag_mode(alias: str) -> None:
 
     print("Seleccioná cuentas activas (coma separada, * para todas):")
     for idx, acct in enumerate(active_accounts, start=1):
-        sess = "[sesión]" if has_session(acct["username"]) else "[sin sesión]"
+        sess = _session_label(acct["username"])
         proxy_flag = _proxy_indicator(acct)
         low_flag = _low_profile_indicator(acct)
         totp_flag = _totp_indicator(acct)
@@ -1313,6 +1356,22 @@ def _totp_indicator(account: Dict) -> str:
     return f" {em('🔐')}" if account.get("has_totp") else ""
 
 
+def _has_playwright_session(username: str) -> bool:
+    if not username:
+        return False
+    try:
+        path = Path(BASE_PROFILES) / username / "storage_state.json"
+        return path.exists() and path.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def _session_label(username: str) -> str:
+    if has_session(username) or _has_playwright_session(username):
+        return "[sesión]"
+    return "[sin sesión]"
+
+
 def _health_cache_key(username: str) -> str:
     return username.strip().lstrip("@").lower()
 
@@ -1596,14 +1655,21 @@ def _schedule_health_refresh(accounts_to_refresh: List[Dict]) -> None:
 def _import_accounts_from_csv(alias: str) -> None:
     path_input = ask("Ruta del archivo CSV: ").strip()
     if not path_input:
-        warn("No se indicó la ruta del archivo.")
+        warn("No se indicÃ³ la ruta del archivo.")
         press_enter()
         return
 
     try:
-        onboarding_results = onboard_accounts_from_csv(path_input, headless=True, concurrency=2)
+        from src.auth.onboarding import parse_accounts_csv
+    except Exception as exc:
+        warn(f"No se pudo iniciar el parser de CSV: {exc}")
+        press_enter()
+        return
+
+    try:
+        parsed_rows = parse_accounts_csv(path_input)
     except FileNotFoundError:
-        warn("El archivo CSV indicado no existe o no es un archivo válido.")
+        warn("El archivo CSV indicado no existe o no es un archivo vÃ¡lido.")
         press_enter()
         return
     except Exception as exc:
@@ -1611,37 +1677,36 @@ def _import_accounts_from_csv(alias: str) -> None:
         press_enter()
         return
 
-    if not onboarding_results:
-        warn("El archivo CSV no contiene registros válidos.")
+    if not parsed_rows:
+        warn("El archivo CSV no contiene registros vÃ¡lidos.")
         press_enter()
         return
 
     added = 0
     errors: List[tuple[Optional[int], str]] = []
     status_counter: Dict[str, int] = defaultdict(int)
+    accounts_to_login: List[Dict[str, Any]] = []
 
-    for result in onboarding_results:
-        status = (result.get("status") or "failed").lower()
-        status_counter[status] += 1
-        metadata = result.get("account_data") or {}
-        username = (metadata.get("username") or "").strip().lstrip("@")
-        password = (metadata.get("password") or "").strip()
-        row_number = result.get("row_number")
+    for row in parsed_rows:
+        row_number = row.get("row_number")
+        username = (row.get("username") or "").strip().lstrip("@")
+        password = (row.get("password") or "").strip()
+        totp_value = (row.get("totp_secret") or "").strip()
 
-        if not metadata or not username or not password:
-            errors.append((row_number, result.get("message") or "Datos incompletos."))
+        if not username or not password:
+            errors.append((row_number, "Datos incompletos: username/password."))
             continue
 
-        sticky_value = metadata.get("proxy_sticky_minutes") or SETTINGS.proxy_sticky_minutes or 10
+        sticky_value = row.get("proxy_sticky_minutes") or SETTINGS.proxy_sticky_minutes or 10
         try:
             sticky_minutes = max(1, int(sticky_value))
         except Exception:
             sticky_minutes = SETTINGS.proxy_sticky_minutes or 10
 
         proxy_data = {
-            "proxy_url": metadata.get("proxy_url") or "",
-            "proxy_user": metadata.get("proxy_user") or "",
-            "proxy_pass": metadata.get("proxy_pass") or "",
+            "proxy_url": row.get("proxy_url") or "",
+            "proxy_user": row.get("proxy_user") or "",
+            "proxy_pass": row.get("proxy_pass") or "",
             "proxy_sticky_minutes": sticky_minutes,
         }
 
@@ -1649,20 +1714,34 @@ def _import_accounts_from_csv(alias: str) -> None:
             errors.append((row_number, "No se pudo agregar la cuenta (posible duplicado)."))
             continue
 
-        totp_value = (metadata.get("totp_secret") or "").strip()
         if totp_value:
             try:
                 save_totp_secret(username, totp_value)
             except ValueError as exc:
                 remove_account(username)
-                errors.append((row_number, f"2FA inválido: {exc}"))
+                errors.append((row_number, f"2FA invÃ¡lido: {exc}"))
                 continue
 
         _store_account_password(username, password)
+        payload = _build_playwright_login_payload(
+            username,
+            password,
+            proxy_data,
+            alias=alias,
+            totp_secret=totp_value or None,
+            row_number=row_number,
+        )
+        accounts_to_login.append(payload)
         added += 1
 
-    total = len(onboarding_results)
-    print("\nResumen de importación:")
+    if accounts_to_login:
+        results = login_accounts_with_playwright(alias, accounts_to_login)
+        for result in results:
+            status = (result.get("status") or "failed").lower()
+            status_counter[status] += 1
+
+    total = len(parsed_rows)
+    print("\nResumen de importaciÃ³n:")
     print(f"Total de filas procesadas: {total}")
     print(f"Cuentas agregadas al alias: {added}")
     print("Resultados de login guardados en data/onboarding_results.csv")
@@ -1695,7 +1774,7 @@ def _select_usernames_for_modifications(alias: str) -> List[str]:
         if not username:
             continue
         alias_map[username.lower()] = username
-        sess = "[sesión]" if has_session(username) else "[sin sesión]"
+        sess = _session_label(username)
         proxy_flag = _proxy_indicator(acct)
         low_flag = _low_profile_indicator(acct)
         totp_flag = _totp_indicator(acct)
@@ -2452,6 +2531,13 @@ def _health_badge(account: Dict) -> str:
 def menu_accounts():
     while True:
         banner()
+        print("1) Seleccionar alias o crear uno nuevo")
+        print("2) Volver atrás (ENTER para volver)\n")
+        choice = ask("Opción: ").strip()
+        if not choice or choice == "2":
+            return
+        if choice != "1":
+            continue
         items = _load()
         aliases = sorted(set([it.get("alias", "default") for it in items]) | {"default"})
         title("Alias disponibles: " + ", ".join(aliases))
@@ -2466,7 +2552,7 @@ def menu_accounts():
             for it in group:
                 flag = em("🟢") if it.get("active") else em("⚪")
                 conn = "[conectada]" if it.get("connected") else "[no conectada]"
-                sess = "[sesión]" if has_session(it["username"]) else "[sin sesión]"
+                sess = _session_label(it["username"])
                 proxy_flag = _proxy_indicator(it)
                 totp_flag = _totp_indicator(it)
                 badge, needs_refresh = _badge_for_display(it)
@@ -2539,24 +2625,16 @@ def menu_accounts():
                 if not password:
                     warn("No se ingresó password; la cuenta quedó sin sesión.")
                 else:
-                    while True:
-                        result = _playwright_onboarding(u, password, proxy_data)
-                        status = result.get("status", "failed")
-                        message = result.get("message", "")
-                        print(f"\nLogin headless @{u}: {status} - {message}")
-                        if status == "ok":
-                            _store_account_password(u, password)
-                            break
-                        if status != "need_code":
-                            break
-                        retry = (
-                            ask("Instagram requiere un código. ¿Intentar nuevamente ahora? (S/n): ")
-                            .strip()
-                            .lower()
-                            or "s"
-                        )
-                        if retry != "s":
-                            break
+                    payload = _build_playwright_login_payload(
+                        u,
+                        password,
+                        proxy_data,
+                        alias=alias,
+                    )
+                    results = login_accounts_with_playwright(alias, [payload])
+                    if results and results[0].get("status") == "ok":
+                        _store_account_password(u, password)
+
             else:
                 if totp_saved:
                     remove_totp_secret(u)
@@ -2693,7 +2771,8 @@ def menu_accounts():
                 continue
             print("Seleccioná cuentas por número o username (coma separada, * para todas):")
             for idx, acct in enumerate(group, start=1):
-                sess = "[sesión]" if has_session(acct["username"]) else "[sin sesión]"
+                sess = _session_label(acct["username"])
+
                 proxy_flag = _proxy_indicator(acct)
                 low_flag = _low_profile_indicator(acct)
                 totp_flag = _totp_indicator(acct)
