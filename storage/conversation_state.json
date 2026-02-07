@@ -1,0 +1,238 @@
+{
+  "version": "1.0",
+  "last_cleanup_ts": 1768524870.2359917,
+  "conversations": {
+    "matidiazlife|340282366841710301244260106380122018435": {
+      "seguimiento_actual": 0,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767928926.656402,
+      "ultimo_contacto_ts": 1767822781.037747,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767928926.656402
+    },
+    "matidiazlife|340282366841710301244260106400502016397": {
+      "seguimiento_actual": 0,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 1767825390.191072,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767961284.5595613
+    },
+    "matidiazlife|340282366841710301244260106402545349526": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767911527.9602795,
+      "ultimo_contacto_ts": 1767898510.964148,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767911527.9602795
+    },
+    "matidiazlife|340282366841710301244260102632442393203": {
+      "seguimiento_actual": 0,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767912328.2445874,
+      "ultimo_contacto_ts": 1767830344.931922,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767912328.2445874
+    },
+    "matidiazlife|340282366841710301244260106582391998208": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767911527.9602795,
+      "ultimo_contacto_ts": 1767861682.633959,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767911527.9602795
+    },
+    "matidiazlife|340282366841710301244260106594148663699": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767912328.2445874,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767911527.9602795
+    },
+    "matidiazlife|340282366841710301244260106626071993840": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767911527.9602795,
+      "last_eval_ts": 1767912328.2445874,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767911527.9602795
+    },
+    "matidiazlife|340282366841710301244260091354096854371": {
+      "seguimiento_actual": 5,
+      "last_sent_ts": 1767961416.30855,
+      "last_eval_ts": 1767961416.30855,
+      "ultimo_contacto_ts": 1767933692.848371,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767961416.30855
+    },
+    "matidiazlife|340282366841710301244260106576285332152": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767927016.1630287,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767927016.1630287
+    },
+    "matidiazlife|340282366841710301244260106565948666519": {
+      "seguimiento_actual": 2,
+      "last_sent_ts": 1767927016.1630287,
+      "last_eval_ts": 1767927016.1630287,
+      "ultimo_contacto_ts": 1767914359.776002,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767927016.1630287
+    },
+    "matidiazlife|340282366841710301244260106406182015829": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767928926.656402,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767928926.656402
+    },
+    "matidiazlife|340282366841710301244260106405082015939": {
+      "seguimiento_actual": 0,
+      "last_sent_ts": 1767929274.4631007,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 1767914206.39522,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767961284.5595613
+    },
+    "matidiazlife|340282366841710301244260107230008600113": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767924311.2364638,
+      "last_eval_ts": 1767924311.2364638,
+      "ultimo_contacto_ts": 1767909108.267381,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767924311.2364638
+    },
+    "matidiazlife|340282366841710301244259491825750140545": {
+      "seguimiento_actual": 2,
+      "last_sent_ts": 1767922251.744641,
+      "last_eval_ts": 1767922251.744641,
+      "ultimo_contacto_ts": 1767921287.523892,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767922251.744641
+    },
+    "matidiazlife|340282366841710301244260106612575328523": {
+      "seguimiento_actual": 0,
+      "last_sent_ts": 1767924311.2364638,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 1767877863.017762,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767961284.5595613
+    },
+    "matidiazlife|340282366841710301244260101832839139830": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767924311.2364638,
+      "last_eval_ts": 1767924311.2364638,
+      "ultimo_contacto_ts": 1767823010.933515,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767924311.2364638
+    },
+    "matidiazlife|340282366841710301244260106398248683289": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767930368.0410235,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767930368.0410235
+    },
+    "matidiazlife|340282366841710301244260106396965350084": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767930368.0410235,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767930368.0410235
+    },
+    "matidiazlife|340282366841710301244260106394012017046": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767930368.0410235,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767930368.0410235
+    },
+    "matidiazlife|340282366841710301244260106389102017537": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767930759.3015904,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767930759.3015904
+    },
+    "matidiazlife|340282366841710301244260106386048684509": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767930759.3015904,
+      "last_eval_ts": 1767961062.9956264,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767930759.3015904
+    },
+    "matidiazlife|340282366841710301244260106383078684806": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767959250.9703355,
+      "last_eval_ts": 1767961416.30855,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767959250.9703355
+    },
+    "matidiazlife|340282366841710301244260106377552018692": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767959250.9703355,
+      "last_eval_ts": 1767961416.30855,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767959250.9703355
+    },
+    "matidiazlife|340282366841710301244260072824655373982": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1767958030.6598241,
+      "last_eval_ts": 1767958030.6598241,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1767958030.6598241
+    },
+    "matidiazlife|340282366841710301244260111362028186911": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1768524870.2359917,
+      "last_eval_ts": 1768524870.2359917,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1768524870.2359917
+    },
+    "matidiazlife|340282366841710301244260111352231521224": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1768524870.2359917,
+      "last_eval_ts": 1768524870.2359917,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1768524870.2359917
+    },
+    "matidiazlife|340282366841710301244260111354041521043": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1768524870.2359917,
+      "last_eval_ts": 1768524870.2359917,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1768524870.2359917
+    },
+    "matidiazlife|340282366841710301244260111355628187551": {
+      "seguimiento_actual": 0,
+      "last_sent_ts": 0.0,
+      "last_eval_ts": 1768524870.2359917,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1768524870.2359917
+    },
+    "matidiazlife|340282366841710301244260111357834853997": {
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1768524870.2359917,
+      "last_eval_ts": 1768524870.2359917,
+      "ultimo_contacto_ts": 0.0,
+      "cerrado": false,
+      "ultima_actualizacion_ts": 1768524870.2359917
+    }
+  }
+}

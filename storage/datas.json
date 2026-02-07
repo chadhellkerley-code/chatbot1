@@ -1,0 +1,416 @@
+[
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768517966,
+    "iso": "2026-01-15T22:59:26.141562"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (unread): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768517967,
+    "iso": "2026-01-15T22:59:27.500534"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (all): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768517968,
+    "iso": "2026-01-15T22:59:28.854824"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768517985,
+    "iso": "2026-01-15T22:59:45.334793"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (unread): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768517986,
+    "iso": "2026-01-15T22:59:46.705443"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (all): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768517988,
+    "iso": "2026-01-15T22:59:48.059466"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518006,
+    "iso": "2026-01-15T23:00:06.184933"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (unread): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518007,
+    "iso": "2026-01-15T23:00:07.545671"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (all): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518008,
+    "iso": "2026-01-15T23:00:08.933292"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518151,
+    "iso": "2026-01-15T23:02:31.278607"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518151,
+    "iso": "2026-01-15T23:02:31.304289"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518152,
+    "iso": "2026-01-15T23:02:32.787463"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518154,
+    "iso": "2026-01-15T23:02:34.145643"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518155,
+    "iso": "2026-01-15T23:02:35.504455"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518174,
+    "iso": "2026-01-15T23:02:54.429977"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518174,
+    "iso": "2026-01-15T23:02:54.444979"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518175,
+    "iso": "2026-01-15T23:02:55.792076"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518177,
+    "iso": "2026-01-15T23:02:57.146731"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518178,
+    "iso": "2026-01-15T23:02:58.504064"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518199,
+    "iso": "2026-01-15T23:03:19.677473"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518199,
+    "iso": "2026-01-15T23:03:19.692566"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518201,
+    "iso": "2026-01-15T23:03:21.053992"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518202,
+    "iso": "2026-01-15T23:03:22.425515"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518203,
+    "iso": "2026-01-15T23:03:23.779312"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518215,
+    "iso": "2026-01-15T23:03:35.688670"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518215,
+    "iso": "2026-01-15T23:03:35.695732"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518217,
+    "iso": "2026-01-15T23:03:37.050248"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518218,
+    "iso": "2026-01-15T23:03:38.404610"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518219,
+    "iso": "2026-01-15T23:03:39.759157"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518236,
+    "iso": "2026-01-15T23:03:56.523064"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518237,
+    "iso": "2026-01-15T23:03:57.872630"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518237,
+    "iso": "2026-01-15T23:03:57.888090"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518239,
+    "iso": "2026-01-15T23:03:59.250758"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518240,
+    "iso": "2026-01-15T23:04:00.603255"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518241,
+    "iso": "2026-01-15T23:04:01.954368"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518243,
+    "iso": "2026-01-15T23:04:03.337782"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518244,
+    "iso": "2026-01-15T23:04:04.712729"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518371,
+    "iso": "2026-01-15T23:06:11.392645"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518372,
+    "iso": "2026-01-15T23:06:12.744279"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518372,
+    "iso": "2026-01-15T23:06:12.763995"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518374,
+    "iso": "2026-01-15T23:06:14.134043"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518375,
+    "iso": "2026-01-15T23:06:15.474559"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518376,
+    "iso": "2026-01-15T23:06:16.841180"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518378,
+    "iso": "2026-01-15T23:06:18.191881"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518379,
+    "iso": "2026-01-15T23:06:19.537491"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518393,
+    "iso": "2026-01-15T23:06:33.772576"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518395,
+    "iso": "2026-01-15T23:06:35.114865"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518395,
+    "iso": "2026-01-15T23:06:35.142950"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518396,
+    "iso": "2026-01-15T23:06:36.482296"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518397,
+    "iso": "2026-01-15T23:06:37.830118"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518399,
+    "iso": "2026-01-15T23:06:39.199974"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518400,
+    "iso": "2026-01-15T23:06:40.554409"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518401,
+    "iso": "2026-01-15T23:06:41.925961"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518416,
+    "iso": "2026-01-15T23:06:56.817900"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518418,
+    "iso": "2026-01-15T23:06:58.170662"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518418,
+    "iso": "2026-01-15T23:06:58.188071"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518419,
+    "iso": "2026-01-15T23:06:59.605625"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518420,
+    "iso": "2026-01-15T23:07:00.958049"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518422,
+    "iso": "2026-01-15T23:07:02.291703"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518423,
+    "iso": "2026-01-15T23:07:03.663368"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518425,
+    "iso": "2026-01-15T23:07:05.027206"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518438,
+    "iso": "2026-01-15T23:07:18.606375"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518439,
+    "iso": "2026-01-15T23:07:19.964763"
+  },
+  {
+    "action": "MemoriaError",
+    "account": "matidiazlife",
+    "message": "Error obteniendo threads para @matidiazlife: sin resultados",
+    "ts": 1768518439,
+    "iso": "2026-01-15T23:07:19.987506"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20&selected_filter=unread&fetch_reason=manual_refresh",
+    "ts": 1768518441,
+    "iso": "2026-01-15T23:07:21.368404"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_threads): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20",
+    "ts": 1768518442,
+    "iso": "2026-01-15T23:07:22.721988"
+  },
+  {
+    "action": "InboxError",
+    "message": "Error obteniendo threads (direct_pending_inbox): 404 Client Error: Not Found for url: https://i.instagram.com/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&persistentBadging=true",
+    "ts": 1768518444,
+    "iso": "2026-01-15T23:07:24.088378"
+  }
+]
