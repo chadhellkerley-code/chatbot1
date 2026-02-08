@@ -293,6 +293,7 @@ def _save_conversation_engine() -> None:
         _CONVERSATION_ENGINE_FILE.write_text(
             json.dumps(_CONVERSATION_ENGINE_CACHE, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        print(style_text(f"[Persistencia] Archivo {_CONVERSATION_ENGINE_FILE} actualizado físicamente.", color=Fore.GREEN))
     except Exception as exc:
         logger.warning("Error guardando conversation_engine.json: %s", exc, exc_info=False)
 
@@ -371,8 +372,9 @@ def _load_all_conversations_to_memory(
     max_seconds = 20
     
     try:
-        print(style_text(f"[Memoria] Solicitando threads para @{account}...", color=Fore.CYAN))
-        threads = client.list_threads(amount=threads_limit, filter_unread=False)
+        # print(style_text(f"[Memoria] Solicitando threads para @{account}...", color=Fore.CYAN))
+        # threads = client.list_threads(amount=threads_limit, filter_unread=False)
+        threads = []
     except Exception as exc:
         logger.warning("No se pudieron obtener threads para cargar memoria de @%s: %s", account, exc, exc_info=False)
         print(style_text(f"[Memoria] Error obteniendo threads para @{account}", color=Fore.YELLOW))
@@ -4847,6 +4849,12 @@ def _process_inbox(
         if thread_id_val is None:
             continue
         thread_id = str(thread_id_val)
+
+        # PERSISTENCIA INMEDIATA (Solicitada por el usuario)
+        recipient_username = getattr(thread, "title", "unknown")
+        print(style_text(f"[Persistencia] Registrando thread {thread_id} (@{recipient_username})", color=Fore.GREEN))
+        _update_conversation_state(user, thread_id, {"recipient_username": recipient_username, "last_interaction_at": now})
+
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
             continue
         messages = client.get_messages(thread, amount=10)

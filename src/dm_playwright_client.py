@@ -168,166 +168,74 @@ class PlaywrightDMClient:
         self._open_inbox()
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False) -> List[ThreadLike]:
+        """
+        FLUJO OBLIGATORIO:
+        1. Abrir inbox.
+        2. Tomar la primera fila visible válida.
+        3. Click inmediato.
+        4. Retornar para persistencia y proceso.
+        """
         page = self._ensure_page()
         self._open_inbox()
-        try:
-            inbox_panel, panel_method, search_selector_used, panel_counts = self._get_inbox_panel(page)
-            # Usar el selector real que devolvió el panel, no ROW_SELECTOR broad
-            try:
-                actual_selector = (panel_counts.get("row_selector") or ROW_SELECTOR) if panel_counts else ROW_SELECTOR
-                count_rows = inbox_panel.locator(actual_selector).count() if inbox_panel is not None else 0
-            except Exception:
-                count_rows = 0
-            
-            # Calcular valid_rows usando _count_rows_valid sobre el selector elegido
-            valid_rows = 0
-            try:
-                if inbox_panel is not None and actual_selector:
-                    rows_locator = inbox_panel.locator(actual_selector)
-                    valid_rows = self._count_rows_valid(rows_locator)
-            except Exception:
-                valid_rows = 0
-            
-            logger.info(
-                "PlaywrightDM inbox_panel_selected=%s panel_level=%s row_selector=%s search_selector_used=%s count_rows=%s valid_rows=%s rows_raw=%s rows_valid=%s",
-                panel_method,
-                panel_counts.get("level", 0),
-                panel_counts.get("row_selector", ""),
-                search_selector_used,
-                count_rows,
-                valid_rows,
-                panel_counts.get("raw", 0),
-                panel_counts.get("valid", 0),
-            )
 
-            threads = self._scan_threads_click_first(amount, filter_unread, inbox_panel, panel_counts)
+        # Selectores simplificados para evitar escaneo masivo
+        selector_candidates = [
+            "div[role='main'] div[role='listitem']",
+            "div[role='main'] div[role='row']",
+            "div[role='main'] div[role='button'][tabindex='0']",
+        ]
 
-            logger.info(
-                "PlaywrightDM list_threads account=@%s count=%d filter_unread=%s",
-                self.username,
-                len(threads),
-                filter_unread,
-            )
-            if not threads and self.dump_on_error:
-                dump_path = self.debug_dump_inbox("list_threads_zero_or_exception")
-                logger.info("Se genero dump: %s", dump_path or "-")
-            return threads
-        except Exception:
-            if self.dump_on_error:
-                dump_path = self.debug_dump_inbox("list_threads_zero_or_exception")
-                logger.info("Se genero dump: %s", dump_path or "-")
-            raise
-
-    def _scan_threads_click_first(
-        self,
-        amount: int,
-        filter_unread: bool,
-        inbox_panel,
-        panel_counts: dict,
-    ) -> List[ThreadLike]:
-        page = self._ensure_page()
-        panel = inbox_panel or page
-        primary_selector = (panel_counts or {}).get("row_selector") or ROW_SELECTOR
-        selector_candidates: List[str] = []
-        if primary_selector:
-            selector_candidates.append(primary_selector)
-        for selector in self._row_selector_candidates():
-            if selector not in selector_candidates:
-                selector_candidates.append(selector)
-
-        rows = None
-        row_selector_used = ""
-        rows_total_raw = 0
         for selector in selector_candidates:
             try:
-                candidate = panel.locator(selector)
-                count = candidate.count()
+                rows = page.locator(selector)
+                total = rows.count()
+                for idx in range(min(total, 5)): # Solo mirar los primeros pocos visibles
+                    row = rows.nth(idx)
+                    if not self._row_is_valid(row):
+                        continue
+
+                    if filter_unread and _thread_unread_count(row) <= 0:
+                        continue
+
+                    # CAPTURA PRE-CLICK (para no perder el thread si falla el click/carga)
+                    lines = self._row_lines(row)
+                    recipient_fallback = lines[0] if lines else "unknown"
+
+                    # CLICK INMEDIATO
+                    try:
+                        row.click()
+                    except Exception:
+                        continue
+
+                    # Esperar URL/Estado
+                    self._wait_thread_open(page, timeout_ms=8000)
+
+                    url = page.url or ""
+                    real_id = _extract_thread_id(url)
+                    recipient = _extract_header_username(page, self.username) or _extract_header_title(page) or recipient_fallback
+
+                    thread_key = real_id if real_id else f"stable_{hashlib.sha1(recipient.encode()).hexdigest()[:12]}"
+
+                    thread = ThreadLike(
+                        id=thread_key,
+                        pk=thread_key,
+                        users=[UserLike(pk=recipient, id=recipient, username=recipient)],
+                        title=recipient,
+                    )
+
+                    # Cache interno
+                    self._thread_cache[thread_key] = thread
+                    self._thread_cache_meta[thread_key] = {
+                        "title": recipient,
+                        "peer_username": recipient,
+                        "created_at": time.time()
+                    }
+
+                    return [thread] # Retornar inmediatamente el primero
             except Exception:
-                count = 0
-                candidate = None
-            if count > 0 and candidate is not None:
-                rows = candidate
-                row_selector_used = selector
-                rows_total_raw = count
-                break
-        if rows is None:
-            rows = panel.locator(selector_candidates[-1])
-            row_selector_used = selector_candidates[-1]
-            try:
-                rows_total_raw = rows.count()
-            except Exception:
-                rows_total_raw = 0
-
-        logger.info(
-            "PlaywrightDM row_selector_used=%s rows_total_raw=%d account=@%s",
-            row_selector_used,
-            rows_total_raw,
-            self.username,
-        )
-
-        threads: List[ThreadLike] = []
-        try:
-            total = rows.count()
-        except Exception:
-            total = 0
-
-        idx = 0
-        while idx < total and len(threads) < amount:
-            row = rows.nth(idx)
-
-            # Pre-validación mínima
-            if not self._row_is_valid(row):
-                idx += 1
                 continue
 
-            if filter_unread and _thread_unread_count(row) <= 0:
-                idx += 1
-                continue
-
-            # Capturar info de la fila ANTES del click como fallback para no perder el thread
-            lines = self._row_lines(row)
-            recipient_fallback = lines[0] if lines else "unknown"
-
-            # PASO SECUENCIAL: Click
-            try:
-                row.click()
-            except Exception:
-                idx += 1
-                continue
-            
-            # Intentar confirmar que está abierto (pero no descartamos si falla)
-            self._wait_thread_open(page, timeout_ms=8000)
-            
-            # CAPTURA DE CONTEXTO (Incluso si no detectamos composer, intentamos capturar ID/Nombre)
-            url = page.url or ""
-            real_thread_id = _extract_thread_id(url)
-            recipient = _extract_header_username(page, self.username) or _extract_header_title(page) or recipient_fallback
-            
-            # ID Estable (real si existe, sino sintético basado en el nombre detectado)
-            thread_key = real_thread_id if real_thread_id else f"stable_{hashlib.sha1(recipient.encode()).hexdigest()[:12]}"
-            
-            user = UserLike(pk=recipient, id=recipient, username=recipient)
-            thread = ThreadLike(
-                id=thread_key,
-                pk=thread_key,
-                users=[user],
-                unread_count=0,
-                title=recipient,
-            )
-
-            # Registro en cache para que get_messages/send_message puedan encontrarlo
-            self._thread_cache[thread_key] = thread
-            self._thread_cache_meta[thread_key] = {
-                "title": recipient,
-                "peer_username": recipient,
-                "created_at": time.time(),
-                "real_id": bool(real_thread_id)
-            }
-
-            threads.append(thread)
-            return threads # Retornar siempre el primero procesado
-
-        return threads
+        return []
 
     # LEGACY: Función deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_anchors(...)
@@ -1034,140 +942,6 @@ class PlaywrightDMClient:
         )
         return False
 
-    def _get_inbox_panel(self, page: Page):
-        search_selectors = (
-            "input[placeholder='Buscar']",
-            "input[placeholder='Search']",
-            "input[name='queryBox']",
-        )
-        search = None
-        used_selector = ""
-        for selector in search_selectors:
-            try:
-                candidate = page.locator(selector)
-                if candidate.count():
-                    search = candidate.first
-                    used_selector = selector
-                    break
-            except Exception:
-                continue
-        selector_candidates = self._row_selector_candidates()
-        if search is None:
-            row_selector_used = ""
-            rows = None
-            raw = 0
-            valid = 0
-            for selector in selector_candidates:
-                try:
-                    candidate = page.locator(selector)
-                    count = candidate.count()
-                except Exception:
-                    count = 0
-                    candidate = None
-                if count > 0 and candidate is not None:
-                    rows = candidate
-                    row_selector_used = selector
-                    raw = count
-                    break
-            if rows is not None:
-                valid = self._count_rows_valid(rows)
-            return page, "page", used_selector, {"raw": raw, "valid": valid, "level": 0, "row_selector": row_selector_used}
-
-        best_panel = None
-        best_method = "page"
-        best_level = 0
-        best_raw = 0
-        best_valid = -1
-        best_row_selector = ""
-        for level in range(1, 9):
-            try:
-                panel = search.locator(f"xpath=ancestor::*[self::div or self::section][{level}]")
-                if not panel.count():
-                    continue
-                panel = panel.first
-                rows = None
-                row_selector_used = ""
-                raw = 0
-                valid = 0
-                for selector in selector_candidates:
-                    try:
-                        candidate = panel.locator(selector)
-                        count = candidate.count()
-                    except Exception:
-                        count = 0
-                        candidate = None
-                    if count > 0 and candidate is not None:
-                        rows = candidate
-                        row_selector_used = selector
-                        raw = count
-                        break
-                if rows is not None:
-                    valid = self._count_rows_valid(rows)
-            except Exception:
-                continue
-            if valid > best_valid or (valid == best_valid and raw > best_raw):
-                best_panel = panel
-                best_method = f"ancestor[{level}]"
-                best_level = level
-                best_raw = raw
-                best_valid = valid
-                best_row_selector = row_selector_used
-        if best_panel is not None:
-            return (
-                best_panel,
-                best_method,
-                used_selector,
-                {"raw": best_raw, "valid": best_valid, "level": best_level, "row_selector": best_row_selector},
-            )
-
-        try:
-            panel = page.locator("div").filter(has=search).first
-            if panel.count():
-                rows = None
-                row_selector_used = ""
-                raw = 0
-                valid = 0
-                for selector in selector_candidates:
-                    try:
-                        candidate = panel.locator(selector)
-                        count = candidate.count()
-                    except Exception:
-                        count = 0
-                        candidate = None
-                    if count > 0 and candidate is not None:
-                        rows = candidate
-                        row_selector_used = selector
-                        raw = count
-                        break
-                if rows is not None:
-                    valid = self._count_rows_valid(rows)
-                return panel, "div_has_search", used_selector, {"raw": raw, "valid": valid, "level": 0, "row_selector": row_selector_used}
-        except Exception:
-            pass
-
-        try:
-            rows = None
-            row_selector_used = ""
-            raw = 0
-            valid = 0
-            for selector in selector_candidates:
-                try:
-                    candidate = page.locator(selector)
-                    count = candidate.count()
-                except Exception:
-                    count = 0
-                    candidate = None
-                if count > 0 and candidate is not None:
-                    rows = candidate
-                    row_selector_used = selector
-                    raw = count
-                    break
-            if rows is not None:
-                valid = self._count_rows_valid(rows)
-        except Exception:
-            raw = 0
-            valid = 0
-        return page, "page", used_selector, {"raw": raw, "valid": valid, "level": 0, "row_selector": row_selector_used}
 
     def _find_composer(self, page: Page):
         for selector in _COMPOSER_SELECTORS:
