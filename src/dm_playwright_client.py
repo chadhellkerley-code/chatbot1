@@ -91,8 +91,8 @@ class PlaywrightDMClient:
         self,
         *,
         account: Optional[dict] = None,
-        headless: bool = True,
-        slow_mo_ms: int = 0,
+        headless: bool = False,
+        slow_mo_ms: int = 1000,
         dump_on_error: bool = True,
     ) -> None:
         if sync_playwright is None:

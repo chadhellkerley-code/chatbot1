@@ -1948,11 +1948,14 @@ def _client_for(username: str):
     if not account:
         raise RuntimeError(f"No se encontro la cuenta {username}.")
     logger.info("autoresponder_dm_engine=playwright account=@%s", username)
-    client = PlaywrightDMClient(account=account, headless=True)
+    client = PlaywrightDMClient(account=account, headless=False, slow_mo_ms=1000)
     try:
         client.ensure_ready()
     except Exception:
         try:
+            if not client.headless:
+                print(style_text(f"[Debug] Navegador de @{username} queda abierto para inspección (fallo ensure_ready).", color=Fore.YELLOW))
+                time.sleep(120)
             client.close()
         except Exception:
             pass
@@ -5269,6 +5272,9 @@ def _activate_bot() -> None:
                     finally:
                         if client is not None:
                             try:
+                                if not client.headless:
+                                    print(style_text(f"[Debug] Navegador de @{user} queda abierto 120s para inspección manual.", color=Fore.YELLOW))
+                                    time.sleep(120)
                                 client.close()
                             except Exception:
                                 pass
