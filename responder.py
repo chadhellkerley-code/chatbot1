@@ -372,9 +372,8 @@ def _load_all_conversations_to_memory(
     max_seconds = 20
     
     try:
-        # print(style_text(f"[Memoria] Solicitando threads para @{account}...", color=Fore.CYAN))
-        # threads = client.list_threads(amount=threads_limit, filter_unread=False)
-        threads = []
+        print(style_text(f"[Memoria] Pre-discovery de threads para @{account}...", color=Fore.CYAN))
+        threads = client.list_threads(amount=threads_limit, filter_unread=False)
     except Exception as exc:
         logger.warning("No se pudieron obtener threads para cargar memoria de @%s: %s", account, exc, exc_info=False)
         print(style_text(f"[Memoria] Error obteniendo threads para @{account}", color=Fore.YELLOW))
@@ -4845,20 +4844,21 @@ def _process_inbox(
         if STOP_EVENT.is_set():
             break
         print(style_text(f"[Barrido] Thread {idx}/{total_threads} en progreso", color=Fore.CYAN))
-        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
-        if thread_id_val is None:
-            continue
-        thread_id = str(thread_id_val)
 
-        # PERSISTENCIA INMEDIATA (Solicitada por el usuario)
+        # 1. OBTENER MENSAJES (El thread ya debería estar abierto por list_threads)
+        messages = client.get_messages(thread, amount=10)
+        if not messages:
+            continue
+
+        # 2. CAPTURAR ID REAL (por si cambió durante get_messages/open_thread)
+        thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
+
+        # 3. PERSISTENCIA INMEDIATA (Solicitada por el usuario: thread -> memoria -> bot)
         print(style_text(f"[Persistencia] Registrando thread {thread_id} (@{recipient_username})", color=Fore.GREEN))
         _update_conversation_state(user, thread_id, {"recipient_username": recipient_username, "last_interaction_at": now})
 
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
-            continue
-        messages = client.get_messages(thread, amount=10)
-        if not messages:
             continue
         last = _latest_message(messages)
         if not last:

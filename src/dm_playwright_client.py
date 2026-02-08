@@ -169,27 +169,31 @@ class PlaywrightDMClient:
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False) -> List[ThreadLike]:
         """
-        FLUJO OBLIGATORIO:
-        1. Abrir inbox.
-        2. Tomar la primera fila visible válida.
-        3. Click inmediato.
-        4. Retornar para persistencia y proceso.
+        Discovery de inbox: Retorna lista de threads visibles sin abrirlos aún.
         """
         page = self._ensure_page()
         self._open_inbox()
 
-        # Selectores simplificados para evitar escaneo masivo
         selector_candidates = [
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
             "div[role='main'] div[role='button'][tabindex='0']",
         ]
 
+        threads: List[ThreadLike] = []
+        seen_titles = set()
+
         for selector in selector_candidates:
             try:
                 rows = page.locator(selector)
                 total = rows.count()
-                for idx in range(min(total, 5)): # Solo mirar los primeros pocos visibles
+                if total == 0:
+                    continue
+
+                for idx in range(total):
+                    if len(threads) >= amount:
+                        break
+
                     row = rows.nth(idx)
                     if not self._row_is_valid(row):
                         continue
@@ -197,45 +201,32 @@ class PlaywrightDMClient:
                     if filter_unread and _thread_unread_count(row) <= 0:
                         continue
 
-                    # CAPTURA PRE-CLICK (para no perder el thread si falla el click/carga)
                     lines = self._row_lines(row)
-                    recipient_fallback = lines[0] if lines else "unknown"
-
-                    # CLICK INMEDIATO
-                    try:
-                        row.click()
-                    except Exception:
+                    title = lines[0] if lines else "unknown"
+                    if title in seen_titles:
                         continue
+                    seen_titles.add(title)
 
-                    # Esperar URL/Estado
-                    self._wait_thread_open(page, timeout_ms=8000)
-
-                    url = page.url or ""
-                    real_id = _extract_thread_id(url)
-                    recipient = _extract_header_username(page, self.username) or _extract_header_title(page) or recipient_fallback
-
-                    thread_key = real_id if real_id else f"stable_{hashlib.sha1(recipient.encode()).hexdigest()[:12]}"
+                    # ID Temporal basado en el título para discovery
+                    temp_id = f"temp_{hashlib.sha1(title.encode()).hexdigest()[:10]}"
 
                     thread = ThreadLike(
-                        id=thread_key,
-                        pk=thread_key,
-                        users=[UserLike(pk=recipient, id=recipient, username=recipient)],
-                        title=recipient,
+                        id=temp_id,
+                        pk=temp_id,
+                        users=[UserLike(pk=title, id=title, username=title)],
+                        title=title,
                     )
+                    # Guardar meta para poder encontrarlo luego por título
+                    self._thread_cache[temp_id] = thread
+                    self._thread_cache_meta[temp_id] = {"title": title, "idx": idx, "selector": selector}
+                    threads.append(thread)
 
-                    # Cache interno
-                    self._thread_cache[thread_key] = thread
-                    self._thread_cache_meta[thread_key] = {
-                        "title": recipient,
-                        "peer_username": recipient,
-                        "created_at": time.time()
-                    }
-
-                    return [thread] # Retornar inmediatamente el primero
+                if threads:
+                    break
             except Exception:
                 continue
 
-        return []
+        return threads
 
     # LEGACY: Función deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_anchors(...)
@@ -653,6 +644,19 @@ class PlaywrightDMClient:
         if not opened:
             self.debug_dump_inbox("failed_to_open_thread")
             raise RuntimeError(f"No se pudo abrir el thread '{thread.title}'")
+
+        # Capturar y actualizar ID real en el objeto thread
+        new_url = page.url or ""
+        real_id = _extract_thread_id(new_url)
+        if real_id and real_id != thread.id:
+            old_id = thread.id
+            logger.info("PlaywrightDM id_updated %s -> %s", old_id, real_id)
+            thread.id = real_id
+            thread.pk = real_id
+            # Actualizar cache interno
+            if old_id in self._thread_cache:
+                self._thread_cache[real_id] = self._thread_cache.pop(old_id)
+                self._thread_cache_meta[real_id] = self._thread_cache_meta.pop(old_id)
 
         self._current_thread_id = thread.id
         self._assert_logged_in(page)
