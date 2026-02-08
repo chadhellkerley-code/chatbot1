@@ -4940,6 +4940,7 @@ def _process_inbox(
             last_seen_id,
         )
         # DIAGNOSTICO: Confirmar paso a persistencia
+        print(style_text(f"[Persistencia] Registrando mensaje recibido para @{recipient_username} (Thread: {thread_id})", color=Fore.WHITE))
         logger.info("PlaywrightDM passing to _record_message_received: thread_id=%s recipient=%s", thread_id, recipient_username)
         _record_message_received(user, thread_id, last_id_str, recipient_username)
         
@@ -4964,6 +4965,7 @@ def _process_inbox(
         )
         
         # DIAGNOSTICO: Confirmar paso a _update_conversation_state
+        print(style_text(f"[Persistencia] Actualizando estado a '{stage}' para @{recipient_username}", color=Fore.WHITE))
         logger.info("PlaywrightDM passing to _update_conversation_state: thread_id=%s stage=%s", thread_id, stage)
         _update_conversation_state(user, thread_id, {"stage": stage}, recipient_username)
         
