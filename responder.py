@@ -4843,20 +4843,39 @@ def _process_inbox(
     for idx, thread in enumerate(inbox, start=1):
         if STOP_EVENT.is_set():
             break
-        print(style_text(f"[Barrido] Thread {idx}/{total_threads} en progreso", color=Fore.CYAN))
+        print(style_text(f"Thread {idx}/{total_threads} | open_inbox OK", color=Fore.CYAN))
 
-        # 1. OBTENER MENSAJES (El thread ya debería estar abierto por list_threads)
+        # 1. OBTENER MENSAJES
         messages = client.get_messages(thread, amount=10)
-        if not messages:
-            continue
 
-        # 2. CAPTURAR ID REAL (por si cambió durante get_messages/open_thread)
+        # 2. CAPTURAR CONTEXTO
         thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
+        print(style_text(f"Thread {idx}/{total_threads} | open_thread recipient={recipient_username} thread_id={thread_id} OK", color=Fore.CYAN))
 
-        # 3. PERSISTENCIA INMEDIATA (Solicitada por el usuario: thread -> memoria -> bot)
-        print(style_text(f"[Persistencia] Registrando thread {thread_id} (@{recipient_username})", color=Fore.GREEN))
-        _update_conversation_state(user, thread_id, {"recipient_username": recipient_username, "last_interaction_at": now})
+        if not messages:
+            print(style_text(f"Thread {idx}/{total_threads} | captured messages=0", color=Fore.YELLOW))
+            continue
+        print(style_text(f"Thread {idx}/{total_threads} | captured messages={len(messages)}", color=Fore.CYAN))
+
+        # 3. PERSISTENCIA INMEDIATA (Snapshot DOM)
+        msgs_snapshot = [
+            {
+                "message_id": m.id,
+                "direction": getattr(m, "direction", "inbound"),
+                "text": m.text,
+                "timestamp_epoch": m.timestamp
+            }
+            for m in messages
+        ]
+        _update_conversation_state(user, thread_id, {
+            "recipient_username": recipient_username,
+            "last_interaction_at": now,
+            "source": "playwright",
+            "captured_at_epoch": time.time(),
+            "messages": msgs_snapshot
+        })
+        print(style_text(f"Thread {idx}/{total_threads} | persisted memory OK", color=Fore.GREEN))
 
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
             continue
@@ -5012,7 +5031,9 @@ def _process_inbox(
                 reply,
                 force=_FORCE_ALWAYS_RESPOND,
             )
+            now_time_str = datetime.now().strftime("%H:%M")
             if not can_send:
+                print(style_text(f"Thread {idx}/{total_threads} | bot_action=ignore at {now_time_str}", color=Fore.YELLOW))
                 logger.info(
                     "Omitiendo envío para @%s → @%s: %s",
                     user,
@@ -5022,8 +5043,10 @@ def _process_inbox(
                 if last_id:
                     state[user][thread_id] = last_id
                 save_auto_state(state)
+                print(style_text(f"Thread {idx}/{total_threads} | done", color=Fore.CYAN))
                 continue
 
+            print(style_text(f"Thread {idx}/{total_threads} | bot_action=respond at {now_time_str}", color=Fore.GREEN))
             logger.info(
                 "Decision responder @%s thread=%s stage=%s reason=%s",
                 user,
@@ -5073,6 +5096,7 @@ def _process_inbox(
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
+        print(style_text(f"Thread {idx}/{total_threads} | done", color=Fore.CYAN))
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
 def _print_bot_summary(stats: BotStats) -> None:

@@ -83,6 +83,7 @@ class MessageLike:
     user_id: str
     text: str
     timestamp: Optional[float]
+    direction: str = "inbound"  # "inbound" or "outbound"
 
 
 class PlaywrightDMClient:
@@ -207,18 +208,18 @@ class PlaywrightDMClient:
                         continue
                     seen_titles.add(title)
 
-                    # ID Temporal basado en el título para discovery
-                    temp_id = f"temp_{hashlib.sha1(title.encode()).hexdigest()[:10]}"
+                    # ID Estable recomendado: account:recipient
+                    stable_id = f"{self.username}:{title}"
 
                     thread = ThreadLike(
-                        id=temp_id,
-                        pk=temp_id,
+                        id=stable_id,
+                        pk=stable_id,
                         users=[UserLike(pk=title, id=title, username=title)],
                         title=title,
                     )
                     # Guardar meta para poder encontrarlo luego por título
-                    self._thread_cache[temp_id] = thread
-                    self._thread_cache_meta[temp_id] = {"title": title, "idx": idx, "selector": selector}
+                    self._thread_cache[stable_id] = thread
+                    self._thread_cache_meta[stable_id] = {"title": title, "idx": idx, "selector": selector}
                     threads.append(thread)
 
                 if threads:
@@ -354,16 +355,19 @@ class PlaywrightDMClient:
                     timestamp = time.time()
                     used_fallback_ts = True
                 outbound = self._is_outbound(node)
+                direction = "outbound" if outbound else "inbound"
                 user_id = self.user_id if outbound else _thread_peer_id(thread, self.user_id)
                 msg_id = _extract_message_id(node)
                 if not msg_id:
-                    msg_id = _hash_message_id(thread.id, user_id, text, timestamp)
+                    # Message ID estable recomendado
+                    msg_id = hashlib.sha1(f"{text}|{timestamp}|{direction}".encode()).hexdigest()[:12]
                 collected.append(
                     MessageLike(
                         id=msg_id,
                         user_id=user_id,
                         text=text,
                         timestamp=timestamp,
+                        direction=direction,
                     )
                 )
             except Exception:
