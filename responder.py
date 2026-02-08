@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-  NUEVA VERSION MATI, SI FUNCIONA ESTO!
 import base64
-import hashlib
 import importlib
 import getpass
 import json
@@ -290,28 +289,11 @@ def _save_conversation_engine() -> None:
     if _CONVERSATION_ENGINE_CACHE is None:
         return
     try:
-        count = len(_CONVERSATION_ENGINE_CACHE.get("conversations", {}))
-        print(style_text(f"[Persistencia] Guardando {count} conversaciones en conversation_engine.json...", color=Fore.WHITE))
-
-        # PROBE: Capturar tiempo antes de escribir
-        before_ts = time.time()
-
         _CONVERSATION_ENGINE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _CONVERSATION_ENGINE_FILE.write_text(
             json.dumps(_CONVERSATION_ENGINE_CACHE, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-
-        # PROBE: Verificar escritura física
-        if _CONVERSATION_ENGINE_FILE.exists():
-            mtime = _CONVERSATION_ENGINE_FILE.stat().st_mtime
-            if mtime >= before_ts - 1: # Un pequeño margen por precisión del FS
-                print(style_text(f"[Persistencia] CONFIRMACIÓN: Archivo escrito correctamente (mtime: {mtime})", color=Fore.GREEN))
-            else:
-                print(style_text(f"[Persistencia] ADVERTENCIA: El archivo existe pero el mtime no se actualizó.", color=Fore.YELLOW))
-
-        print(style_text(f"[Persistencia] Guardado OK. Ruta: {_CONVERSATION_ENGINE_FILE}", color=Fore.GREEN))
     except Exception as exc:
-        print(style_text(f"[Persistencia] ERROR CRÍTICO al guardar: {exc}", color=Fore.RED, bold=True))
         logger.warning("Error guardando conversation_engine.json: %s", exc, exc_info=False)
 
 
@@ -344,7 +326,6 @@ def _update_conversation_state(
     updates: Dict[str, Any],
     recipient_username: Optional[str] = None,
 ) -> Dict[str, Any]:
-    print(style_text(f"[Persistencia] Actualizando estado de thread {thread_id} (recipient: {recipient_username})", color=Fore.WHITE))
     engine = _load_conversation_engine()
     conversations = engine.setdefault("conversations", {})
     key = _get_conversation_key(account, thread_id)
@@ -387,8 +368,7 @@ def _load_all_conversations_to_memory(
     max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     print(style_text(f"[Memoria] Cargando conversaciones para @{account}...", color=Fore.CYAN))
     start_ts = time.time()
-    # Para Playwright el escaneo es secuencial y por click, aumentamos el tiempo maximo.
-    max_seconds = 180
+    max_seconds = 20
     
     try:
         print(style_text(f"[Memoria] Solicitando threads para @{account}...", color=Fore.CYAN))
@@ -420,12 +400,10 @@ def _load_all_conversations_to_memory(
         try:
             messages = client.get_messages(thread, amount=20)
         except Exception as exc:
-            print(style_text(f"[Memoria] ERROR leyendo mensajes de thread {thread_id}: {exc}", color=Fore.RED))
             logger.debug("No se pudieron obtener mensajes del thread %s: %s", thread_id, exc, exc_info=False)
             continue
         
         if not messages:
-            print(style_text(f"[Memoria] Thread {thread_id} sin mensajes, saltando...", color=Fore.YELLOW))
             continue
         
         # Obtener información del participante
@@ -1274,8 +1252,7 @@ def _process_followups(
     threads_limit: int = 15,
     followup_schedule_hours: Optional[List[int]] = None,
 ) -> None:
-    # Para Playwright omitimos el pre-cargado redundante de toda la memoria.
-    # _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
+    _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
     
     alias, entry = _followup_enabled_entry_for(user)
     if not alias or not entry or not entry.get("enabled"):
@@ -1779,7 +1756,6 @@ def _latest_message(messages: List[object]) -> Optional[object]:
 def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
     collected: List[object] = []
     try:
-        print(style_text(f"[Barrido] Buscando chats no leídos (limite: {amount})...", color=Fore.WHITE))
         threads = client.list_threads(amount=amount, filter_unread=True)
         if threads:
             collected.extend(threads)
@@ -1787,19 +1763,12 @@ def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
         pass
     except Exception:
         pass
-
-    if len(collected) < amount:
-        try:
-            print(style_text(f"[Barrido] Buscando todos los chats (faltan {amount - len(collected)})...", color=Fore.WHITE))
-            threads = client.list_threads(amount=amount, filter_unread=False)
-            if threads:
-                for t in threads:
-                    if not any(getattr(t, 'id', '1') == getattr(c, 'id', '2') for c in collected):
-                        collected.append(t)
-                        if len(collected) >= amount:
-                            break
-        except Exception:
-            pass
+    try:
+        threads = client.list_threads(amount=amount, filter_unread=False)
+        if threads:
+            collected.extend(threads)
+    except Exception:
+        pass
     if not collected:
         return []
     seen_ids: set[str] = set()
@@ -1807,12 +1776,7 @@ def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
     for thread in collected:
         thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
         if thread_id_val is None:
-            # Fallback a ID sintético para threads sin ID (ej: no cargados completamente)
-            title = getattr(thread, "title", "unknown")
-            synth_id = hashlib.sha1(f"synth|{title}".encode()).hexdigest()[:16]
-            thread_id_val = f"stable_{synth_id}"
-            setattr(thread, "id", thread_id_val)
-
+            continue
         thread_id = str(thread_id_val)
         if thread_id in seen_ids:
             continue
@@ -1978,7 +1942,7 @@ def _client_for(username: str):
     if not account:
         raise RuntimeError(f"No se encontro la cuenta {username}.")
     logger.info("autoresponder_dm_engine=playwright account=@%s", username)
-    client = PlaywrightDMClient(account=account, headless=False)
+    client = PlaywrightDMClient(account=account, headless=True)
     try:
         client.ensure_ready()
     except Exception:
@@ -4859,8 +4823,7 @@ def _process_inbox(
     threads_limit: int = 20,
 ) -> None:
     print(style_text(f"[Barrido] Iniciando scan de @{user}", color=Fore.CYAN))
-    # Para Playwright omitimos el pre-cargado redundante de toda la memoria por click.
-    # _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
+    _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
     
     inbox = _fetch_inbox_threads(client, amount=threads_limit)
     if not inbox:
@@ -4870,10 +4833,6 @@ def _process_inbox(
             user,
         )
         return
-
-    total_threads = len(inbox)
-    logger.info("PlaywrightDM inbox_scan_result account=@%s total_found=%d ids=%s",
-                user, total_threads, [getattr(t, "id", "synthetic_" + hashlib.sha1((user + getattr(t, "title", "")).encode()).hexdigest()[:8]) for t in inbox])
     state.setdefault(user, {})
     max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     now = time.time()
@@ -4883,26 +4842,15 @@ def _process_inbox(
     for idx, thread in enumerate(inbox, start=1):
         if STOP_EVENT.is_set():
             break
-
-        thread_id = str(getattr(thread, "id", "unknown"))
-        recipient_initial = getattr(thread, "title", "unknown")
-
-        print(style_text(f"\n[Ciclo] === INICIANDO CICLO {idx}/{total_threads} para @{recipient_initial} ===", color=Fore.CYAN, bold=True))
-
-        if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
-            print(style_text(f"[Ciclo] Thread saltado (no en lista permitida)", color=Fore.YELLOW))
+        print(style_text(f"[Barrido] Thread {idx}/{total_threads} en progreso", color=Fore.CYAN))
+        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
+        if thread_id_val is None:
             continue
-
-        # PASO 2 y 3: Hacer click y sincronizar información de inmediato
-        # get_messages realizará el click si no está abierto
+        thread_id = str(thread_id_val)
+        if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
+            continue
         messages = client.get_messages(thread, amount=10)
-
-        recipient_username = _resolve_username(client, thread, None)
-        print(style_text(f"[Persistencia] Sincronización de apertura para @{recipient_username}", color=Fore.WHITE))
-        _update_conversation_state(user, thread_id, {"updated_at": time.time()}, recipient_username=recipient_username)
-
         if not messages:
-            print(style_text(f"[Ciclo] Thread sin mensajes o no se pudo leer (Thread: {thread_id}).", color=Fore.YELLOW))
             continue
         last = _latest_message(messages)
         if not last:
@@ -4985,9 +4933,6 @@ def _process_inbox(
             last_id_str,
             last_seen_id,
         )
-        # DIAGNOSTICO: Confirmar paso a persistencia
-        print(style_text(f"[Persistencia] PERSISTIENDO mensaje recibido para @{recipient_username} (Thread: {thread_id})", color=Fore.GREEN, bold=True))
-        logger.info("PlaywrightDM passing to _record_message_received: thread_id=%s recipient=%s", thread_id, recipient_username)
         _record_message_received(user, thread_id, last_id_str, recipient_username)
         
         convo = "\n".join(
@@ -5010,9 +4955,6 @@ def _process_inbox(
             time_since_last_received=time_since_last_received,
         )
         
-        # DIAGNOSTICO: Confirmar paso a _update_conversation_state
-        print(style_text(f"[Persistencia] Actualizando estado a '{stage}' para @{recipient_username}", color=Fore.WHITE))
-        logger.info("PlaywrightDM passing to _update_conversation_state: thread_id=%s stage=%s", thread_id, stage)
         _update_conversation_state(user, thread_id, {"stage": stage}, recipient_username)
         
         status = _classify_response(last.text or "")
@@ -5123,11 +5065,7 @@ def _process_inbox(
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
-
-        print(style_text(f"[Ciclo] Thread {idx}/{total_threads} COMPLETADO para @{recipient_username}", color=Fore.GREEN, bold=True))
-        print(style_text(f"------------------------------------------------------------", color=Fore.WHITE))
-
-    print(style_text(f"[Barrido] Scan completo para @{user}. Procesados: {total_threads}", color=Fore.GREEN, bold=True))
+    print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
 def _print_bot_summary(stats: BotStats) -> None:
     print(full_line(color=Fore.MAGENTA))

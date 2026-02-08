@@ -271,34 +271,19 @@ class PlaywrightDMClient:
         max_scrolls = 10
         scrolls = 0
 
-        def _first_row_line(loc) -> str:
-            try:
-                if loc.count() <= 0:
-                    return ""
-                text = (loc.nth(0).inner_text() or "").strip()
-            except Exception:
-                return ""
-            if not text:
-                return ""
-            return text.splitlines()[0].strip()[:120]
-
         while len(threads) < amount and scrolls <= max_scrolls:
             try:
                 total = rows.count()
             except Exception:
                 total = 0
             if total <= 0:
-                print(style_text(f"[PlaywrightDM] No se encontraron filas con el selector {row_selector_used}", color=Fore.YELLOW))
                 break
 
-            print(style_text(f"[PlaywrightDM] Escaneando {total} filas (scroll {scrolls})", color=Fore.CYAN))
             idx = 0
             while idx < total and len(threads) < amount:
-                row_idx = idx
-                row = rows.nth(row_idx)
-                lines = self._row_lines(row)
-                first_line = lines[0] if lines else ""
+                row = rows.nth(idx)
 
+                # Pre-validación mínima
                 if not self._row_is_valid(row):
                     idx += 1
                     continue
@@ -307,39 +292,44 @@ class PlaywrightDMClient:
                     idx += 1
                     continue
 
-                # DISCOVERY MODO LECTURA: No clickeamos aquí.
-                # El click ocurrirá en get_messages -> _open_thread.
-                title = first_line
-                synth_id = hashlib.sha1(f"{self.username}|{title}".encode()).hexdigest()[:16]
-                thread_key = f"stable_{synth_id}"
-
-                if thread_key in seen:
+                # PASO SECUENCIAL: Click para confirmar y capturar contexto real
+                try:
+                    row.click()
+                except Exception:
                     idx += 1
                     continue
 
-                seen.add(thread_key)
-                recipient = title
-                user = UserLike(pk=recipient, id=recipient, username=recipient)
-                thread = ThreadLike(
-                    id=thread_key,
-                    pk=thread_key,
-                    users=[user],
-                    unread_count=_thread_unread_count(row),
-                    link="",
-                    title=title,
-                )
+                # Confirmar que está abierto (composer visible)
+                if self._wait_thread_open(page, timeout_ms=8000):
+                    # Capturar contexto vivo (URL real e info del header)
+                    url = page.url or ""
+                    real_thread_id = _extract_thread_id(url)
+                    recipient = _extract_header_username(page, self.username) or _extract_header_title(page) or "unknown"
 
-                threads.append(thread)
-                self._thread_cache[thread_key] = thread
-                self._thread_cache_meta[thread_key] = {
-                    "title": title,
-                    "peer_username": title,
-                    "row_index": row_idx,
-                    "row_selector": row_selector_used,
-                    "created_at": time.time(),
-                }
+                    # ID Estable (real si existe, sino sintético)
+                    thread_key = real_thread_id if real_thread_id else f"stable_{hashlib.sha1(recipient.encode()).hexdigest()[:12]}"
 
-                print(style_text(f"[PlaywrightDM] Chat identificado: {title} (ID: {thread_key[:12]})", color=Fore.WHITE))
+                    user = UserLike(pk=recipient, id=recipient, username=recipient)
+                    thread = ThreadLike(
+                        id=thread_key,
+                        pk=thread_key,
+                        users=[user],
+                        unread_count=0, # Ya lo estamos leyendo
+                        title=recipient,
+                    )
+
+                    # PERSISTENCIA INMEDIATA EN MEMORIA
+                    self._thread_cache[thread_key] = thread
+                    self._thread_cache_meta[thread_key] = {
+                        "title": recipient,
+                        "peer_username": recipient,
+                        "created_at": time.time(),
+                        "real_id": bool(real_thread_id)
+                    }
+
+                    threads.append(thread)
+                    return threads
+
                 idx += 1
 
             if len(threads) >= amount:
@@ -808,6 +798,7 @@ class PlaywrightDMClient:
                     count = 0
                 logger.info("PlaywrightDM row_selector_count selector=%s count=%s", selector, count)
         logger.info("PlaywrightDM inbox_abierto account=@%s", self.username)
+        time.sleep(1)
 
     def _dismiss_overlays(self, page: Page) -> None:
         """
@@ -1078,43 +1069,25 @@ class PlaywrightDMClient:
 
     def _wait_thread_open(self, page: Page, timeout_ms: int = 6000) -> bool:
         """
-        Espera a que el composer esté visible. Solo retorna True si aparece el composer.
-        NO acepta header u otros elementos como éxito.
+        Espera a que el composer esté visible y confirma que estamos en un thread.
         """
         url = page.url or ""
-        logger.info("PlaywrightDM wait_thread_open starting timeout=%dms url=%s", timeout_ms, url)
-        print(style_text(f"[PlaywrightDM] Esperando composer visible en {url} (timeout {timeout_ms}ms)...", color=Fore.WHITE))
+        is_in_thread = "/direct/t/" in url
 
-        # PROBE: ¿La URL indica que estamos en un thread?
-        is_url_thread = "/direct/t/" in url
-        if is_url_thread:
-            print(style_text(f"[PlaywrightDM] URL coincide con thread, procediendo a buscar componentes...", color=Fore.CYAN))
-        else:
-            print(style_text(f"[PlaywrightDM] ADVERTENCIA: La URL actual no parece ser un thread: {url}", color=Fore.YELLOW))
-
+        found_composer = False
         for selector in _COMPOSER_SELECTORS:
             try:
-                logger.info("PlaywrightDM wait_thread_open checking selector=%s", selector)
                 page.wait_for_selector(selector, timeout=timeout_ms // len(_COMPOSER_SELECTORS))
-                logger.info("PlaywrightDM wait_thread_open success selector=%s", selector)
-                print(style_text(f"[PlaywrightDM] OK: Composer detectado con: {selector}", color=Fore.GREEN))
-                return True
+                found_composer = True
+                break
             except Exception:
-                print(style_text(f"[PlaywrightDM] Composer NO detectado con: {selector}", color=Fore.YELLOW))
                 continue
 
-        # Log state on failure
-        self._log_navigation_state("WAIT_THREAD_OPEN_FAILURE")
+        # Probes de estado (requeridos por el usuario)
+        print(style_text(f"[Probe] thread_abierto = {is_in_thread and found_composer}", color=Fore.WHITE))
+        print(style_text(f"[Probe] existe_composer = {found_composer}", color=Fore.WHITE))
 
-        # PROBE: Si la URL es de thread pero no hay composer, es un fallo crítico de UI
-        if is_url_thread:
-            print(style_text(f"[PlaywrightDM] ERROR: URL de thread detectada pero NINGÚN selector de composer funcionó.", color=Fore.RED, bold=True))
-
-        logger.warning(
-            "PlaywrightDM wait_thread_open_failed reason=no_composer url=%s",
-            url,
-        )
-        return False
+        return is_in_thread and found_composer
 
     def _open_thread_by_cache(self, thread: ThreadLike) -> bool:
         """
@@ -1598,14 +1571,27 @@ def _thread_unread_count(node) -> int:
         aria = (node.get_attribute("aria-label") or "").lower()
     except Exception:
         aria = ""
+
     if any(token in aria for token in _UNREAD_HINTS):
         return 1
+
+    # Búsqueda de badge por aria-label
     try:
         badge = node.locator("span[aria-label*='unread'], span[aria-label*='sin leer'], span[aria-label*='no leido']")
         if badge.count():
             return 1
     except Exception:
         pass
+
+    # Búsqueda por "punto azul" (visual) - Instagram suele usar un div/span con fondo azul
+    # El color rgb(0, 149, 246) es el azul característico de Instagram
+    try:
+        blue_dot = node.locator("div[style*='background-color: rgb(0, 149, 246)'], span[style*='background-color: rgb(0, 149, 246)']")
+        if blue_dot.count() > 0:
+            return 1
+    except Exception:
+        pass
+
     return 0
 
 
