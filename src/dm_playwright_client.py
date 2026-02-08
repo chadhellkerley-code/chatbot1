@@ -240,6 +240,9 @@ class PlaywrightDMClient:
 
     def _row_selector_candidates(self) -> List[str]:
         return [
+            "a[href*='/direct/t/']",
+            "div[aria-label='Chats'] div[role='button']",
+            "div[aria-label='Mensajes'] div[role='button']",
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
             "div[role='listitem']",
@@ -273,13 +276,21 @@ class PlaywrightDMClient:
 
         # [CRÍTICO] Un thread DM real DEBE tener un enlace a /direct/t/
         # Las burbujas de Notas no suelen tener este enlace directo.
+        valid_href = False
         try:
-            has_dm_link = row.locator("a[href*='/direct/t/']").count() > 0
-            if not has_dm_link:
-                # Si no tiene link de DM, lo descartamos de una vez
-                return False
+            # 1. ¿El elemento mismo es el link?
+            href = row.get_attribute("href") or ""
+            if "/direct/t/" in href:
+                valid_href = True
+            # 2. ¿Contiene un link?
+            elif row.locator("a[href*='/direct/t/']").count() > 0:
+                valid_href = True
         except Exception:
             pass
+
+        if not valid_href:
+            print(style_text(f"[Probe] Fila rechazada (sin link DM): '{first_line[:30]}...'", color=Fore.YELLOW))
+            return False
 
         # Filtros de exclusión conocidos (headers, tabs, botones de búsqueda)
         if lowered in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal"}:
