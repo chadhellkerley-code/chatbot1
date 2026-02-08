@@ -168,7 +168,6 @@ class PlaywrightDMClient:
         self._open_inbox()
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False) -> List[ThreadLike]:
-        print(style_text(f"[PlaywrightDM] list_threads account=@{self.username} amount={amount} unread={filter_unread}", color=Fore.CYAN))
         page = self._ensure_page()
         self._open_inbox()
         try:
@@ -267,141 +266,67 @@ class PlaywrightDMClient:
         )
 
         threads: List[ThreadLike] = []
-        seen: set[str] = set()
-        max_scrolls = 10
-        scrolls = 0
+        try:
+            total = rows.count()
+        except Exception:
+            total = 0
 
-        while len(threads) < amount and scrolls <= max_scrolls:
-            try:
-                total = rows.count()
-            except Exception:
-                total = 0
-            if total <= 0:
-                break
+        idx = 0
+        while idx < total and len(threads) < amount:
+            row = rows.nth(idx)
 
-            idx = 0
-            while idx < total and len(threads) < amount:
-                row = rows.nth(idx)
-
-                # Pre-validación mínima
-                if not self._row_is_valid(row):
-                    idx += 1
-                    continue
-
-                if filter_unread and _thread_unread_count(row) <= 0:
-                    idx += 1
-                    continue
-
-                # PASO SECUENCIAL: Click para confirmar y capturar contexto real
-                try:
-                    row.click()
-                except Exception:
-                    idx += 1
-                    continue
-
-                # Confirmar que está abierto (composer visible)
-                if self._wait_thread_open(page, timeout_ms=8000):
-                    # Capturar contexto vivo (URL real e info del header)
-                    url = page.url or ""
-                    real_thread_id = _extract_thread_id(url)
-                    recipient = _extract_header_username(page, self.username) or _extract_header_title(page) or "unknown"
-
-                    # ID Estable (real si existe, sino sintético)
-                    thread_key = real_thread_id if real_thread_id else f"stable_{hashlib.sha1(recipient.encode()).hexdigest()[:12]}"
-
-                    user = UserLike(pk=recipient, id=recipient, username=recipient)
-                    thread = ThreadLike(
-                        id=thread_key,
-                        pk=thread_key,
-                        users=[user],
-                        unread_count=0, # Ya lo estamos leyendo
-                        title=recipient,
-                    )
-
-                    # PERSISTENCIA INMEDIATA EN MEMORIA
-                    self._thread_cache[thread_key] = thread
-                    self._thread_cache_meta[thread_key] = {
-                        "title": recipient,
-                        "peer_username": recipient,
-                        "created_at": time.time(),
-                        "real_id": bool(real_thread_id)
-                    }
-
-                    threads.append(thread)
-                    return threads
-
+            # Pre-validación mínima
+            if not self._row_is_valid(row):
                 idx += 1
+                continue
 
-            if len(threads) >= amount:
-                break
-            scrolls += 1
+            if filter_unread and _thread_unread_count(row) <= 0:
+                idx += 1
+                continue
+
+            # Capturar info de la fila ANTES del click como fallback para no perder el thread
+            lines = self._row_lines(row)
+            recipient_fallback = lines[0] if lines else "unknown"
+
+            # PASO SECUENCIAL: Click
             try:
-                rows_count_before = rows.count()
+                row.click()
             except Exception:
-                rows_count_before = 0
-            first_line_before = _first_row_line(rows)
+                idx += 1
+                continue
             
-            # Identificar el contenedor scrollable real (scrollHeight > clientHeight)
-            scroll_container = self._find_scroll_container(page, panel)
+            # Intentar confirmar que está abierto (pero no descartamos si falla)
+            self._wait_thread_open(page, timeout_ms=8000)
             
-            # Capturar scrollTop antes del scroll
-            scroll_top_before = 0
-            scroll_top_after = 0
+            # CAPTURA DE CONTEXTO (Incluso si no detectamos composer, intentamos capturar ID/Nombre)
+            url = page.url or ""
+            real_thread_id = _extract_thread_id(url)
+            recipient = _extract_header_username(page, self.username) or _extract_header_title(page) or recipient_fallback
             
-            # Scroll usando evaluate sobre el contenedor correcto
-            try:
-                if scroll_container:
-                    scroll_top_before = scroll_container.evaluate("el => el.scrollTop")
-                    scroll_container.evaluate("el => el.scrollTop += 1400")
-                    scroll_top_after = scroll_container.evaluate("el => el.scrollTop")
-                else:
-                    # Fallback a mouse wheel si no se encuentra contenedor scrollable
-                    # Intentar hover sobre el panel con position para mejor targeting
-                    try:
-                        box = panel.bounding_box()
-                        if box:
-                            # Hover en el centro del panel
-                            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                        else:
-                            panel.hover()
-                    except Exception:
-                        try:
-                            panel.hover()
-                        except Exception:
-                            pass
-                    page.mouse.wheel(0, 1400)
-            except Exception:
-                pass
+            # ID Estable (real si existe, sino sintético basado en el nombre detectado)
+            thread_key = real_thread_id if real_thread_id else f"stable_{hashlib.sha1(recipient.encode()).hexdigest()[:12]}"
             
-            try:
-                page.wait_for_timeout(500)
-            except Exception:
-                pass
-            try:
-                rows = panel.locator(row_selector_used)
-                rows_count_after = rows.count()
-            except Exception:
-                rows_count_after = 0
-            first_line_after = _first_row_line(rows)
-            logger.info(
-                "PlaywrightDM scroll_attempt=%d row_selector=%s rows_count_before=%d rows_count_after=%d scrollTop_before=%d scrollTop_after=%d first_line_before=%s first_line_after=%s",
-                scrolls,
-                row_selector_used,
-                rows_count_before,
-                rows_count_after,
-                scroll_top_before,
-                scroll_top_after,
-                first_line_before,
-                first_line_after,
+            user = UserLike(pk=recipient, id=recipient, username=recipient)
+            thread = ThreadLike(
+                id=thread_key,
+                pk=thread_key,
+                users=[user],
+                unread_count=0,
+                title=recipient,
             )
 
-        if len(threads) < amount:
-            logger.warning(
-                "PlaywrightDM no hay suficientes threads validos despues de %d scrolls (encontrados=%d requeridos=%d)",
-                scrolls,
-                len(threads),
-                amount,
-            )
+            # Registro en cache para que get_messages/send_message puedan encontrarlo
+            self._thread_cache[thread_key] = thread
+            self._thread_cache_meta[thread_key] = {
+                "title": recipient,
+                "peer_username": recipient,
+                "created_at": time.time(),
+                "real_id": bool(real_thread_id)
+            }
+
+            threads.append(thread)
+            return threads # Retornar siempre el primero procesado
+
         return threads
 
     # LEGACY: Función deshabilitada - ya no se usa (reemplazada por click-first scan)
@@ -494,115 +419,17 @@ class PlaywrightDMClient:
     # LEGACY: Función deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_rows(...) -> List[ThreadLike]
 
-    def _find_scroll_container(self, page: Page, panel):
-        """
-        Identifica el contenedor scrollable real dentro del panel.
-        Validaciones:
-        1. scrollHeight > clientHeight
-        2. overflowY in ('auto', 'scroll')
-        3. Probe: scrollTop cambia al incrementarlo
-        Si no pasa probe, continúa buscando en children.
-        Retorna el primer ElementHandle scrollable válido o None.
-        """
-        try:
-            # Usar evaluate_handle para obtener un DOM element (no serializable)
-            handle = panel.evaluate_handle("""
-                (panel) => {
-                    const findScrollable = (el) => {
-                        // Validar scrollHeight > clientHeight
-                        if (el.scrollHeight <= el.clientHeight) {
-                            // Buscar en children
-                            for (let child of el.children) {
-                                const scrollable = findScrollable(child);
-                                if (scrollable) return scrollable;
-                            }
-                            return null;
-                        }
-                        
-                        // Validar overflowY
-                        const style = window.getComputedStyle(el);
-                        const overflowY = style.overflowY;
-                        if (overflowY !== 'auto' && overflowY !== 'scroll') {
-                            // Buscar en children
-                            for (let child of el.children) {
-                                const scrollable = findScrollable(child);
-                                if (scrollable) return scrollable;
-                            }
-                            return null;
-                        }
-                        
-                        // Probe: verificar que scrollTop cambie
-                        const originalScrollTop = el.scrollTop;
-                        el.scrollTop += 1;
-                        const newScrollTop = el.scrollTop;
-                        el.scrollTop = originalScrollTop; // Restaurar
-                        
-                        if (newScrollTop === originalScrollTop) {
-                            // scrollTop no cambió, seguir buscando
-                            for (let child of el.children) {
-                                const scrollable = findScrollable(child);
-                                if (scrollable) return scrollable;
-                            }
-                            return null;
-                        }
-                        
-                        // Todas las validaciones pasaron
-                        return el;
-                    };
-                    return findScrollable(panel);
-                }
-            """)
-            
-            # Convertir handle a ElementHandle
-            scroll_container = handle.as_element()
-            
-            if scroll_container:
-                # Loguear info del contenedor
-                try:
-                    tag = scroll_container.evaluate("el => el.tagName.toLowerCase()")
-                    role = scroll_container.evaluate("el => el.getAttribute('role') || ''")
-                    classes = scroll_container.evaluate("el => el.className || ''")
-                    overflow_y = scroll_container.evaluate("el => window.getComputedStyle(el).overflowY")
-                    # Resumir classes para no saturar logs
-                    class_summary = ' '.join(classes.split()[:3]) if classes else ''
-                    logger.info(
-                        "PlaywrightDM scroll_container_selected tag=%s role=%s overflowY=%s classes=%s",
-                        tag,
-                        role or 'none',
-                        overflow_y or 'none',
-                        class_summary or 'none'
-                    )
-                except Exception:
-                    pass
-                return scroll_container
-        except Exception:
-            pass
-        
-        return None
 
     def get_messages(self, thread: ThreadLike, amount: int = 20, *, log: bool = True) -> List[MessageLike]:
         page = self._ensure_page()
-        print(style_text(f"[PlaywrightDM] get_messages para thread {thread.id}", color=Fore.WHITE))
         self._open_thread(thread)
 
         # Esperar a que los mensajes se hidraten
         try:
-            # Esperar a que aparezca al menos un nodo de mensaje
             msg_selector = _MESSAGE_NODE_SELECTORS[0]
-            print(style_text(f"[PlaywrightDM] Esperando hidratacion de mensajes ({msg_selector})...", color=Fore.WHITE))
             page.wait_for_selector(f"main {msg_selector}, div[role='main'] {msg_selector}", timeout=3000)
         except Exception:
-            print(style_text(f"[PlaywrightDM] Timeout esperando hidratacion", color=Fore.YELLOW))
             pass
-
-        # DIAGNOSTICO: Probar selectores de nodos
-        print(style_text(f"[PlaywrightDM] Diagnostico de selectores de mensajes:", color=Fore.WHITE))
-        for selector in _MESSAGE_NODE_SELECTORS:
-            try:
-                count = page.locator(f"main {selector}, div[role='main'] {selector}").count()
-                print(style_text(f"  - {selector}: {count} encontrados", color=Fore.WHITE if count > 0 else Fore.YELLOW))
-            except Exception:
-                pass
 
         nodes = self._collect_message_nodes(page)
         total = nodes.count()
@@ -614,13 +441,6 @@ class PlaywrightDMClient:
                     _thread_peer_id(thread, self.user_id),
                     self.username,
                 )
-            print(style_text(f"[PlaywrightDM] ERROR: No se encontraron mensajes en el thread {thread.id}", color=Fore.RED))
-            try:
-                # PROBE: Snippet del contenido de main
-                main_text = (page.locator("main, div[role='main']").first.inner_text() or "").strip()
-                print(style_text(f"[PlaywrightDM] Contenido de main (primeros 200 chars): {main_text[:200]}", color=Fore.YELLOW))
-            except Exception:
-                pass
             return []
 
         start_idx = max(0, total - max(1, amount))
@@ -672,35 +492,26 @@ class PlaywrightDMClient:
         return collected
 
     def send_message(self, thread: ThreadLike, text: str) -> Optional[str]:
-        print(style_text(f"[PlaywrightDM] Intentando enviar mensaje a thread {thread.id}", color=Fore.WHITE))
         page = self._ensure_page()
         self._open_thread(thread)
 
         composer = self._find_composer(page)
         if composer is None:
-            print(style_text(f"[PlaywrightDM] Abortando envío: no se encontró el composer.", color=Fore.RED, bold=True))
             logger.warning("PlaywrightDM sin composer thread=%s @%s", thread.id, self.username)
             return None
 
         try:
-            print(style_text(f"[PlaywrightDM] Haciendo click en composer...", color=Fore.WHITE))
             composer.click()
-            print(style_text(f"[PlaywrightDM] Escribiendo mensaje...", color=Fore.WHITE))
             composer.fill(text)
-            print(style_text(f"[PlaywrightDM] Presionando Enter...", color=Fore.WHITE))
             composer.press("Enter")
         except Exception as e:
-            print(style_text(f"[PlaywrightDM] ERROR durante la escritura/envío: {e}", color=Fore.RED))
             logger.warning("PlaywrightDM no pudo completar acciones de envío thread=%s @%s", thread.id, self.username)
             return None
 
-        print(style_text(f"[PlaywrightDM] Verificando envío...", color=Fore.WHITE))
         message_id = self._verify_sent(thread, text)
         if message_id:
-            print(style_text(f"[PlaywrightDM] Envío CONFIRMADO. ID: {message_id}", color=Fore.GREEN, bold=True))
             logger.info("PlaywrightDM envio_ok thread=%s msg_id=%s", thread.id, message_id)
         else:
-            print(style_text(f"[PlaywrightDM] Envío NO VERIFICADO en el DOM.", color=Fore.YELLOW))
             logger.warning("PlaywrightDM envio_no_verificado thread=%s @%s", thread.id, self.username)
         return message_id
 
@@ -742,13 +553,10 @@ class PlaywrightDMClient:
         return self._page
 
     def _open_inbox(self) -> None:
-        print(style_text(f"[PlaywrightDM] Abriendo inbox...", color=Fore.WHITE))
         page = self._ensure_page()
         try:
             page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=45_000)
-            print(style_text(f"[PlaywrightDM] Inbox cargado (URL: {page.url})", color=Fore.WHITE))
         except PlaywrightTimeoutError:
-            print(style_text(f"[PlaywrightDM] Timeout abriendo inbox, continuando...", color=Fore.YELLOW))
             pass
         self._dismiss_overlays(page)
         self._assert_logged_in(page)
@@ -908,11 +716,8 @@ class PlaywrightDMClient:
 
         # PROBE: ¿Ya estamos en el thread correcto?
         if "/direct/t/" in (page.url or "") and thread.id in page.url:
-            print(style_text(f"[PlaywrightDM] OK: Ya estamos en el thread {thread.id}", color=Fore.CYAN))
             self._current_thread_id = thread.id
             return
-
-        print(style_text(f"[PlaywrightDM] _open_thread: Intentando abrir chat '{thread.title}'...", color=Fore.WHITE))
 
         opened = False
 
@@ -920,7 +725,6 @@ class PlaywrightDMClient:
         if thread.id and not thread.id.startswith("stable_"):
             url = THREAD_URL_TEMPLATE.format(thread_id=thread.id)
             try:
-                print(style_text(f"[PlaywrightDM] Navegando a URL directa: {url}", color=Fore.WHITE))
                 page.goto(url, wait_until="domcontentloaded", timeout=20_000)
                 opened = self._wait_thread_open(page, timeout_ms=5000)
             except Exception:
@@ -928,12 +732,10 @@ class PlaywrightDMClient:
 
         # 2. Si es ID sintético o la navegación falló, usar el buscador de filas (sidebar)
         if not opened:
-            print(style_text(f"[PlaywrightDM] Buscando chat en el sidebar...", color=Fore.WHITE))
             opened = self._open_thread_by_cache(thread)
 
         # 3. Fallback final: ir a inbox y reintentar sidebar
         if not opened:
-            print(style_text(f"[PlaywrightDM] Fallback: Recargando inbox...", color=Fore.YELLOW))
             try:
                 page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=30_000)
                 opened = self._open_thread_by_cache(thread)
@@ -941,6 +743,7 @@ class PlaywrightDMClient:
                 opened = False
 
         if not opened:
+            self.debug_dump_inbox("failed_to_open_thread")
             raise RuntimeError(f"No se pudo abrir el thread '{thread.title}'")
 
         self._current_thread_id = thread.id
@@ -1071,19 +874,28 @@ class PlaywrightDMClient:
         """
         Espera a que el composer esté visible y confirma que estamos en un thread.
         """
-        url = page.url or ""
-        is_in_thread = "/direct/t/" in url
+        # 1. Esperar a que la URL cambie al patrón de thread
+        try:
+            page.wait_for_url(re.compile(r".*/direct/t/.*"), timeout=timeout_ms // 2)
+        except Exception:
+            pass
 
         found_composer = False
         for selector in _COMPOSER_SELECTORS:
             try:
+                # Intentar esperar al selector
                 page.wait_for_selector(selector, timeout=timeout_ms // len(_COMPOSER_SELECTORS))
                 found_composer = True
                 break
             except Exception:
                 continue
 
-        # Probes de estado (requeridos por el usuario)
+        # Re-obtener URL después de la espera
+        current_url = page.url or ""
+        is_in_thread = bool(re.search(r"/direct/t/([^/]+)", current_url))
+
+        # Probes de estado EXACTOS requeridos por el usuario
+        print(style_text(f"[Probe] URL = {current_url}", color=Fore.WHITE))
         print(style_text(f"[Probe] thread_abierto = {is_in_thread and found_composer}", color=Fore.WHITE))
         print(style_text(f"[Probe] existe_composer = {found_composer}", color=Fore.WHITE))
 
@@ -1182,12 +994,6 @@ class PlaywrightDMClient:
                 row_selector_used,
                 first_line[:120]
             )
-            
-            # Scroll e intentar click
-            try:
-                row.scroll_into_view_if_needed(timeout=2_000)
-            except Exception:
-                pass
             
             try:
                 row.click()
@@ -1364,16 +1170,13 @@ class PlaywrightDMClient:
         return page, "page", used_selector, {"raw": raw, "valid": valid, "level": 0, "row_selector": row_selector_used}
 
     def _find_composer(self, page: Page):
-        print(style_text(f"[PlaywrightDM] Buscando composer...", color=Fore.WHITE))
         for selector in _COMPOSER_SELECTORS:
             try:
                 loc = page.locator(selector)
                 if loc.count():
-                    print(style_text(f"[PlaywrightDM] Composer encontrado: {selector}", color=Fore.GREEN))
                     return loc.first
             except Exception:
                 continue
-        print(style_text(f"[PlaywrightDM] Composer NO encontrado en el DOM.", color=Fore.RED))
         return None
 
     def _refresh_thread_participants(self, page: Page, thread: ThreadLike) -> None:
