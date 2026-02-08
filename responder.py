@@ -1756,20 +1756,25 @@ def _latest_message(messages: List[object]) -> Optional[object]:
 
 def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
     collected: List[object] = []
+    print(style_text(f"[Discovery] Buscando threads (amount={amount})...", color=Fore.WHITE))
     try:
         threads = client.list_threads(amount=amount, filter_unread=True)
         if threads:
             collected.extend(threads)
+            print(style_text(f"[Discovery] Encontrados {len(threads)} unread threads", color=Fore.WHITE))
     except TypeError:
         pass
-    except Exception:
-        pass
+    except Exception as e:
+        print(style_text(f"[Discovery] Error en list_threads(unread): {e}", color=Fore.RED))
+
     try:
         threads = client.list_threads(amount=amount, filter_unread=False)
         if threads:
             collected.extend(threads)
-    except Exception:
-        pass
+            print(style_text(f"[Discovery] Encontrados {len(threads)} threads totales", color=Fore.WHITE))
+    except Exception as e:
+        print(style_text(f"[Discovery] Error en list_threads(all): {e}", color=Fore.RED))
+
     if not collected:
         return []
     seen_ids: set[str] = set()
@@ -4833,6 +4838,11 @@ def _process_inbox(
             "No threads visibles para @%s: ver screenshot/html en storage/logs (dm_debug_...)",
             user,
         )
+        # Extraer dump para saber por qué no hay threads
+        try:
+            client.debug_dump_inbox("no_threads_found")
+        except Exception:
+            pass
         return
     state.setdefault(user, {})
     max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0

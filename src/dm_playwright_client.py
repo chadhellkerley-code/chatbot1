@@ -175,11 +175,9 @@ class PlaywrightDMClient:
         page = self._ensure_page()
         self._open_inbox()
 
-        selector_candidates = [
-            "div[role='main'] div[role='listitem']",
-            "div[role='main'] div[role='row']",
-            "div[role='main'] div[role='button'][tabindex='0']",
-        ]
+        selector_candidates = self._row_selector_candidates()
+
+        print(style_text(f"[Probe] Iniciando list_threads en {page.url}", color=Fore.WHITE))
 
         threads: List[ThreadLike] = []
         seen_titles = set()
@@ -188,6 +186,7 @@ class PlaywrightDMClient:
             try:
                 rows = page.locator(selector)
                 total = rows.count()
+                print(style_text(f"[Probe] Selector '{selector}' -> count={total}", color=Fore.WHITE))
                 if total == 0:
                     continue
 
@@ -249,6 +248,22 @@ class PlaywrightDMClient:
             "div[role='button'][tabindex='0']",
         ]
 
+    def _get_inbox_panel(self, page: Page):
+        """
+        [Probe/Fix] Intenta encontrar el panel lateral de mensajes.
+        Retorna (locator, metodo, selector, meta).
+        """
+        for selector in ("div[role='main']", "main", "div[role='navigation']"):
+            try:
+                loc = page.locator(selector)
+                if loc.count() > 0:
+                    print(style_text(f"[Probe] _get_inbox_panel encontró '{selector}'", color=Fore.WHITE))
+                    return loc.first, "selector", selector, {"count": loc.count()}
+            except Exception:
+                continue
+        print(style_text("[Probe] _get_inbox_panel no encontró nada, usando page", color=Fore.YELLOW))
+        return page, "page", "", {"count": 1}
+
     def _row_is_valid(self, row) -> bool:
         lines = self._row_lines(row)
         if not lines:
@@ -258,16 +273,19 @@ class PlaywrightDMClient:
 
         # Filtros de exclusión conocidos (headers, tabs, botones de búsqueda)
         if lowered in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal"}:
+            print(style_text(f"[Probe] Fila rechazada (filtro texto): '{first_line}'", color=Fore.YELLOW))
             return False
 
         # Tokens específicos de UI de Notas
         notes_tokens = ("tu nota", "primera nota", "compartir una nota", "notas", "notes", "share a note")
         if any(token in lowered for token in notes_tokens):
+            print(style_text(f"[Probe] Fila rechazada (filtro Notas): '{first_line}'", color=Fore.YELLOW))
             return False
 
         try:
             aria = (row.get_attribute("aria-label") or "").lower()
             if any(token in aria for token in notes_tokens):
+                print(style_text(f"[Probe] Fila rechazada (filtro Notas aria): '{first_line}'", color=Fore.YELLOW))
                 return False
         except Exception:
             pass
@@ -297,6 +315,7 @@ class PlaywrightDMClient:
             # Si tiene al menos una línea y parece un nombre de usuario/título, es válido.
             # Los nombres de usuario en IG suelen no tener espacios o ser nombres propios.
             logger.debug("PlaywrightDM checking row: first_line=%s signals=%d", first_line[:30], signals)
+            print(style_text(f"[Probe] Fila aceptada: '{first_line}' (signals={signals})", color=Fore.GREEN))
             return True
 
         logger.info("PlaywrightDM row_is_valid=False first_line=%s reason=no_content", first_line[:50])
@@ -463,14 +482,19 @@ class PlaywrightDMClient:
             pass
         self._dismiss_overlays(page)
         self._assert_logged_in(page)
+
+        found_container = None
         for selector in ("a[href^='/direct/t/']", "nav[role='navigation']", "div[role='main']"):
             try:
                 if page.locator(selector).count():
+                    found_container = selector
                     break
                 page.wait_for_selector(selector, timeout=8_000)
+                found_container = selector
                 break
             except Exception:
                 continue
+        print(style_text(f"[Probe] Inbox container: {found_container}", color=Fore.WHITE))
         for search_selector in ("input[placeholder='Buscar']", "input[placeholder='Search']", "input[name='queryBox']"):
             try:
                 page.wait_for_selector(search_selector, timeout=15_000)
