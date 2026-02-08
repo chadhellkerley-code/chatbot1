@@ -49,6 +49,8 @@ _COMPOSER_SELECTORS = (
     "div[role='main'] div[role='textbox'][contenteditable='true']",
     "div[role='main'] div[contenteditable='true'][role='textbox']",
     "div[role='main'] textarea",
+    "div[role='textbox'][contenteditable='true']",
+    "div[contenteditable='true']",
 )
 
 _UNREAD_HINTS = ("unread", "sin leer", "no leido", "no leido")
@@ -336,9 +338,16 @@ class PlaywrightDMClient:
 
                 opened = self._wait_thread_open(page)
                 composer = self._find_composer(page) if opened else None
-                if composer is None:
+
+                # REQUISITO: Si el thread está abierto (por URL o indicadores), permitir captura
+                # aunque el composer no sea visible aún.
+                is_url_thread = "/direct/t/" in (page.url or "")
+
+                if composer is None and not is_url_thread:
+                    # ASSERTION-LIKE LOG
+                    self._log_navigation_state(f"DISCARDING_THREAD_IDX_{row_idx}")
                     logger.info(
-                        "PlaywrightDM row_discard idx=%d reason=no_composer first_line=%s",
+                        "PlaywrightDM row_discard idx=%d reason=no_composer_and_no_thread_url first_line=%s",
                         row_idx,
                         first_line[:120],
                     )
@@ -1063,7 +1072,9 @@ class PlaywrightDMClient:
         Probe de diagnóstico para saber exactamente donde estamos y qué vemos.
         """
         try:
-            page = self._ensure_page()
+            if self._page is None:
+                return
+            page = self._page
             url = page.url or ""
             in_inbox = "/direct/inbox/" in url
             in_thread = "/direct/t/" in url
@@ -1073,14 +1084,25 @@ class PlaywrightDMClient:
                 try:
                     # check if it exists in DOM at all
                     count = page.locator(selector).count()
-                    visible = page.locator(selector).is_visible() if count > 0 else False
-                    composer_results[selector] = {"exists": count > 0, "visible": visible}
+                    visible = page.locator(selector).first.is_visible() if count > 0 else False
+                    composer_results[selector] = {"count": count, "visible": visible}
                 except Exception as e:
                     composer_results[selector] = {"error": str(e)}
 
+            message_results = {}
+            for selector in _MESSAGE_NODE_SELECTORS:
+                try:
+                    count = page.locator(selector).count()
+                    visible = page.locator(selector).first.is_visible() if count > 0 else False
+                    message_results[selector] = {"count": count, "visible": visible}
+                except Exception as e:
+                    message_results[selector] = {"error": str(e)}
+
             logger.info(
-                "PlaywrightDM diagnostic_probe label=%s url=%s in_inbox=%s in_thread=%s has_composer=%s details=%s",
-                label, url, in_inbox, in_thread, any(d.get("visible") for d in composer_results.values()), composer_results
+                "PlaywrightDM diagnostic_probe label=%s url=%s in_inbox=%s in_thread=%s has_composer=%s composer_details=%s message_details=%s",
+                label, url, in_inbox, in_thread,
+                any(d.get("visible") for d in composer_results.values() if isinstance(d, dict)),
+                composer_results, message_results
             )
         except Exception as e:
             logger.error("Error in PlaywrightDM diagnostic_probe: %s", e)
