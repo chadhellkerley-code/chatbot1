@@ -271,13 +271,23 @@ class PlaywrightDMClient:
         first_line = lines[0].strip()
         lowered = first_line.lower()
 
+        # [CRÍTICO] Un thread DM real DEBE tener un enlace a /direct/t/
+        # Las burbujas de Notas no suelen tener este enlace directo.
+        try:
+            has_dm_link = row.locator("a[href*='/direct/t/']").count() > 0
+            if not has_dm_link:
+                # Si no tiene link de DM, lo descartamos de una vez
+                return False
+        except Exception:
+            pass
+
         # Filtros de exclusión conocidos (headers, tabs, botones de búsqueda)
         if lowered in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal"}:
             print(style_text(f"[Probe] Fila rechazada (filtro texto): '{first_line}'", color=Fore.YELLOW))
             return False
 
         # Tokens específicos de UI de Notas
-        notes_tokens = ("tu nota", "primera nota", "compartir una nota", "notas", "notes", "share a note")
+        notes_tokens = ("tu nota", "primera nota", "compartir una nota", "notas", "notes", "share a note", "nota de")
         if any(token in lowered for token in notes_tokens):
             print(style_text(f"[Probe] Fila rechazada (filtro Notas): '{first_line}'", color=Fore.YELLOW))
             return False
@@ -290,15 +300,18 @@ class PlaywrightDMClient:
         except Exception:
             pass
 
-        # RELAXED VALIDATION: Si tiene texto y no es un filtro de exclusión, lo consideramos candidato.
-        # Instagram cambia constantemente los selectores internos (time, badges), así que priorizamos
-        # la existencia de contenido textual.
-
+        # RELAXED VALIDATION: Priorizamos la existencia de señales de interacción real
         signals = 0
         try:
-            # Señal 1: Presencia de timestamp o indicadores de tiempo
-            if row.locator("time").count() > 0 or row.locator("span:has-text('h')").count() > 0 or row.locator("span:has-text('m')").count() > 0:
+            # Señal 1: Presencia de timestamp real (etiqueta <time>)
+            if row.locator("time").count() > 0:
                 signals += 1
+            else:
+                # Buscar patrones de tiempo más específicos (ej: "2 h", "5 min", "1 d")
+                # Evitamos matches genéricos de una sola letra
+                full_text = " ".join(lines)
+                if re.search(r"\b\d+\s*[hdmws]\b", full_text) or re.search(r"\b\d+\s*(min|seg|hor|dia|sem)\b", full_text):
+                    signals += 1
         except Exception:
             pass
 
@@ -312,8 +325,7 @@ class PlaywrightDMClient:
 
         # PROBE LOG: Para diagnosticar por qué se aceptan o rechazan filas
         if len(lines) >= 1:
-            # Si tiene al menos una línea y parece un nombre de usuario/título, es válido.
-            # Los nombres de usuario en IG suelen no tener espacios o ser nombres propios.
+            # Si tiene al menos una línea y pasó los filtros críticos, es válido.
             logger.debug("PlaywrightDM checking row: first_line=%s signals=%d", first_line[:30], signals)
             print(style_text(f"[Probe] Fila aceptada: '{first_line}' (signals={signals})", color=Fore.GREEN))
             return True
@@ -484,16 +496,38 @@ class PlaywrightDMClient:
         self._assert_logged_in(page)
 
         found_container = None
-        for selector in ("a[href^='/direct/t/']", "nav[role='navigation']", "div[role='main']"):
+        # Lista ampliada de selectores de contenedor para mayor robustez
+        container_candidates = (
+            "div[role='main']",
+            "main",
+            "section",
+            "div[aria-label='Direct']",
+            "div[aria-label='Mensajes']",
+            "div[aria-label='Chats']",
+            "div[role='navigation']",
+            "a[href^='/direct/t/']"
+        )
+
+        for selector in container_candidates:
             try:
-                if page.locator(selector).count():
+                if page.locator(selector).count() > 0:
                     found_container = selector
                     break
-                page.wait_for_selector(selector, timeout=8_000)
-                found_container = selector
-                break
             except Exception:
                 continue
+
+        if not found_container:
+            # Si ninguno es visible de inmediato, esperar brevemente al más probable
+            try:
+                page.wait_for_selector("div[role='main'], main, div[role='navigation']", timeout=10_000)
+                # Re-chequear
+                for selector in container_candidates:
+                    if page.locator(selector).count() > 0:
+                        found_container = selector
+                        break
+            except Exception:
+                pass
+
         print(style_text(f"[Probe] Inbox container: {found_container}", color=Fore.WHITE))
         for search_selector in ("input[placeholder='Buscar']", "input[placeholder='Search']", "input[name='queryBox']"):
             try:
