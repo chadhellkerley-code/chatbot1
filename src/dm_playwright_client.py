@@ -75,6 +75,7 @@ class ThreadLike:
     unread_count: int = 0
     link: str = ""
     title: str = ""
+    source_index: int = -1
 
 
 @dataclass
@@ -177,8 +178,6 @@ class PlaywrightDMClient:
 
         selector_candidates = self._row_selector_candidates()
 
-        print(style_text(f"[Probe] Iniciando list_threads en {page.url}", color=Fore.WHITE))
-
         threads: List[ThreadLike] = []
         seen_titles = set()
 
@@ -215,6 +214,7 @@ class PlaywrightDMClient:
                         pk=stable_id,
                         users=[UserLike(pk=title, id=title, username=title)],
                         title=title,
+                        source_index=idx,
                     )
                     # Guardar meta para poder encontrarlo luego por título
                     self._thread_cache[stable_id] = thread
@@ -447,8 +447,12 @@ class PlaywrightDMClient:
             pass
         return self._page
 
-    def _open_inbox(self) -> None:
+    def _open_inbox(self, force_reload: bool = False) -> None:
         page = self._ensure_page()
+        if not force_reload and INBOX_URL in (page.url or ""):
+            # Ya estamos en el inbox, no recargar
+            return
+
         try:
             page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=45_000)
         except PlaywrightTimeoutError:
@@ -633,6 +637,20 @@ class PlaywrightDMClient:
         except Exception:
             pass
 
+    def return_to_inbox(self) -> None:
+        """
+        Vuelve a la vista del inbox sin recargar la página si es posible.
+        """
+        page = self._ensure_page()
+        if INBOX_URL in (page.url or "") and not re.search(r"/direct/t/", page.url):
+            return
+
+        try:
+            # Intentar click en panel lateral o go_back
+            page.go_back(wait_until="domcontentloaded", timeout=5000)
+        except Exception:
+            self._open_inbox()
+
     def _open_thread(self, thread: ThreadLike) -> bool:
         """
         [CLICK-FIRST] Intenta abrir un thread y valida post-click.
@@ -640,36 +658,47 @@ class PlaywrightDMClient:
         """
         page = self._ensure_page()
 
-        # PROBE: ¿Ya estamos en el thread correcto?
+        # 1. ¿Ya estamos en el thread correcto?
         if "/direct/t/" in (page.url or "") and thread.id in page.url:
             if self._wait_thread_open(page, timeout_ms=3000):
                 self._current_thread_id = thread.id
                 return True
 
-        # SIEMPRE volver al inbox para asegurar que el click es sobre un elemento visible y fresco
-        try:
-            if INBOX_URL not in (page.url or ""):
-                page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=20_000)
-                self._dismiss_overlays(page)
-        except Exception:
-            pass
+        # 2. Asegurar que estamos en vista Inbox (sin recargar si es posible)
+        if INBOX_URL not in (page.url or "") or re.search(r"/direct/t/", page.url):
+            self.return_to_inbox()
 
-        # Intentar clickear usando cache
-        opened_visual = self._open_thread_by_cache(thread)
+        # 3. Intentar clickear por índice (Pseudocódigo Paso 4)
+        opened_visual = False
+        if thread.source_index != -1:
+            try:
+                # Usar el selector de filas estándar
+                rows = page.locator("div[role='main'] div[role='button'][tabindex='0']")
+                row = rows.nth(thread.source_index)
+                if row.count() > 0:
+                    row.click()
+                    opened_visual = True
+            except Exception:
+                opened_visual = False
+
+        # 4. Fallback a búsqueda por cache si el índice falló
+        if not opened_visual:
+            opened_visual = self._open_thread_by_cache(thread)
+
         if not opened_visual:
             return False
 
-        # VALIDACIÓN POST-CLICK (Pseudocódigo Paso 5)
-        # El wait(400) solicitado por el usuario
-        time.sleep(0.4)
+        # 5. VALIDACIÓN POST-CLICK (Pseudocódigo Paso 5)
+        # El wait(300) solicitado por el usuario (aprox)
+        time.sleep(0.3)
 
         is_real_dm = self._wait_thread_open(page, timeout_ms=6000)
         if not is_real_dm:
-            # Era Nota u otro elemento -> No es thread real.
-            print(style_text(f"[Probe] Thread descartado (URL no válida o sin composer)", color=Fore.YELLOW))
+            # No es thread real -> volver al inbox para el siguiente
+            self.return_to_inbox()
             return False
 
-        # Capturar y actualizar ID real en el objeto thread
+        # 6. Capturar y actualizar ID real
         new_url = page.url or ""
         real_id = _extract_thread_id(new_url)
         if real_id and real_id != thread.id:

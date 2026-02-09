@@ -1756,24 +1756,21 @@ def _latest_message(messages: List[object]) -> Optional[object]:
 
 def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
     collected: List[object] = []
-    print(style_text(f"[Discovery] Buscando threads (amount={amount})...", color=Fore.WHITE))
     try:
         threads = client.list_threads(amount=amount, filter_unread=True)
         if threads:
             collected.extend(threads)
-            print(style_text(f"[Discovery] Encontrados {len(threads)} unread threads", color=Fore.WHITE))
     except TypeError:
         pass
-    except Exception as e:
-        print(style_text(f"[Discovery] Error en list_threads(unread): {e}", color=Fore.RED))
+    except Exception:
+        pass
 
     try:
         threads = client.list_threads(amount=amount, filter_unread=False)
         if threads:
             collected.extend(threads)
-            print(style_text(f"[Discovery] Encontrados {len(threads)} threads totales", color=Fore.WHITE))
-    except Exception as e:
-        print(style_text(f"[Discovery] Error en list_threads(all): {e}", color=Fore.RED))
+    except Exception:
+        pass
 
     if not collected:
         return []
@@ -4831,8 +4828,9 @@ def _process_inbox(
     allowed_thread_ids: Optional[set[str]] = None,
     threads_limit: int = 20,
 ) -> None:
-    print(style_text(f"[Barrido] Iniciando scan de @{user}", color=Fore.CYAN))
-    # Pseudocódigo Paso 1: NO leer memoria globalmente aquí
+    # FASE 1 — ABRIR INBOX (UNA SOLA VEZ)
+    client._open_inbox()
+    print(style_text(f"Cuenta {user} | Inbox cargado", color=Fore.CYAN))
     
     inbox = _fetch_inbox_threads(client, amount=threads_limit)
     if not inbox:
@@ -4864,11 +4862,9 @@ def _process_inbox(
 
         if not messages:
             # try_open_thread devolvió False -> Ignorar fila (Nota o UI)
-            # Regresar al inbox para el siguiente candidato
-            client._open_inbox()
             continue
 
-        print(style_text(f"Thread {idx}/{total_threads} | Thread abierto (DM real)", color=Fore.GREEN))
+        print(style_text(f"Thread {idx}/{total_threads} | Thread abierto OK", color=Fore.GREEN))
 
         thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
@@ -5120,8 +5116,8 @@ def _process_inbox(
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
 
-        # Paso 9: Volver al inbox
-        client._open_inbox()
+        # Paso 9: Volver al inbox view (sin reload)
+        client.return_to_inbox()
 
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
