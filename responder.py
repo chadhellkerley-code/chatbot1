@@ -4852,27 +4852,24 @@ def _process_inbox(
     now = time.time()
     
     total_threads = len(inbox)
-    print(style_text(f"[Barrido] Threads visibles: {total_threads}", color=Fore.CYAN))
     for idx, thread in enumerate(inbox, start=1):
         if STOP_EVENT.is_set():
             break
-        print(style_text(f"Thread {idx}/{total_threads} | open_inbox OK", color=Fore.CYAN))
 
-        # 1. OBTENER MENSAJES
+        # 1. LOG INICIAL
+        print(style_text(f"Cuenta @{user} | Thread {idx}/{total_threads}", color=Fore.CYAN, bold=True))
+
+        # 2. OBTENER MENSAJES (Abre el thread internamente)
         messages = client.get_messages(thread, amount=10)
 
-        # 2. CAPTURAR CONTEXTO
+        # 3. CAPTURAR CONTEXTO
         thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
-        now_time_str = datetime.now().strftime("%H:%M")
-        print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – open_thread OK – {now_time_str}", color=Fore.CYAN))
 
         if not messages:
-            print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – captured messages=0 – {now_time_str}", color=Fore.YELLOW))
             continue
-        print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – captured messages={len(messages)} – {now_time_str}", color=Fore.CYAN))
 
-        # 3. PERSISTENCIA INMEDIATA (Snapshot DOM)
+        # 4. PERSISTENCIA INMEDIATA (Snapshot DOM)
         msgs_snapshot = [
             {
                 "message_id": m.id,
@@ -4889,10 +4886,13 @@ def _process_inbox(
             "captured_at_epoch": time.time(),
             "messages": msgs_snapshot
         })
-        print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – persisted memory OK – {now_time_str}", color=Fore.GREEN))
+        print(style_text(f"Thread {idx}/{total_threads} | Persistido en memoria", color=Fore.GREEN))
 
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
+            print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (no permitido) | {datetime.now().strftime('%H:%M')}", color=Fore.YELLOW))
             continue
+
+        print(style_text(f"Thread {idx}/{total_threads} | Leyendo memoria", color=Fore.WHITE))
         last = _latest_message(messages)
         if not last:
             continue
@@ -4953,6 +4953,7 @@ def _process_inbox(
         conv_state = _get_conversation_state(user, thread_id)
         last_seen_id = conv_state.get("last_message_id_seen")
         if last_seen_id is not None and str(last_seen_id) == last_id_str:
+            print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (ya visto) | {datetime.now().strftime('%H:%M')}", color=Fore.YELLOW))
             logger.info(
                 "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=skip_seen",
                 user,
@@ -5047,7 +5048,7 @@ def _process_inbox(
             )
             now_time_str = datetime.now().strftime("%H:%M")
             if not can_send:
-                print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – bot_action=ignore – {now_time_str}", color=Fore.YELLOW))
+                print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR | {now_time_str}", color=Fore.YELLOW))
                 logger.info(
                     "Omitiendo envío para @%s → @%s: %s",
                     user,
@@ -5057,10 +5058,10 @@ def _process_inbox(
                 if last_id:
                     state[user][thread_id] = last_id
                 save_auto_state(state)
-                print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – done – {now_time_str}", color=Fore.CYAN))
                 continue
 
-            print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – bot_action=respond – {now_time_str}", color=Fore.GREEN))
+            action_label = "RESPONDER" if stage != _STAGE_FOLLOWUP else "FOLLOWUP"
+            print(style_text(f"Thread {idx}/{total_threads} | Acción={action_label} | {now_time_str}", color=Fore.GREEN))
             logger.info(
                 "Decision responder @%s thread=%s stage=%s reason=%s",
                 user,
@@ -5110,7 +5111,6 @@ def _process_inbox(
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
-        print(style_text(f"Thread {idx}/{total_threads} – {recipient_username} – done – {now_time_str}", color=Fore.CYAN))
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
 def _print_bot_summary(stats: BotStats) -> None:

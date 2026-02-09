@@ -240,15 +240,12 @@ class PlaywrightDMClient:
 
     def _row_selector_candidates(self) -> List[str]:
         return [
+            "a[href*='/direct/t/']",
+            "div[role='navigation'] div[role='button']",
             "div[aria-label='Chats'] div[role='button']",
             "div[aria-label='Mensajes'] div[role='button']",
-            "div[role='navigation'] div[role='button']",
-            "div[role='navigation'] a[href*='/direct/t/']",
-            "a[href*='/direct/t/']",
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
-            "div[role='listitem']",
-            "div[role='row']",
             "div[role='main'] div[role='button'][tabindex='0']",
             "div[role='button'][tabindex='0']",
         ]
@@ -273,77 +270,42 @@ class PlaywrightDMClient:
         lines = self._row_lines(row)
         if not lines:
             return False
-        first_line = lines[0].strip()
-        lowered = first_line.lower()
 
-        # [CRÍTICO] Excluir sección de Notas (Stories de texto arriba del inbox)
-        # Notas suelen tener tokens específicos
+        # 1. Filtro de Notas: Si no tiene al menos 2 líneas (nombre + mensaje), es sospechoso.
+        # Las notas suelen tener el nombre y el texto de la nota, pero real threads tienen nombre, preview y hora.
+        if len(lines) < 2:
+            return False
+
+        full_text = " ".join(lines).lower()
+
+        # 2. Exclusión de Notas por tokens (tokens proveídos por el usuario y comunes)
         notes_tokens = ("tu nota", "primera nota", "compartir una nota", "nota de", "feliz", "agradecido", "notas", "notes", "share a note")
-        if any(token in lowered for token in notes_tokens):
-            print(style_text(f"[Probe] Fila rechazada (filtro Notas texto): '{first_line[:30]}'", color=Fore.YELLOW))
+        if any(token in full_text for token in notes_tokens):
+            print(style_text(f"[Probe] Candidato rechazado (Notas): '{lines[0][:20]}...'", color=Fore.YELLOW))
             return False
 
+        # 3. VERIFICACIÓN CRÍTICA: Debe ser un link a /direct/t/ o estar dentro de uno.
+        # Esto separa DMs reales de burbujas de UI que no navegan a un chat.
         try:
-            # Buscar si el elemento está dentro de un contenedor de Notas
-            # XPath para buscar ancestros con aria-label que mencione Notas
-            if row.locator("xpath=ancestor-or-self::div[contains(@aria-label, 'Notas') or contains(@aria-label, 'Notes')]").count() > 0:
-                print(style_text(f"[Probe] Fila rechazada (contenedor Notas aria): '{first_line[:30]}'", color=Fore.YELLOW))
+            # Comprobar el elemento mismo, sus ancestros o sus descendientes
+            has_link = row.locator("xpath=ancestor-or-self::a[contains(@href, '/direct/t/')]").count() > 0
+            if not has_link:
+                # Si el selector no encontró un anchor, probamos a ver si tiene un anchor hijo
+                has_link = row.locator("a[href*='/direct/t/']").count() > 0
+
+            if not has_link:
                 return False
         except Exception:
-            pass
-
-        # Filtros de exclusión conocidos (headers, tabs, botones de búsqueda)
-        if lowered in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal", "mensajes", "chats", "direct"}:
-            print(style_text(f"[Probe] Fila rechazada (filtro texto): '{first_line}'", color=Fore.YELLOW))
             return False
 
-        # Tokens específicos de UI de Notas
-        notes_tokens = ("tu nota", "primera nota", "compartir una nota", "notas", "notes", "share a note", "nota de")
-        if any(token in lowered for token in notes_tokens):
-            print(style_text(f"[Probe] Fila rechazada (filtro Notas): '{first_line}'", color=Fore.YELLOW))
+        # Filtros de exclusión conocidos (headers, botones de UI)
+        first_line = lines[0].lower()
+        if first_line in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal", "mensajes", "chats", "direct"}:
             return False
 
-        try:
-            aria = (row.get_attribute("aria-label") or "").lower()
-            if any(token in aria for token in notes_tokens):
-                print(style_text(f"[Probe] Fila rechazada (filtro Notas aria): '{first_line}'", color=Fore.YELLOW))
-                return False
-        except Exception:
-            pass
-
-        # RELAXED VALIDATION: Priorizamos la existencia de señales de interacción real
-        signals = 0
-        try:
-            # Señal 1: Presencia de timestamp real (etiqueta <time>)
-            if row.locator("time").count() > 0:
-                signals += 1
-            else:
-                # Buscar patrones de tiempo más específicos (ej: "2 h", "5 min", "1 d")
-                # Evitamos matches genéricos de una sola letra
-                full_text = " ".join(lines)
-                if re.search(r"\b\d+\s*[hdmws]\b", full_text) or re.search(r"\b\d+\s*(min|seg|hor|dia|sem)\b", full_text):
-                    signals += 1
-        except Exception:
-            pass
-
-        try:
-            # Señal 2: Indicadores de mensajes no leídos
-            aria = (row.get_attribute("aria-label") or "").lower()
-            if any(token in aria for token in _UNREAD_HINTS) or row.locator("span[aria-label*='unread']").count() > 0:
-                signals += 1
-        except Exception:
-            pass
-
-        # PROBE LOG: Para diagnosticar por qué se aceptan o rechazan filas
-        if len(lines) >= 1:
-            # Si tiene al menos una línea y pasó los filtros críticos, lo marcamos como candidato.
-            # La verificación real de si es un thread ocurrirá al clickear (Click-First).
-            logger.debug("PlaywrightDM candidate found: first_line=%s signals=%d", first_line[:30], signals)
-            print(style_text(f"[Probe] Candidato aceptado para verificación: '{first_line[:40]}'", color=Fore.GREEN))
-            return True
-
-        logger.info("PlaywrightDM row_is_valid=False first_line=%s reason=no_content", first_line[:50])
-        return False
+        # Si llegamos aquí, es un candidato sólido para Click-First verification
+        print(style_text(f"[Probe] Candidato aceptado para verificación: '{lines[0][:40]}'", color=Fore.GREEN))
+        return True
 
     def _count_rows_valid(self, rows) -> int:
         try:
@@ -708,28 +670,16 @@ class PlaywrightDMClient:
             # Verificar de todos modos que haya composer
             return self._wait_thread_open(page, timeout_ms=3000)
 
-        opened = False
+        # SIEMPRE volver al inbox para asegurar que el click es sobre un elemento visible y fresco
+        # según el pseudocódigo "OBLIGATORIO" del usuario.
+        try:
+            if INBOX_URL not in page.url:
+                page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=20_000)
+                self._dismiss_overlays(page)
+        except Exception:
+            pass
 
-        # 1. Intentar navegación directa si tenemos ID real
-        if thread.id and not thread.id.startswith("stable_"):
-            url = THREAD_URL_TEMPLATE.format(thread_id=thread.id)
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-                opened = self._wait_thread_open(page, timeout_ms=6000)
-            except Exception:
-                opened = False
-
-        # 2. Si es ID sintético o la navegación falló, usar el buscador de filas (sidebar)
-        if not opened:
-            opened = self._open_thread_by_cache(thread)
-
-        # 3. Fallback final: ir a inbox y reintentar sidebar
-        if not opened:
-            try:
-                page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=30_000)
-                opened = self._open_thread_by_cache(thread)
-            except Exception:
-                opened = False
+        opened = self._open_thread_by_cache(thread)
 
         if not opened:
             logger.info("PlaywrightDM failed_to_open_thread title=%s", thread.title)
