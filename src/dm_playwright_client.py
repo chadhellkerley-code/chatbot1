@@ -267,45 +267,23 @@ class PlaywrightDMClient:
         return page, "page", "", {"count": 1}
 
     def _row_is_valid(self, row) -> bool:
-        lines = self._row_lines(row)
-        if not lines:
-            return False
-
-        # 1. Filtro de Notas: Si no tiene al menos 2 líneas (nombre + mensaje), es sospechoso.
-        # Las notas suelen tener el nombre y el texto de la nota, pero real threads tienen nombre, preview y hora.
-        if len(lines) < 2:
-            return False
-
-        full_text = " ".join(lines).lower()
-
-        # 2. Exclusión de Notas por tokens (tokens proveídos por el usuario y comunes)
-        notes_tokens = ("tu nota", "primera nota", "compartir una nota", "nota de", "feliz", "agradecido", "notas", "notes", "share a note")
-        if any(token in full_text for token in notes_tokens):
-            print(style_text(f"[Probe] Candidato rechazado (Notas): '{lines[0][:20]}...'", color=Fore.YELLOW))
-            return False
-
-        # 3. VERIFICACIÓN CRÍTICA: Debe ser un link a /direct/t/ o estar dentro de uno.
-        # Esto separa DMs reales de burbujas de UI que no navegan a un chat.
+        """
+        Validación mínima pre-click.
+        El filtrado real ocurre POST-CLICK en _open_thread.
+        """
         try:
-            # Comprobar el elemento mismo, sus ancestros o sus descendientes
-            has_link = row.locator("xpath=ancestor-or-self::a[contains(@href, '/direct/t/')]").count() > 0
-            if not has_link:
-                # Si el selector no encontró un anchor, probamos a ver si tiene un anchor hijo
-                has_link = row.locator("a[href*='/direct/t/']").count() > 0
-
-            if not has_link:
+            lines = self._row_lines(row)
+            if not lines:
                 return False
+
+            # Filtros de exclusión de UI básica (no de Notas)
+            first_line = lines[0].lower()
+            if first_line in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal", "mensajes", "chats", "direct"}:
+                return False
+
+            return True
         except Exception:
             return False
-
-        # Filtros de exclusión conocidos (headers, botones de UI)
-        first_line = lines[0].lower()
-        if first_line in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal", "mensajes", "chats", "direct"}:
-            return False
-
-        # Si llegamos aquí, es un candidato sólido para Click-First verification
-        print(style_text(f"[Probe] Candidato aceptado para verificación: '{lines[0][:40]}'", color=Fore.GREEN))
-        return True
 
     def _count_rows_valid(self, rows) -> int:
         try:
@@ -328,12 +306,10 @@ class PlaywrightDMClient:
     def get_messages(self, thread: ThreadLike, amount: int = 20, *, log: bool = True) -> List[MessageLike]:
         page = self._ensure_page()
 
-        # Click-First: Abrir y verificar thread antes de proceder
+        # [CLICK-FIRST] Abrir y verificar thread post-click
         try:
-            opened = self._open_thread(thread)
-            if not opened:
-                if log:
-                    print(style_text(f"[Probe] Thread '{thread.title}' descartado: no abrió DM válido.", color=Fore.YELLOW))
+            is_valid = self._open_thread(thread)
+            if not is_valid:
                 return []
         except Exception as e:
             if log:
@@ -659,30 +635,38 @@ class PlaywrightDMClient:
 
     def _open_thread(self, thread: ThreadLike) -> bool:
         """
-        Abre un thread y verifica que sea válido.
-        Retorna True si el thread se abrió y el composer está visible.
+        [CLICK-FIRST] Intenta abrir un thread y valida post-click.
+        Retorna True si el thread es un DM real (/direct/t/ + composer visible).
         """
         page = self._ensure_page()
 
         # PROBE: ¿Ya estamos en el thread correcto?
         if "/direct/t/" in (page.url or "") and thread.id in page.url:
-            self._current_thread_id = thread.id
-            # Verificar de todos modos que haya composer
-            return self._wait_thread_open(page, timeout_ms=3000)
+            if self._wait_thread_open(page, timeout_ms=3000):
+                self._current_thread_id = thread.id
+                return True
 
         # SIEMPRE volver al inbox para asegurar que el click es sobre un elemento visible y fresco
-        # según el pseudocódigo "OBLIGATORIO" del usuario.
         try:
-            if INBOX_URL not in page.url:
+            if INBOX_URL not in (page.url or ""):
                 page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=20_000)
                 self._dismiss_overlays(page)
         except Exception:
             pass
 
-        opened = self._open_thread_by_cache(thread)
+        # Intentar clickear usando cache
+        opened_visual = self._open_thread_by_cache(thread)
+        if not opened_visual:
+            return False
 
-        if not opened:
-            logger.info("PlaywrightDM failed_to_open_thread title=%s", thread.title)
+        # VALIDACIÓN POST-CLICK (Pseudocódigo Paso 5)
+        # El wait(400) solicitado por el usuario
+        time.sleep(0.4)
+
+        is_real_dm = self._wait_thread_open(page, timeout_ms=6000)
+        if not is_real_dm:
+            # Era Nota u otro elemento -> No es thread real.
+            print(style_text(f"[Probe] Thread descartado (URL no válida o sin composer)", color=Fore.YELLOW))
             return False
 
         # Capturar y actualizar ID real en el objeto thread
@@ -690,24 +674,16 @@ class PlaywrightDMClient:
         real_id = _extract_thread_id(new_url)
         if real_id and real_id != thread.id:
             old_id = thread.id
-            logger.info("PlaywrightDM id_updated %s -> %s", old_id, real_id)
             thread.id = real_id
             thread.pk = real_id
-            # Actualizar cache interno
             if old_id in self._thread_cache:
                 self._thread_cache[real_id] = self._thread_cache.pop(old_id)
                 self._thread_cache_meta[real_id] = self._thread_cache_meta.pop(old_id)
 
         self._current_thread_id = thread.id
         self._assert_logged_in(page)
-        try:
-            page.wait_for_selector("textarea, div[role='textbox']", timeout=12_000)
-        except Exception:
-            pass
-
-        self._current_thread_id = thread.id
         self._refresh_thread_participants(page, thread)
-        logger.info("PlaywrightDM thread_abierto id=%s user=%s", thread.id, _thread_peer_id(thread, self.user_id))
+
         return True
 
     def _collect_message_nodes(self, page: Page):
@@ -856,14 +832,12 @@ class PlaywrightDMClient:
 
     def _open_thread_by_cache(self, thread: ThreadLike) -> bool:
         """
-        Intenta reabrir un thread usando metadata del cache.
-        CRÍTICO: NO usa selectores en div[role='navigation'] para evitar clicks en Notas.
-        Solo retorna True si el composer está visible después del click.
+        [CLICK-FIRST] Intenta clickear un thread usando metadata del cache.
+        Retorna True si el click fue exitoso.
         """
         page = self._ensure_page()
         meta = self._thread_cache_meta.get(thread.id)
         if not meta:
-            logger.info("PlaywrightDM cache_reopen_skip thread=%s reason=no_meta", thread.id)
             return False
         
         title = (meta.get("title") or "").strip()
@@ -871,14 +845,11 @@ class PlaywrightDMClient:
         candidates = [title, peer]
         candidates = [c for c in candidates if c]
         if not candidates:
-            logger.info("PlaywrightDM cache_reopen_skip thread=%s reason=no_candidates", thread.id)
             return False
         
-        # Obtener panel del inbox - NUNCA usar div[role='navigation']
+        # Obtener panel del inbox
         inbox_panel, _method, _selector, _panel_counts = self._get_inbox_panel(page)
         
-        # Estrategia de selectores: SOLO dentro de div[role='main'] o panel principal
-        # Prohibido: div[role='navigation']
         selector_candidates = [
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
@@ -886,105 +857,36 @@ class PlaywrightDMClient:
         ]
         
         rows = None
-        row_selector_used = ""
         for selector in selector_candidates:
             try:
                 candidate = inbox_panel.locator(selector)
-                count = candidate.count()
-                if count > 0:
+                if candidate.count() > 0:
                     rows = candidate
-                    row_selector_used = selector
-                    logger.info(
-                        "PlaywrightDM cache_reopen_rows thread=%s selector=%s count=%d",
-                        thread.id,
-                        selector,
-                        count
-                    )
                     break
             except Exception:
                 continue
         
         if rows is None:
-            logger.info("PlaywrightDM cache_reopen_fail thread=%s reason=no_rows", thread.id)
             return False
         
         total = rows.count()
-        logger.info(
-            "PlaywrightDM cache_reopen_scan thread=%s selector=%s total_rows=%d candidates=%s",
-            thread.id,
-            row_selector_used,
-            total,
-            candidates
-        )
-        
         for idx in range(total):
             row = rows.nth(idx)
-            
-            # Validar que la fila sea válida (no Notas, etc)
             if not self._row_is_valid(row):
                 continue
             
             try:
                 text_value = (row.inner_text() or "").lower()
             except Exception:
-                text_value = ""
-            
-            if not text_value:
                 continue
             
-            # Verificar si esta fila contiene alguno de los candidatos
-            if not any(c.lower() in text_value for c in candidates):
-                continue
-            
-            # Extraer primera línea para logs
-            lines = self._row_lines(row)
-            first_line = lines[0] if lines else ""
-            
-            logger.info(
-                "PlaywrightDM cache_reopen_attempt thread=%s idx=%d selector=%s first_line=%s",
-                thread.id,
-                idx,
-                row_selector_used,
-                first_line[:120]
-            )
-            
-            try:
-                row.click()
-            except Exception:
-                logger.info(
-                    "PlaywrightDM cache_row_discard thread=%s idx=%d reason=click_failed first_line=%s",
-                    thread.id,
-                    idx,
-                    first_line[:120]
-                )
-                continue
-            
-            # CRÍTICO: Solo considerar éxito si el composer aparece
-            opened = self._wait_thread_open(page)
-            if not opened:
-                logger.info(
-                    "PlaywrightDM cache_row_discard thread=%s idx=%d reason=no_composer first_line=%s",
-                    thread.id,
-                    idx,
-                    first_line[:120]
-                )
-                continue
-            
-            # Éxito: composer visible
-            logger.info(
-                "PlaywrightDM cache_thread_open_ok thread=%s idx=%d key=%s first_line=%s",
-                thread.id,
-                idx,
-                thread.id,
-                first_line[:120]
-            )
-            return True
-        
-        logger.info(
-            "PlaywrightDM cache_reopen_fail thread=%s reason=no_match_with_composer total_scanned=%d",
-            thread.id,
-            total
-        )
+            if any(c.lower() in text_value for c in candidates):
+                try:
+                    row.click()
+                    return True
+                except Exception:
+                    continue
+
         return False
 
 

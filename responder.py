@@ -4832,7 +4832,7 @@ def _process_inbox(
     threads_limit: int = 20,
 ) -> None:
     print(style_text(f"[Barrido] Iniciando scan de @{user}", color=Fore.CYAN))
-    _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
+    # Pseudocódigo Paso 1: NO leer memoria globalmente aquí
     
     inbox = _fetch_inbox_threads(client, amount=threads_limit)
     if not inbox:
@@ -4856,20 +4856,24 @@ def _process_inbox(
         if STOP_EVENT.is_set():
             break
 
-        # 1. LOG INICIAL
+        time_str = datetime.now().strftime('%H:%M')
         print(style_text(f"Cuenta @{user} | Thread {idx}/{total_threads}", color=Fore.CYAN, bold=True))
 
-        # 2. OBTENER MENSAJES (Abre el thread internamente)
+        # Paso 4/5: CLICK THREAD REAL + VALIDACIÓN (Ocurre dentro de get_messages)
         messages = client.get_messages(thread, amount=10)
 
-        # 3. CAPTURAR CONTEXTO
+        if not messages:
+            # try_open_thread devolvió False -> Ignorar fila (Nota o UI)
+            # Regresar al inbox para el siguiente candidato
+            client._open_inbox()
+            continue
+
+        print(style_text(f"Thread {idx}/{total_threads} | Thread abierto (DM real)", color=Fore.GREEN))
+
         thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
 
-        if not messages:
-            continue
-
-        # 4. PERSISTENCIA INMEDIATA (Snapshot DOM)
+        # Paso 6/7: CAPTURAR + PERSISTIR EN MEMORIA (OBLIGATORIO)
         msgs_snapshot = [
             {
                 "message_id": m.id,
@@ -4886,12 +4890,16 @@ def _process_inbox(
             "captured_at_epoch": time.time(),
             "messages": msgs_snapshot
         })
+        print(style_text(f"Thread {idx}/{total_threads} | Contexto capturado ({len(messages)} mensajes)", color=Fore.GREEN))
         print(style_text(f"Thread {idx}/{total_threads} | Persistido en memoria", color=Fore.GREEN))
 
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
-            print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (no permitido) | {datetime.now().strftime('%H:%M')}", color=Fore.YELLOW))
+            print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (no permitido) | {time_str}", color=Fore.YELLOW))
+            # Regresar al inbox para el siguiente candidato
+            client._open_inbox()
             continue
 
+        # Paso 8: LEYENDO MEMORIA Y DECIDIENDO
         print(style_text(f"Thread {idx}/{total_threads} | Leyendo memoria", color=Fore.WHITE))
         last = _latest_message(messages)
         if not last:
@@ -5111,6 +5119,10 @@ def _process_inbox(
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
+
+        # Paso 9: Volver al inbox
+        client._open_inbox()
+
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
 def _print_bot_summary(stats: BotStats) -> None:
