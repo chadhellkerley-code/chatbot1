@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from paths import runtime_base
 from typing import Optional, Tuple, Union
@@ -35,6 +36,105 @@ DEFAULT_ARGS = [
     "--no-sandbox",
     "--lang=en-US",
 ]
+_PLAYWRIGHT_CHROMIUM_PREFIX = "chromium-"
+_PLAYWRIGHT_HEADLESS_PREFIX = "chromium_headless_shell-"
+
+
+def _parse_revision(name: str, prefix: str) -> int:
+    if not name.startswith(prefix):
+        return -1
+    suffix = name[len(prefix) :]
+    digits = "".join(ch for ch in suffix if ch.isdigit())
+    return int(digits) if digits else -1
+
+
+def _pick_latest_dir(root: Path, prefix: str) -> Optional[Path]:
+    try:
+        candidates = []
+        for item in root.iterdir():
+            if item.is_dir() and item.name.startswith(prefix):
+                candidates.append((_parse_revision(item.name, prefix), item))
+    except Exception:
+        return None
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _chromium_exe_candidates(browser_dir: Path) -> list[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            browser_dir / "chrome-win64" / "chrome.exe",
+            browser_dir / "chrome-win" / "chrome.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            browser_dir / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+        ]
+    return [browser_dir / "chrome-linux" / "chrome"]
+
+
+def _headless_exe_candidates(browser_dir: Path) -> list[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            browser_dir / "chrome-headless-shell-win64" / "chrome-headless-shell.exe",
+            browser_dir / "chrome-headless-shell-win32" / "chrome-headless-shell.exe",
+            browser_dir / "chrome-headless-shell" / "chrome-headless-shell.exe",
+            browser_dir / "headless_shell" / "headless_shell.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            browser_dir
+            / "chrome-headless-shell"
+            / "Chromium.app"
+            / "Contents"
+            / "MacOS"
+            / "Chromium"
+        ]
+    return [browser_dir / "chrome-headless-shell" / "chrome-headless-shell"]
+
+
+def _select_executable(root: Path, *, headless: bool) -> Optional[Path]:
+    if not root.exists():
+        return None
+
+    prefixes = [_PLAYWRIGHT_HEADLESS_PREFIX, _PLAYWRIGHT_CHROMIUM_PREFIX] if headless else [
+        _PLAYWRIGHT_CHROMIUM_PREFIX
+    ]
+    for prefix in prefixes:
+        browser_dir = _pick_latest_dir(root, prefix)
+        if not browser_dir:
+            continue
+        candidates = (
+            _headless_exe_candidates(browser_dir)
+            if prefix == _PLAYWRIGHT_HEADLESS_PREFIX
+            else _chromium_exe_candidates(browser_dir)
+        )
+        for exe_path in candidates:
+            if exe_path.exists():
+                return exe_path
+    return None
+
+
+def resolve_playwright_executable(headless: bool) -> Optional[Path]:
+    env_root = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    roots = []
+    if env_root:
+        roots.append(Path(env_root).expanduser())
+    roots.append(_BASE_ROOT / "ms-playwright")
+
+    seen: set[str] = set()
+    for root in roots:
+        for candidate in (root, root / "ms-playwright"):
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            executable = _select_executable(candidate, headless=headless)
+            if executable:
+                return executable
+    return None
 
 
 class AsyncBrowserHandle:
@@ -73,11 +173,15 @@ class PlaywrightService:
 
         self._base_profiles.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self._headless,
-            slow_mo=120,
-            args=DEFAULT_ARGS,
-        )
+        launch_kwargs = {
+            "headless": self._headless,
+            "slow_mo": 120,
+            "args": DEFAULT_ARGS,
+        }
+        executable = resolve_playwright_executable(headless=self._headless)
+        if executable:
+            launch_kwargs["executable_path"] = str(executable)
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
         return self
 
     async def new_context_for_account(
@@ -150,9 +254,11 @@ async def launch_persistent(
         headful = os.getenv("HUMAN_HEADFUL", "true").lower() == "true"
 
     pw = await async_playwright().start()
+    executable = resolve_playwright_executable(headless=not headful)
     ctx = await pw.chromium.launch_persistent_context(
         user_data_dir=str(user_data_dir),
         headless=not headful,
+        executable_path=str(executable) if executable else None,
         proxy=proxy or None,
         viewport=DEFAULT_VIEWPORT,
         user_agent=DEFAULT_USER_AGENT,
@@ -188,9 +294,11 @@ async def ensure_context(
     args = [arg for arg in DEFAULT_ARGS if not arg.startswith("--lang=")]
     args.append(f"--lang={locale}")
 
+    executable = resolve_playwright_executable(headless=not headful)
     context: BrowserContext = await runtime.chromium.launch_persistent_context(
         user_data_dir=str(profile_dir),
         headless=not headful,
+        executable_path=str(executable) if executable else None,
         proxy=proxy,
         viewport=DEFAULT_VIEWPORT,
         user_agent=DEFAULT_USER_AGENT,

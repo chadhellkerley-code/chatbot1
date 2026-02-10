@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.auth.onboarding import login_and_persist, build_proxy
 from src.instagram_adapter import human_login, is_logged_in
 from playwright.sync_api import sync_playwright
+from src.playwright_service import resolve_playwright_executable
 import json
 
 def clear_screen():
@@ -152,9 +153,11 @@ def test_send_message(account_info, profile_path):
     try:
         with sync_playwright() as p:
             # Lanzar navegador con el perfil guardado
+            executable = resolve_playwright_executable(headless=False)
             browser = p.chromium.launch_persistent_context(
                 user_data_dir=profile_path,
                 headless=False,  # Visible para ver el envío
+                executable_path=str(executable) if executable else None,
                 args=[
                     '--disable-blink-features=AutomationControlled',
                     '--disable-dev-shm-usage',

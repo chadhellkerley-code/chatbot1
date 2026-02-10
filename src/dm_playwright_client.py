@@ -27,6 +27,7 @@ from src.playwright_service import (
     DEFAULT_TIMEZONE,
     DEFAULT_USER_AGENT,
     DEFAULT_VIEWPORT,
+    resolve_playwright_executable,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ _MESSAGE_NODE_SELECTORS = (
     "div[role='none']",
     "div[dir='auto']",
 )
+THREAD_ROW_SELECTOR = "div[role='button'][tabindex='0'] >> div[role='listitem'] >> div[aria-label][data-testid='user-avatar']"
 _COMPOSER_SELECTORS = (
     "div[role='main'] div[role='textbox'][contenteditable='true']",
     "div[role='main'] div[contenteditable='true'][role='textbox']",
@@ -194,7 +196,7 @@ class PlaywrightDMClient:
                         break
 
                     row = rows.nth(idx)
-                    if not self._row_is_valid(row):
+                    if not self._row_is_valid(row, selector=selector):
                         continue
 
                     if filter_unread and _thread_unread_count(row) <= 0:
@@ -236,14 +238,37 @@ class PlaywrightDMClient:
             raw_text = row.inner_text() or ""
         except Exception:
             raw_text = ""
-        return [line.strip() for line in raw_text.splitlines() if line.strip()]
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        if lines:
+            return lines
+        # Fallback: aria-label del avatar (suele contener username o "Tu nota")
+        try:
+            aria = (row.get_attribute("aria-label") or "").strip()
+        except Exception:
+            aria = ""
+        if aria:
+            return [aria]
+        # Fallback: intentar tomar texto del contenedor superior clickeable
+        try:
+            parent = row.locator("xpath=ancestor::div[@role='button'][1]").first
+            parent_text = parent.inner_text() or ""
+        except Exception:
+            parent_text = ""
+        return [line.strip() for line in parent_text.splitlines() if line.strip()]
 
     def _row_selector_candidates(self) -> List[str]:
+        # Priorizar selectores m?s espec?ficos de lista de threads
         return [
+            THREAD_ROW_SELECTOR,
             "a[href*='/direct/t/']",
+            "div[role='main'] div[role='list'] a[href*='/direct/t/']",
+            "div[role='main'] div[role='list'] div[role='listitem']",
+            "div[role='main'] div[role='list'] div[role='row']",
+            "div[role='main'] div[role='list'] div[role='button'][tabindex='0']",
             "div[role='navigation'] div[role='button']",
             "div[aria-label='Chats'] div[role='button']",
             "div[aria-label='Mensajes'] div[role='button']",
+            "div[aria-label='Messages'] div[role='button']",
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
             "div[role='main'] div[role='button'][tabindex='0']",
@@ -266,7 +291,7 @@ class PlaywrightDMClient:
         print(style_text("[Probe] _get_inbox_panel no encontró nada, usando page", color=Fore.YELLOW))
         return page, "page", "", {"count": 1}
 
-    def _row_is_valid(self, row) -> bool:
+    def _row_is_valid(self, row, *, selector: str | None = None) -> bool:
         """
         Validación mínima pre-click.
         El filtrado real ocurre POST-CLICK en _open_thread.
@@ -276,14 +301,60 @@ class PlaywrightDMClient:
             if not lines:
                 return False
 
-            # Filtros de exclusión de UI básica (no de Notas)
+            # Filtros de exclusión de UI básica (incluye Notas)
             first_line = lines[0].lower()
             if first_line in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal", "mensajes", "chats", "direct"}:
                 return False
+            # Notas/Notes (evitar click en historias/nota)
+            if first_line in {"tu nota", "nota", "notas", "notes"}:
+                return False
+            for line in lines:
+                lowered = line.lower()
+                if "tu nota" in lowered:
+                    return False
+
+            # Para selectores amplios (buttons/rows), exigir marcador de thread real
+            if selector and "/direct/t/" not in selector and "data-testid='user-avatar'" not in selector:
+                if not self._row_has_thread_marker(row):
+                    return False
 
             return True
         except Exception:
             return False
+
+    def _row_has_thread_marker(self, row) -> bool:
+        """
+        Heur?stica para distinguir threads de notas.
+        """
+        try:
+            href = row.get_attribute("href") or ""
+        except Exception:
+            href = ""
+        if "/direct/t/" in href:
+            return True
+
+        try:
+            if row.locator("a[href*='/direct/t/']").count() > 0:
+                return True
+        except Exception:
+            pass
+
+        # Los threads suelen mostrar tiempo (p.ej. <time>)
+        try:
+            if row.locator("time").count() > 0:
+                return True
+        except Exception:
+            pass
+
+        # Unread badge tambi?n indica thread real
+        try:
+            if _thread_unread_count(row) > 0:
+                return True
+        except Exception:
+            pass
+
+        return False
+
 
     def _count_rows_valid(self, rows) -> int:
         try:
@@ -427,6 +498,9 @@ class PlaywrightDMClient:
         }
         if self.slow_mo_ms > 0:
             launch_kwargs["slow_mo"] = self.slow_mo_ms
+        executable = resolve_playwright_executable(headless=self.headless)
+        if executable:
+            launch_kwargs["executable_path"] = str(executable)
         self._browser = self._playwright.chromium.launch(**launch_kwargs)
         proxy_payload = _proxy_from_account(self.account)
         self._context = self._browser.new_context(
@@ -668,25 +742,29 @@ class PlaywrightDMClient:
         if INBOX_URL not in (page.url or "") or re.search(r"/direct/t/", page.url):
             self.return_to_inbox()
 
-        # 3. Intentar clickear por índice (Pseudocódigo Paso 4)
+        # 3. Intentar clickear por índice usando el selector cacheado del scan
         opened_visual = False
         if thread.source_index != -1:
+            meta = self._thread_cache_meta.get(thread.id, {})
+            row_selector = meta.get("selector") or THREAD_ROW_SELECTOR
             try:
-                # Usar el selector de filas estándar
-                rows = page.locator("div[role='main'] div[role='button'][tabindex='0']")
+                rows = page.locator(row_selector)
                 row = rows.nth(thread.source_index)
                 if row.count() > 0:
+                    if not self._row_is_valid(row, selector=row_selector):
+                        return False
                     row.click()
                     opened_visual = True
             except Exception:
                 opened_visual = False
-
-        # 4. Fallback a búsqueda por cache si el índice falló
-        if not opened_visual:
+            if not opened_visual:
+                # Si falla el click por índice, descartar (sin re-scan)
+                return False
+        else:
+            # Fallback a búsqueda por cache solo cuando no hay índice válido
             opened_visual = self._open_thread_by_cache(thread)
-
-        if not opened_visual:
-            return False
+            if not opened_visual:
+                return False
 
         # 5. VALIDACIÓN POST-CLICK (Pseudocódigo Paso 5)
         # El wait(300) solicitado por el usuario (aprox)
@@ -839,14 +917,21 @@ class PlaywrightDMClient:
             pass
 
         found_composer = False
-        for selector in _COMPOSER_SELECTORS:
-            try:
-                # Intentar esperar al selector
-                page.wait_for_selector(selector, timeout=timeout_ms // len(_COMPOSER_SELECTORS))
+        # Preferir role=textbox si est? visible
+        try:
+            if page.get_by_role("textbox").first.is_visible():
                 found_composer = True
-                break
-            except Exception:
-                continue
+        except Exception:
+            pass
+        if not found_composer:
+            for selector in _COMPOSER_SELECTORS:
+                try:
+                    # Intentar esperar al selector
+                    page.wait_for_selector(selector, timeout=timeout_ms // len(_COMPOSER_SELECTORS))
+                    found_composer = True
+                    break
+                except Exception:
+                    continue
 
         # Re-obtener URL después de la espera
         current_url = page.url or ""

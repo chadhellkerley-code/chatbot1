@@ -1,6 +1,5 @@
 # storage.py
 # -*- coding: utf-8 -*-
-import csv
 import json
 import re
 import time
@@ -243,19 +242,35 @@ def conversation_rows(
 
 
 def export_conversation_state(rows: List[dict]) -> Path:
-    """Exporta el estado de conversaciones a un CSV dentro de storage/exports."""
+    """Exporta el estado de conversaciones a un Excel dentro de storage/exports."""
 
     timestamp = _now_local().strftime("%Y%m%d-%H%M%S")
-    path = EXPORTS / f"conversation_state_{timestamp}.csv"
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(
-            ["fecha_hora", "cuenta_emisora", "cuenta_receptora", "estado"]
-        )
-        for row in rows:
-            ts = row["timestamp"].strftime("%Y-%m-%d %H:%M")
-            writer.writerow([ts, row["account"], row["recipient"], row["status"]])
+    path = EXPORTS / f"conversation_state_{timestamp}.xlsx"
+    payload_rows = []
+    for row in rows:
+        ts = row["timestamp"].strftime("%Y-%m-%d %H:%M")
+        payload_rows.append([ts, row["account"], row["recipient"], row["status"]])
+    _write_excel(
+        path,
+        ["fecha_hora", "cuenta_emisora", "cuenta_receptora", "estado"],
+        payload_rows,
+    )
     return path
+
+
+def _write_excel(path: Path, headers: list[str], rows: Iterable[Iterable[object]]) -> None:
+    try:
+        from openpyxl import Workbook
+    except Exception as exc:
+        raise RuntimeError(
+            "ERROR DE BUILD: falta la dependencia 'openpyxl' para exportar a Excel."
+        ) from exc
+    wb = Workbook()
+    ws = wb.active
+    ws.append(list(headers))
+    for row in rows:
+        ws.append(list(row))
+    wb.save(path)
 
 
 def purge_conversations_before(cutoff: datetime) -> int:
@@ -557,21 +572,28 @@ def _filter_by_date(records: list[dict]) -> None:
     press_enter()
 
 
-def _export_csv(records: list[dict]) -> None:
+def _export_sent_log_excel(records: list[dict]) -> None:
     if not records:
         warn("No hay registros para exportar.")
         press_enter()
         return
-    path = STO / "sent_log.csv"
-    with path.open("w", encoding="utf-8") as fh:
-        fh.write("timestamp,account,to,status,detail\n")
-        for rec in records:
-            ts = rec.get("local_dt") or datetime.fromtimestamp(rec.get("ts", 0), tz=_UTC_TZ).astimezone(TZ)
-            status = "OK" if rec.get("ok") else "ERROR"
-            detail = str(rec.get("detail", "")).replace("\n", " ").replace(",", " ")
-            fh.write(
-                f"{ts.strftime('%Y-%m-%d %H:%M:%S')},{rec.get('account')},{rec.get('to')},{status},{detail}\n"
-            )
+    path = STO / "sent_log.xlsx"
+    payload_rows = []
+    for rec in records:
+        ts = rec.get("local_dt") or datetime.fromtimestamp(rec.get("ts", 0), tz=_UTC_TZ).astimezone(TZ)
+        status = "OK" if rec.get("ok") else "ERROR"
+        detail = str(rec.get("detail", "")).replace("\n", " ").replace(",", " ")
+        payload_rows.append([ts.strftime("%Y-%m-%d %H:%M:%S"), rec.get("account"), rec.get("to"), status, detail])
+    try:
+        _write_excel(
+            path,
+            ["timestamp", "account", "to", "status", "detail"],
+            payload_rows,
+        )
+    except Exception as exc:
+        warn(str(exc))
+        press_enter()
+        return
     ok(f"Exportado a {path}")
     press_enter()
 
@@ -653,7 +675,7 @@ def menu_logs():
         print("2) Filtrar por alias/cuenta")
         print("3) Filtrar por rango de fechas")
         print("4) 📈 Ver estadísticas (Diarias / Semanales / Mensuales)")
-        print("5) Exportar CSV")
+        print("5) Exportar Excel")
         print("6) Volver")
         print()
         choice = ask("Opción: ").strip()
@@ -669,7 +691,7 @@ def menu_logs():
         elif choice == "4":
             _show_statistics(records)
         elif choice == "5":
-            _export_csv(records)
+            _export_sent_log_excel(records)
         elif choice == "6":
             break
         else:

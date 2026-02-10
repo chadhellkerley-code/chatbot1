@@ -1088,9 +1088,13 @@ def _build_universal_executable() -> None:
     print(full_line())
     print(style_text("Ejecutable universal (backend)", color=Fore.CYAN, bold=True))
     print(full_line())
-    confirm = ask("Generar ejecutable universal? (s/N): ").strip().lower()
-    if confirm != "s":
-        warn("Operacion cancelada.")
+    print("Opciones de build:")
+    print("1) Completo (incluye Playwright + browsers) - mas lento")
+    print("2) Rapido (Playwright externo) - requiere 'playwright install' en cliente")
+    print("3) Reusar ejecutable universal existente")
+    choice = ask("Opcion: ").strip()
+    if choice not in {"1", "2", "3"}:
+        warn("Opcion invalida.")
         press_enter()
         return
 
@@ -1101,18 +1105,90 @@ def _build_universal_executable() -> None:
         "status": _STATUS_ACTIVE,
     }
 
-    previous = os.environ.get("LICENSE_REMOTE_ONLY")
+    if choice == "3":
+        dist_dir = Path(__file__).resolve().parent / "dist"
+        candidates = [
+            dist_dir / "insta_cli_universal.exe",
+            dist_dir / "insta_cli_universal",
+            dist_dir / "insta_cli_universal.app",
+        ]
+        existing = next((item for item in candidates if item.exists()), None)
+        if not existing:
+            warn("No existe un ejecutable universal previo en dist/.")
+            press_enter()
+            return
+
+        ok(f"Ejecutable universal existente: {existing}")
+
+        use_onefile = not existing.is_dir()
+        browsers_root = existing if existing.is_dir() else existing.parent
+        bundle_dir = browsers_root / "playwright_browsers"
+        bundle_mode = "all" if bundle_dir.exists() else "external"
+        mode_label = "onefile" if use_onefile else "onedir"
+        browsers_label = "incluidos" if bundle_mode == "all" else "externos"
+        print(f"Actualizando con modo {mode_label} y Playwright {browsers_label}...")
+
+        previous = {
+            "LICENSE_REMOTE_ONLY": os.environ.get("LICENSE_REMOTE_ONLY"),
+            "INCLUDE_PLAYWRIGHT": os.environ.get("INCLUDE_PLAYWRIGHT"),
+            "PLAYWRIGHT_BUNDLE": os.environ.get("PLAYWRIGHT_BUNDLE"),
+            "PYINSTALLER_ONEFILE": os.environ.get("PYINSTALLER_ONEFILE"),
+        }
+        os.environ["LICENSE_REMOTE_ONLY"] = "1"
+        os.environ["INCLUDE_PLAYWRIGHT"] = "1"
+        os.environ["PYINSTALLER_ONEFILE"] = "1" if use_onefile else "0"
+        os.environ["PLAYWRIGHT_BUNDLE"] = bundle_mode
+        try:
+            success, artifact_path, message = build_for_license(record)
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        if success:
+            ok(message)
+            if bundle_mode == "external":
+                print("Nota: build rapido. En la PC del cliente ejecutar: python -m playwright install")
+            if use_onefile and bundle_mode == "all":
+                print("Nota: se requiere conservar playwright_browsers al lado del EXE.")
+        else:
+            warn(message)
+        press_enter()
+        return
+
+    onefile_choice = ask("Generar un solo EXE (onefile)? (s/N): ").strip().lower()
+    use_onefile = onefile_choice == "s"
+
+    previous = {
+        "LICENSE_REMOTE_ONLY": os.environ.get("LICENSE_REMOTE_ONLY"),
+        "INCLUDE_PLAYWRIGHT": os.environ.get("INCLUDE_PLAYWRIGHT"),
+        "PLAYWRIGHT_BUNDLE": os.environ.get("PLAYWRIGHT_BUNDLE"),
+        "PYINSTALLER_ONEFILE": os.environ.get("PYINSTALLER_ONEFILE"),
+    }
     os.environ["LICENSE_REMOTE_ONLY"] = "1"
+    os.environ["INCLUDE_PLAYWRIGHT"] = "1"
+    os.environ["PYINSTALLER_ONEFILE"] = "1" if use_onefile else "0"
+    if choice == "2":
+        os.environ["PLAYWRIGHT_BUNDLE"] = "external"
+    else:
+        os.environ["PLAYWRIGHT_BUNDLE"] = "all"
     try:
         success, artifact_path, message = build_for_license(record)
     finally:
-        if previous is None:
-            os.environ.pop("LICENSE_REMOTE_ONLY", None)
-        else:
-            os.environ["LICENSE_REMOTE_ONLY"] = previous
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     if success:
         ok(message)
+        if choice == "2":
+            print("Nota: build rapido. En la PC del cliente ejecutar: python -m playwright install")
+        if use_onefile and choice == "1":
+            print("Nota: se requiere conservar playwright_browsers al lado del EXE.")
     else:
         warn(message)
     press_enter()
@@ -1336,4 +1412,3 @@ def package_license(license_key: str) -> Tuple[bool, Optional[Path], str]:
     if not record:
         return False, None, "Licencia no encontrada."
     return _package_license_local(record)
-

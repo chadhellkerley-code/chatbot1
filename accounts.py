@@ -723,10 +723,15 @@ def login_accounts_with_playwright(alias: str, accounts: List[Dict[str, Any]]) -
     for account in accounts:
         result = login_account_playwright(account, alias)
         results.append(result)
+        username = (result.get("username") or account.get("username") or "").strip()
         if result.get("status") == "ok":
-            username = (result.get("username") or account.get("username") or "").strip()
             if username:
                 mark_connected(username, True)
+                _store_health(username, "[✅ OK]")
+        else:
+            badge = _badge_from_login_message(result.get("message", ""))
+            if username and badge:
+                _store_health(username, badge)
 
     try:
         write_onboarding_results(results)
@@ -1413,6 +1418,50 @@ def _badge_for_display(account: Dict) -> tuple[str, bool]:
     if cached_badge:
         return cached_badge, expired
     return "[🟡 En riesgo: unknown]", True
+
+
+def _life_status_badge(account: Dict, badge: str) -> str:
+    lowered = (badge or "").lower()
+    if any(
+        keyword in lowered
+        for keyword in (
+            "desactivada",
+            "disabled",
+            "suspended",
+            "baneada",
+            "bloqueada",
+            "action_block",
+            "checkpoint",
+            "challenge",
+        )
+    ):
+        return "[BLOQUEADA]"
+    return "[VIVA]"
+
+
+def _badge_from_login_message(message: str) -> str | None:
+    lowered = (message or "").lower()
+    if not lowered:
+        return None
+    if any(
+        keyword in lowered
+        for keyword in (
+            "account_disabled",
+            "desactivad",
+            "disabled",
+            "suspendid",
+            "suspended",
+            "banead",
+        )
+    ):
+        return "[🔴 Desactivada]"
+    if "checkpoint" in lowered:
+        return "[🟡 En riesgo: checkpoint]"
+    if "challenge" in lowered:
+        return "[🟡 En riesgo: challenge]"
+    if "action block" in lowered or "action_block" in lowered:
+        return "[🟡 En riesgo: action_block]"
+    return None
 
 
 def _account_status_from_badge(account: Dict, badge: str) -> str:
@@ -2556,10 +2605,11 @@ def menu_accounts():
                 proxy_flag = _proxy_indicator(it)
                 totp_flag = _totp_indicator(it)
                 badge, needs_refresh = _badge_for_display(it)
+                life_badge = _life_status_badge(it, badge)
                 if needs_refresh:
                     pending_refresh.append(it)
                 print(
-                    f" - @{it['username']} {conn} {sess} {flag} {proxy_flag}{totp_flag} • {badge}"
+                    f" - @{it['username']} {conn} {sess} {flag} {proxy_flag}{totp_flag} • {life_badge}"
                 )
             if pending_refresh:
                 _schedule_health_refresh(pending_refresh)

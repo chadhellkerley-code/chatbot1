@@ -55,6 +55,7 @@ def _copy_project(src: Path, dest: Path) -> None:
     ignore = shutil.ignore_patterns(
         "venv*",
         ".venv*",
+        ".venv_models",
         "dist",
         "build",
         "__pycache__",
@@ -66,12 +67,15 @@ def _copy_project(src: Path, dest: Path) -> None:
         "*.log",
         ".sessions",
         "browser_sessions",
+        "browsers",
+        "ms-playwright",
         "profiles",
         "whatsapp_exports",
         "storage",
         "data",
         "text",
         "accounts",
+        "models",
         "_archive",
         "tests",
         "tests_optin",
@@ -158,9 +162,32 @@ _EXTRA_HIDDEN_IMPORTS = [
     "setuptools",
 ]
 
+_COLLECT_ALL_BASE = [
+    "openpyxl",
+]
+
 _DEFAULT_EXCLUDES = [
     "tkinter",
     "_tkinter",
+]
+
+_HEAVY_EXCLUDES = [
+    "torch",
+    "transformers",
+    "tensorflow",
+    "tf_keras",
+    "keras",
+    "mediapipe",
+    "deepface",
+    "retinaface",
+    "clip",
+    "kivy",
+    "kivymd",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "cv2",
+    "h5py",
 ]
 
 _PLAYWRIGHT_BUNDLE_DIR = "playwright_browsers"
@@ -296,16 +323,44 @@ def _select_playwright_browser_dirs(source: Path) -> tuple[list[Path], str]:
 
 
 def _parse_excludes() -> list[str]:
+    heavy_flag = os.environ.get("PYINSTALLER_EXCLUDE_HEAVY", "1").strip().lower()
+    use_heavy = heavy_flag not in {"0", "false", "no", "off", "skip"}
     extra = os.environ.get("PYINSTALLER_EXCLUDE_MODULES", "")
     extra_items = [item.strip() for item in extra.split(",") if item.strip()]
     seen = set()
     combined: list[str] = []
-    for item in _DEFAULT_EXCLUDES + extra_items:
+    base = _DEFAULT_EXCLUDES + (_HEAVY_EXCLUDES if use_heavy else [])
+    for item in base + extra_items:
         if item in seen:
             continue
         seen.add(item)
         combined.append(item)
     return combined
+
+
+def _parse_collect_all_modules() -> list[str]:
+    override = os.environ.get("PYINSTALLER_COLLECT_ALL", "").strip()
+    if override:
+        if override.lower() in {"none", "0", "false", "no", "skip"}:
+            return []
+        items = [item.strip() for item in override.split(",") if item.strip()]
+        return items
+    modules = list(_COLLECT_ALL_BASE)
+    include_ai = os.environ.get("PYINSTALLER_INCLUDE_AI", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+    if include_ai:
+        modules.extend(_COLLECT_ALL_AI)
+    extra = os.environ.get("PYINSTALLER_COLLECT_ALL_EXTRA", "").strip()
+    if extra:
+        for item in extra.split(","):
+            item = item.strip()
+            if item and item not in modules:
+                modules.append(item)
+    return modules
 
 
 def _tail_log(path: Path, lines: int = 40) -> str:
@@ -548,6 +603,11 @@ def build_for_license(
             f"{payload_path}{os.pathsep}storage",
             "client_launcher.py",
         ]
+        collect_all_modules = _parse_collect_all_modules()
+        if collect_all_modules:
+            _log_step(f"PyInstaller collect-all: {', '.join(collect_all_modules)}")
+        else:
+            _log_step("PyInstaller collect-all: (ninguno)")
 
         if include_playwright:
             command.extend(["--collect-all", "playwright"])
@@ -555,6 +615,9 @@ def build_for_license(
                 _log_step(f"Playwright browsers listos para copiar: {playwright_src}")
             elif not bundle_playwright:
                 _log_step("Playwright browsers externos: no se copian al bundle")
+
+        for module in collect_all_modules:
+            command.extend(["--collect-all", module])
 
         for module in _HIDDEN_IMPORTS + _EXTRA_HIDDEN_IMPORTS:
             command.extend(["--hidden-import", module])

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import sync_playwright
+from src.playwright_service import resolve_playwright_executable
 
 INSTAGRAM_URL = "https://www.instagram.com/"
 PROFILES_DIR = Path("profiles")
@@ -55,7 +56,11 @@ def main() -> None:
     print(f"Usando sesion persistente: {storage_path}")
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        executable = resolve_playwright_executable(headless=True)
+        browser = playwright.chromium.launch(
+            headless=True,
+            executable_path=str(executable) if executable else None,
+        )
         context = None
         try:
             context = browser.new_context(storage_state=str(storage_path))

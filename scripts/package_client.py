@@ -48,12 +48,12 @@ def main(argv: List[str] | None = None) -> int:
     if not fetch_license(license_key):
         parser.error("Licencia no encontrada en el registro local.")
 
-    success, artifact_path, bundle_path, message = package_license(license_key)
+    success, bundle_path, message = package_license(license_key)
     if not success:
         parser.error(message)
 
     print(f"{message}. ZIP generado en: {bundle_path}")
-    print(f"Carpeta ejecutable: {artifact_path.parent}")
+    print(f"Carpeta ejecutable: {bundle_path.parent}")
     print(f"Carpeta entrega: {bundle_path.parent}")
     return 0
 

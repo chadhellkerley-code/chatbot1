@@ -8,6 +8,8 @@ pyotp==2.9.0
 cryptography==41.0.7
 moviepy==1.0.3
 pillow>=9.0.0
+numpy<2
+openpyxl
 google-auth>=2.0.0
 google-api-python-client>=2.0.0
 pytest>=7.4.0

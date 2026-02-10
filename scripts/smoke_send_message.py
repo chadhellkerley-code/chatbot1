@@ -30,6 +30,7 @@ from src.playwright_service import (
     DEFAULT_TIMEZONE,
     DEFAULT_USER_AGENT,
     DEFAULT_VIEWPORT,
+    resolve_playwright_executable,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -63,9 +64,11 @@ async def create_context(username: str, proxy: dict | None = None):
     pw = await async_playwright().start()
     profile_dir = BASE_PROFILES / username
     profile_dir.mkdir(parents=True, exist_ok=True)
+    executable = resolve_playwright_executable(headless=False)
     context = await pw.chromium.launch_persistent_context(
         user_data_dir=str(profile_dir),
         headless=False,  # smoke test: always visible for manual verification
+        executable_path=str(executable) if executable else None,
         proxy=proxy,
         viewport=DEFAULT_VIEWPORT,
         user_agent=DEFAULT_USER_AGENT,

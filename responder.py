@@ -4892,7 +4892,7 @@ def _process_inbox(
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
             print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (no permitido) | {time_str}", color=Fore.YELLOW))
             # Regresar al inbox para el siguiente candidato
-            client._open_inbox()
+            client.return_to_inbox()
             continue
 
         # Paso 8: LEYENDO MEMORIA Y DECIDIENDO

@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover
         raise RuntimeError("playwright is required for opt-in browser operations")
 
 from . import session_store
+from src.playwright_service import resolve_playwright_executable
 
 DEFAULT_STORAGE_DIR = Path("data/optin_sessions")
 
@@ -70,7 +71,11 @@ async def launch_browser(
 
     playwright_cm = await async_playwright().start()
     try:
-        browser = await playwright_cm.chromium.launch(headless=headless)
+        launch_kwargs: Dict[str, Any] = {"headless": headless}
+        executable = resolve_playwright_executable(headless=headless)
+        if executable:
+            launch_kwargs["executable_path"] = str(executable)
+        browser = await playwright_cm.chromium.launch(**launch_kwargs)
     except Exception:
         await playwright_cm.stop()
         raise

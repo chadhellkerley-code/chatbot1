@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 import unicodedata
-import csv
 import math
 from collections import Counter
 from dataclasses import dataclass
@@ -678,18 +677,33 @@ def _handle_export(rows: list[tuple[str, str, str, str]]) -> None:
     target_dir = Path.home() / "Desktop"
     if not target_dir.exists():
         target_dir = Path.cwd()
-    filename = f"estado_conversacion_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"estado_conversacion_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.xlsx"
     export_path = target_dir / filename
     try:
-        with export_path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(["fecha_hora", "emisor", "receptor", "estado"])
-            for row in rows:
-                writer.writerow(row)
+        _write_excel(
+            export_path,
+            ["fecha_hora", "emisor", "receptor", "estado"],
+            rows,
+        )
     except Exception as exc:
-        print(f"No se pudo generar el CSV: {exc}")
+        print(f"No se pudo generar el Excel: {exc}")
         return
-    print(f"CSV guardado en: {export_path}")
+    print(f"Excel guardado en: {export_path}")
+
+
+def _write_excel(path: Path, headers: list[str], rows: Iterable[Iterable[object]]) -> None:
+    try:
+        from openpyxl import Workbook
+    except Exception as exc:
+        raise RuntimeError(
+            "ERROR DE BUILD: falta la dependencia 'openpyxl' para exportar a Excel."
+        ) from exc
+    wb = Workbook()
+    ws = wb.active
+    ws.append(list(headers))
+    for row in rows:
+        ws.append(list(row))
+    wb.save(path)
 
 
 def _print_summary(summary: Counter) -> None:
@@ -713,7 +727,7 @@ def menu_conversation_state() -> None:
             print("1) página anterior")
             print("2) página siguiente")
             print("3) borrar todos los datos")
-            print("4) descargar CSV")
+            print("4) descargar Excel")
             print("5) actualizar")
             print("6) volver")
 

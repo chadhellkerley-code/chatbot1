@@ -35,6 +35,33 @@ TOTP_INPUT_SELECTORS = (
     "input[placeholder*='seguridad']",
     "input[type='text'][autocomplete='one-time-code']",
 )
+USERNAME_INPUT_SELECTORS = (
+    "input[name='username']",
+    "input[name='usernameOrEmail']",
+    "input[autocomplete='username']",
+    "input[aria-label*='usuario']",
+    "input[aria-label*='correo']",
+    "input[aria-label*='email']",
+    "input[aria-label*='phone']",
+    "input[aria-label*='móvil']",
+    "input[aria-label*='movil']",
+    "input[placeholder*='usuario']",
+    "input[placeholder*='correo']",
+    "input[placeholder*='email']",
+    "input[placeholder*='phone']",
+    "input[placeholder*='móvil']",
+    "input[placeholder*='movil']",
+    "input[type='text']",
+)
+PASSWORD_INPUT_SELECTORS = (
+    "input[name='password']",
+    "input[type='password']",
+    "input[autocomplete='current-password']",
+    "input[aria-label*='contraseña']",
+    "input[placeholder*='contraseña']",
+    "input[aria-label*='password']",
+    "input[placeholder*='password']",
+)
 SAVE_LOGIN_NOT_NOW_SELECTORS = (
     "div[role='dialog'] button:has-text('Not now')",
     "div[role='dialog'] button:has-text('Not Now')",
@@ -73,6 +100,26 @@ CodeProvider = Callable[[], Optional[str]]
 TraceFn = Callable[[str], None]
 
 LOGIN_FAILED_DIR = Path(BASE_PROFILES) / "login_failed_screenshots"
+
+ACCOUNT_DISABLED_TEXT_PATTERNS = (
+    r"tu\s+cuenta\s+ha\s+sido\s+desactivad",
+    r"tu\s+cuenta\s+ha\s+sido\s+suspendid",
+    r"tu\s+cuenta\s+ha\s+sido\s+inhabilitad",
+    r"cuenta\s+inhabilitad",
+    r"cuenta\s+desactivad",
+    r"cuenta\s+suspendid",
+    r"cuenta\s+bloquead",
+    r"your\s+account\s+has\s+been\s+disabled",
+    r"your\s+account\s+was\s+disabled",
+    r"your\s+account\s+has\s+been\s+deactivated",
+    r"your\s+account\s+was\s+deactivated",
+    r"account\s+disabled",
+    r"your\s+account\s+has\s+been\s+suspended",
+    r"account\s+suspended",
+    r"we\s+disabled\s+your\s+account",
+    r"we\s+suspended\s+your\s+account",
+    r"sua\s+conta\s+foi\s+desativad",
+)
 
 
 def _keystroke_delay_ms(base: float = 0.07, jitter: float = 0.03) -> int:
@@ -207,7 +254,7 @@ async def _ensure_login_view(page: Page) -> None:
                 pass
     await _accept_cookies_variants(page)
     try:
-        await page.wait_for_selector("input[name='username'], input[type='text']", timeout=20_000)
+        await page.wait_for_selector(", ".join(USERNAME_INPUT_SELECTORS), timeout=20_000)
     except Exception:
         pass
 
@@ -238,19 +285,8 @@ async def _submit_login_form(
     # Asegura estar en la vista de login
     _trace(trace, "Open https://www.instagram.com/accounts/login/")
     await _ensure_login_view(page)
-    username_locators = (
-        "input[name='username']",
-        "input[name='usernameOrEmail']",
-        "input[aria-label*='Phone']",
-        "input[aria-label*='correo']",
-        "input[type='text']",
-    )
-    password_locators = (
-        "input[name='password']",
-        "input[type='password']",
-    )
-    username_input = page.locator(", ".join(username_locators)).first
-    password_input = page.locator(", ".join(password_locators)).first
+    username_input = page.locator(", ".join(USERNAME_INPUT_SELECTORS)).first
+    password_input = page.locator(", ".join(PASSWORD_INPUT_SELECTORS)).first
 
     try:
         await username_input.wait_for(state="visible", timeout=20_000)
@@ -259,8 +295,8 @@ async def _submit_login_form(
         # Reintentar navegando al login explícito
         try:
             await page.goto(LOGIN_URL, wait_until="domcontentloaded")
-            username_input = page.locator(", ".join(username_locators)).first
-            password_input = page.locator(", ".join(password_locators)).first
+            username_input = page.locator(", ".join(USERNAME_INPUT_SELECTORS)).first
+            password_input = page.locator(", ".join(PASSWORD_INPUT_SELECTORS)).first
             await username_input.wait_for(state="visible", timeout=10_000)
             await password_input.wait_for(state="visible", timeout=10_000)
         except Exception:
@@ -272,10 +308,33 @@ async def _submit_login_form(
         await username_input.fill(username)
         _trace(trace, "Fill password")
         await password_input.fill(password)
+        # Si no se reflejó el valor, reintenta con tipeo humano.
+        try:
+            if not (await username_input.input_value()).strip():
+                await _human_type(username_input, username)
+        except Exception:
+            pass
+        try:
+            if not (await password_input.input_value()).strip():
+                await _human_type(password_input, password)
+        except Exception:
+            pass
     except Exception:
         return
+    # Pequeña pausa antes de enviar para evitar saltos demasiado rápidos
+    await _human_wait(0.9, 1.3)
 
-    submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Iniciar sesión')").first
+    submit_btn = page.locator(
+        ", ".join(
+            (
+                "button[type='submit']",
+                "button:has-text('Log in')",
+                "button:has-text('Iniciar sesión')",
+                "div[role='button']:has-text('Log in')",
+                "div[role='button']:has-text('Iniciar sesión')",
+            )
+        )
+    ).first
     try:
         await submit_btn.scroll_into_view_if_needed()
     except Exception:
@@ -297,6 +356,8 @@ async def _submit_login_form(
             await page.wait_for_load_state("domcontentloaded")
         except Exception:
             pass
+    # Pausa corta para permitir que cargue el siguiente paso (2FA/onetap/home)
+    await _human_wait(1.0, 2.0)
     _trace(trace, "Wait for navigation / DOM ready")
 
 
@@ -357,6 +418,9 @@ async def _after_submit_outcome(page: Page) -> str:
             return "ok"
     except Exception:
         pass
+
+    if await _is_account_disabled(page):
+        return "disabled"
     
     if "/challenge/" in current_url:
         return "challenge"
@@ -385,11 +449,24 @@ async def _is_in_inbox(page: Page) -> bool:
 
 async def _has_login_form(page: Page) -> bool:
     try:
-        username_input = page.locator("input[name='username']").first
-        password_input = page.locator("input[name='password']").first
+        username_input = page.locator(", ".join(USERNAME_INPUT_SELECTORS)).first
+        password_input = page.locator(", ".join(PASSWORD_INPUT_SELECTORS)).first
         return await username_input.is_visible() and await password_input.is_visible()
     except Exception:
         return False
+
+
+async def _is_account_disabled(page: Page) -> bool:
+    url = (page.url or "").lower()
+    if "accounts/disabled" in url:
+        return True
+    for pattern in ACCOUNT_DISABLED_TEXT_PATTERNS:
+        try:
+            if await page.locator(f"text=/{pattern}/i").count():
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _resolve_totp_code(
@@ -871,7 +948,23 @@ async def human_login(
         await _submit_login_form(page, username, password, trace=trace)
         # Esperamos un momento para que se seteen cookies (critico)
         await _wait_post_submit(page)
-        await _human_wait(2, 3)
+        await _human_wait(1.0, 2.0)
+        # Espera breve para que aparezca 2FA/onetap/inbox o mensajes de error
+        await _wait_one_of(
+            page,
+            timeout=2_000,
+            selectors=(
+                ", ".join(TOTP_INPUT_SELECTORS),
+                "h2:has-text('Save your login info?')",
+                "button:has-text('Save info')",
+                "button:has-text('Guardar información')",
+                "a[href='/direct/inbox/']",
+                "#slfErrorAlert",
+                "[data-testid='login-error-message']",
+            ),
+        )
+
+        # Resolver 2FA si está presente
         two_factor_ok = await _resolve_two_factor_flow(
             page,
             username,
@@ -883,14 +976,25 @@ async def human_login(
         if not two_factor_ok and "/accounts/login" in (page.url or ""):
             return "still_login"
         await _handle_suspended_flow(page)
+        if await _is_account_disabled(page):
+            return "disabled"
 
-        # FUERZA BRUTA: Navegación forzada al Inbox como solicitaste
-        _trace(trace, "Open https://www.instagram.com/direct/inbox/?next=%2F")
-        try:
-            await page.goto("https://www.instagram.com/direct/inbox/?next=%2F", wait_until="domcontentloaded", timeout=60000)
-            await _human_wait(3, 5)
-        except Exception as e:
-            logger.warning(f"Error en navegación forzada (pero continuamos): {e}")
+        # Si seguimos en el formulario de login, no forzar inbox
+        if "/accounts/login" in (page.url or "") and await _has_login_form(page):
+            return await _after_submit_outcome(page)
+
+        # FUERZA BRUTA: Navegación forzada al Inbox solo si ya parece logueado
+        if await is_logged_in(page) or "/accounts/onetap/" in (page.url or ""):
+            _trace(trace, "Open https://www.instagram.com/direct/inbox/?next=%2F")
+            try:
+                await page.goto(
+                    "https://www.instagram.com/direct/inbox/?next=%2F",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                await _human_wait(3, 5)
+            except Exception as e:
+                logger.warning(f"Error en navegación forzada (pero continuamos): {e}")
         # Si tras la navegación seguimos en prompt de TOTP, reintenta rellenarlo
         await _resolve_two_factor_flow(
             page,
@@ -901,6 +1005,8 @@ async def human_login(
             max_attempts=2,
         )
         await _handle_suspended_flow(page)
+        if await _is_account_disabled(page):
+            return "disabled"
 
         # Verificamos directamente si funcionó
         if await is_logged_in(page):
@@ -940,6 +1046,8 @@ async def human_login(
 
     # Último intento de resolver captcha/suspensión antes de evaluar outcome
     await _handle_suspended_flow(page)
+    if await _is_account_disabled(page):
+        outcome = "disabled"
 
     # SALIDA DE EMERGENCIA: Si quedamos en onetap, estamos logueados.
     if "/accounts/onetap/" in (page.url or ""):
@@ -976,6 +1084,10 @@ async def human_login(
 
     if outcome == "challenge":
         _trace(trace, "FAIL reason=challenge_required")
+    if outcome == "disabled":
+        _trace(trace, "FAIL reason=account_disabled")
+        await _capture_login_failure(page, username)
+        raise RuntimeError("account_disabled")
 
     if outcome == "bad_creds":
         _trace(trace, "FAIL reason=bad_credentials")

@@ -904,6 +904,7 @@ def _initiate_whatsapp_web_login(
 def _initiate_with_playwright(session_dir: Path) -> tuple[bool, Path | None, str]:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
+        from src.playwright_service import resolve_playwright_executable
     except ImportError:
         return (
             False,
@@ -917,9 +918,11 @@ def _initiate_with_playwright(session_dir: Path) -> tuple[bool, Path | None, str
 
     try:
         with sync_playwright() as playwright:
+            executable = resolve_playwright_executable(headless=False)
             context = playwright.chromium.launch_persistent_context(
                 str(session_dir),
                 headless=False,
+                executable_path=str(executable) if executable else None,
                 args=["--disable-notifications", "--disable-infobars"],
             )
             try:

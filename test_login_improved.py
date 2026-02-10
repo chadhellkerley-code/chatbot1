@@ -19,6 +19,7 @@ if os.name == 'nt':
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.instagram_adapter import human_login, is_logged_in
+from src.playwright_service import resolve_playwright_executable
 from playwright.sync_api import sync_playwright
 import time
 
@@ -78,13 +79,17 @@ def test_login_simple():
             # Lanzar navegador
             print("[*] Lanzando navegador...")
             
-            browser = p.chromium.launch(
-                headless=headless,
-                args=[
+            launch_kwargs = {
+                "headless": headless,
+                "args": [
                     '--disable-blink-features=AutomationControlled',
                     '--disable-dev-shm-usage',
-                ]
-            )
+                ],
+            }
+            executable = resolve_playwright_executable(headless=headless)
+            if executable:
+                launch_kwargs["executable_path"] = str(executable)
+            browser = p.chromium.launch(**launch_kwargs)
             
             # Crear contexto
             context = browser.new_context(
