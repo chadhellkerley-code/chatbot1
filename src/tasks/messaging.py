@@ -1,10 +1,12 @@
 from src.celery_app import app
 from src.transport.human_instagram_sender import HumanInstagramSender
 import logging
+import os
 import time
 import random
 
 logger = logging.getLogger(__name__)
+ALLOW_UNVERIFIED = os.getenv("HUMAN_DM_ALLOW_UNVERIFIED", "0").strip().lower() in {"1", "true", "yes", "y"}
 
 @app.task(bind=True)
 def send_message_task(self, username, password, proxy, target_user, message_text):
@@ -46,11 +48,12 @@ def send_message_task(self, username, password, proxy, target_user, message_text
             logger.info("skip | no_dm | Perfil sin botón de mensaje / no permite DM")
             return {"success": False, "skipped": True, "reason": "NO_DM_BUTTON"}
 
-        if (
+        is_unverified = (
             payload.get("sent_unverified")
             or (payload.get("reason_code") or "").strip().upper() == "SENT_UNVERIFIED"
             or (detail or "").strip().lower() == "sent_unverified"
-        ):
+        )
+        if is_unverified and ALLOW_UNVERIFIED:
             logger.warning(
                 "warn | sent_unverified | Se intentó enviar y no se pudo verificar en DOM; no cuenta como error"
             )
@@ -58,6 +61,8 @@ def send_message_task(self, username, password, proxy, target_user, message_text
 
         if not success:
             raise Exception("HumanInstagramSender devolvió False")
+        if is_unverified:
+            raise Exception(detail or "sent_unverified")
             
         logger.info(f"Worker: Mensaje enviado exitosamente a {target_user}")
         return {"success": True, "sender": username, "target": target_user}

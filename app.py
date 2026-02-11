@@ -136,7 +136,13 @@ def _counts():
     try:
         items = accounts.list_all()
         total = len(items)
-        connected = sum(1 for it in items if it.get("connected"))
+        resolver = getattr(accounts, "connected_status", None)
+        if callable(resolver):
+            connected = sum(
+                1 for it in items if resolver(it, strict=False, reason="dashboard-count")
+            )
+        else:
+            connected = sum(1 for it in items if it.get("connected"))
         active = sum(1 for it in items if it.get("active"))
         return total, connected, active
     except Exception:

@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-  NUEVA VERSION MATI, SI FUNCIONA ESTO!
+﻿# -*- coding: utf-8 -*-  NUEVA VERSION MATI, SI FUNCIONA ESTO!
 import base64
 import importlib
 import getpass
 import json
 import logging
+import os
 import re
 import random
 import subprocess
@@ -109,6 +110,85 @@ PROMPT_KEY = "autoresponder_system_prompt"
 ACTIVE_ALIAS: str | None = None
 MAX_SYSTEM_PROMPT_CHARS = 50000
 _AUTORESPONDER_STUB_WARNED = False
+_OPENAI_REPLY_FALLBACK = "Gracias por tu mensaje. Como te puedo ayudar?"
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "si", "on"}
+
+
+_AUTORESPONDER_VERBOSE_TECH_LOGS = _env_enabled("AUTORESPONDER_VERBOSE_TECH_LOGS", False)
+
+
+def _extract_openai_text(response: object) -> str:
+    text = getattr(response, "output_text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    choices = getattr(response, "choices", None)
+    if isinstance(choices, list):
+        for choice in choices:
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None) if message is not None else None
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            if isinstance(content, list):
+                parts: List[str] = []
+                for item in content:
+                    if isinstance(item, str):
+                        if item.strip():
+                            parts.append(item.strip())
+                        continue
+                    item_text = getattr(item, "text", None)
+                    if isinstance(item_text, str) and item_text.strip():
+                        parts.append(item_text.strip())
+                if parts:
+                    return "\n".join(parts).strip()
+    return ""
+
+
+def _openai_generate_text(
+    client: object,
+    *,
+    system_prompt: str,
+    user_content: str,
+    model: str = "gpt-4o-mini",
+    temperature: float = 0.2,
+    max_output_tokens: int = 180,
+) -> str:
+    responses_api = getattr(client, "responses", None)
+    if responses_api is not None and hasattr(responses_api, "create"):
+        response = responses_api.create(
+            model=model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
+        text = _extract_openai_text(response)
+        if text:
+            return text
+
+    chat_api = getattr(client, "chat", None)
+    completions_api = getattr(chat_api, "completions", None) if chat_api is not None else None
+    if completions_api is None or not hasattr(completions_api, "create"):
+        raise RuntimeError("Cliente OpenAI sin API de texto compatible.")
+
+    completion = completions_api.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=temperature,
+        max_tokens=max_output_tokens,
+    )
+    return _extract_openai_text(completion).strip()
 
 
 def _safe_parse_datetime(*args, **kwargs) -> Optional[datetime]:
@@ -293,7 +373,8 @@ def _save_conversation_engine() -> None:
         _CONVERSATION_ENGINE_FILE.write_text(
             json.dumps(_CONVERSATION_ENGINE_CACHE, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        print(style_text(f"[Persistencia] Archivo {_CONVERSATION_ENGINE_FILE} actualizado físicamente.", color=Fore.GREEN))
+        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
+            print(style_text(f"[Persistencia] Archivo {_CONVERSATION_ENGINE_FILE} actualizado físicamente.", color=Fore.GREEN))
     except Exception as exc:
         logger.warning("Error guardando conversation_engine.json: %s", exc, exc_info=False)
 
@@ -1184,9 +1265,12 @@ def _followup_decision(
 
     system_prompt = (
         "Sos un asistente que decide si enviar un mensaje de seguimiento en Instagram. "
-        "Deba�s seguir estrictamente las reglas provistas y responder SOLO con un objeto "
-        "JSON con las claves 'enviar' (booleano), 'mensaje' (texto) y 'etapa' (na�mero entero). "
-        "Si no corresponde enviar, devuelve� enviar=false, mensaje=\"\" y usa� la etapa actual."
+        "Debes seguir estrictamente las reglas provistas y responder SOLO con un objeto "
+        "JSON con las claves 'enviar' (booleano), 'mensaje' (texto) y 'etapa' (numero entero). "
+        "Si no corresponde enviar, devuelve enviar=false, mensaje='' y usa la etapa actual. "
+        "Toma como fuente de verdad los metadatos 'etapa_negocio', "
+        "'intento_followup_siguiente' y 'horas_objetivo'. "
+        "No inventes una etapa tecnica distinta al intento indicado."
     )
     context_lines = ["Prompt de seguimiento personalizado:", prompt_text, "", "Contexto:"]
     for key, value in metadata.items():
@@ -1197,16 +1281,14 @@ def _followup_decision(
     user_content = "\n".join(context_lines)
 
     try:  # pragma: no cover - depende de red externa
-        response = client.responses.create(
+        raw_text = _openai_generate_text(
+            client,
+            system_prompt=system_prompt,
+            user_content=user_content,
             model="gpt-4o-mini",
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.2,
+            temperature=0.0,
             max_output_tokens=240,
-        )
-        raw_text = (response.output_text or "").strip()
+        ).strip()
     except Exception as exc:
         logger.warning(
             "No se pudo evaluar el seguimiento con OpenAI: %s", exc, exc_info=False
@@ -1628,11 +1710,13 @@ def _safe_timezone(label: str):
 def _print_response_summary(
     index: int, sender: str, recipient: str, success: bool, extra: Optional[str] = None
 ) -> None:
-    icon = "ԣ����" if success else "���"
     status = "OK" if success else "ERROR"
+    color = Fore.GREEN if success else Fore.RED
     print(
-        f"[{icon}] Respuesta {index} | Emisor: {_format_handle(sender)} | "
-        f"Receptor: {_format_handle(recipient)} | Estado: {status}"
+        style_text(
+            f"Respuesta {index} | {_format_handle(sender)} -> {_format_handle(recipient)} | {status}",
+            color=color,
+        )
     )
     if extra:
         print(style_text(extra, color=Fore.GREEN, bold=True))
@@ -1757,20 +1841,36 @@ def _latest_message(messages: List[object]) -> Optional[object]:
 def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
     collected: List[object] = []
     try:
-        threads = client.list_threads(amount=amount, filter_unread=True)
-        if threads:
-            collected.extend(threads)
-    except TypeError:
-        pass
-    except Exception:
-        pass
-
-    try:
         threads = client.list_threads(amount=amount, filter_unread=False)
         if threads:
             collected.extend(threads)
+    except TypeError:
+        try:
+            threads = client.list_threads(amount=amount)
+            if threads:
+                collected.extend(threads)
+        except Exception:
+            pass
     except Exception:
         pass
+
+    if not collected:
+        try:
+            threads = client.list_threads(amount=amount, filter_unread=True)
+            if threads:
+                collected.extend(threads)
+        except TypeError:
+            pass
+        except Exception:
+            pass
+
+    if not collected:
+        try:
+            threads = client.list_threads(amount=amount)
+            if threads:
+                collected.extend(threads)
+        except Exception:
+            pass
 
     if not collected:
         return []
@@ -1852,19 +1952,53 @@ def _resolve_username(client, thread, target_user_id: str) -> str:
 class BotStats:
     alias: str
     responded: int = 0
+    followups: int = 0
     errors: int = 0
     responses: int = 0
+    reply_attempts: int = 0
+    followup_attempts: int = 0
     accounts: set[str] = field(default_factory=set)
+    started_at: float = field(default_factory=time.time)
+    account_started_at: Dict[str, float] = field(default_factory=dict)
+    account_elapsed_s: Dict[str, float] = field(default_factory=dict)
 
     def _bump_responses(self, account: str) -> int:
         self.responses += 1
         self.accounts.add(account)
         return self.responses
 
+    def mark_account_start(self, account: str) -> None:
+        if not account:
+            return
+        self.accounts.add(account)
+        self.account_started_at.setdefault(account, time.time())
+
+    def mark_account_end(self, account: str) -> None:
+        if not account:
+            return
+        self.accounts.add(account)
+        start_ts = self.account_started_at.pop(account, None)
+        if start_ts is None:
+            return
+        elapsed = max(0.0, time.time() - float(start_ts))
+        self.account_elapsed_s[account] = self.account_elapsed_s.get(account, 0.0) + elapsed
+
+    def record_reply_attempt(self, account: str) -> None:
+        self.reply_attempts += 1
+        self.accounts.add(account)
+
     def record_success(self, account: str) -> int:
         index = self._bump_responses(account)
         self.responded += 1
         return index
+
+    def record_followup_attempt(self, account: str) -> None:
+        self.followup_attempts += 1
+        self.accounts.add(account)
+
+    def record_followup_success(self, account: str) -> None:
+        self.followups += 1
+        self.accounts.add(account)
 
     def record_response_error(self, account: str) -> int:
         index = self._bump_responses(account)
@@ -1945,14 +2079,26 @@ def _client_for(username: str):
     if not account:
         raise RuntimeError(f"No se encontro la cuenta {username}.")
     logger.info("autoresponder_dm_engine=playwright account=@%s", username)
-    client = PlaywrightDMClient(account=account, headless=False, slow_mo_ms=1000)
+    headless_raw = str(os.getenv("AUTORESPONDER_DM_HEADLESS", "1")).strip().lower()
+    headless_mode = headless_raw not in {"0", "false", "no", "n", "off"}
+    try:
+        slow_mo_ms = max(0, int(float(os.getenv("AUTORESPONDER_DM_SLOW_MO_MS", "0"))))
+    except Exception:
+        slow_mo_ms = 0
+    logger.info(
+        "autoresponder_dm_client account=@%s headless=%s slow_mo_ms=%s",
+        username,
+        headless_mode,
+        slow_mo_ms,
+    )
+    client = PlaywrightDMClient(account=account, headless=headless_mode, slow_mo_ms=slow_mo_ms)
     try:
         client.ensure_ready()
     except Exception:
         try:
-            if not client.headless:
+            if not client.headless and max(0, int(float(os.getenv("AUTORESPONDER_KEEP_BROWSER_OPEN_SECONDS", "0")))) > 0:
                 print(style_text(f"[Debug] Navegador de @{username} queda abierto para inspección (fallo ensure_ready).", color=Fore.YELLOW))
-                time.sleep(120)
+                time.sleep(max(0, int(float(os.getenv("AUTORESPONDER_KEEP_BROWSER_OPEN_SECONDS", "0")))))
             client.close()
         except Exception:
             pass
@@ -1970,17 +2116,17 @@ def _ensure_session(username: str) -> bool:
         return False
 
 
-def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
+def _gen_response_legacy(api_key: str, system_prompt: str, convo_text: str) -> str:
+    return _OPENAI_REPLY_FALLBACK
     try:
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key)
-        msg = client.responses.create(
+        output = _openai_generate_text(
+            client,
+            system_prompt=system_prompt,
+            user_content=convo_text,
             model="gpt-4o-mini",
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": convo_text},
-            ],
             temperature=0.6,
             max_output_tokens=180,
         )
@@ -1988,6 +2134,25 @@ def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
     except Exception as e:  # pragma: no cover - depende de red externa
         logger.warning("Fallo al generar respuesta con OpenAI: %s", e, exc_info=False)
         return "Gracias por tu mensaje ���� -aCa�mo te puedo ayudar?"
+
+
+def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+        output = _openai_generate_text(
+            client,
+            system_prompt=system_prompt,
+            user_content=convo_text,
+            model="gpt-4o-mini",
+            temperature=0.6,
+            max_output_tokens=180,
+        )
+        return output or _OPENAI_REPLY_FALLBACK
+    except Exception as e:  # pragma: no cover - depende de red externa
+        logger.warning("Fallo al generar respuesta con OpenAI: %s", e, exc_info=False)
+        return _OPENAI_REPLY_FALLBACK
 
 
 def _choose_targets(alias: str) -> list[str]:
@@ -3050,7 +3215,7 @@ def _google_calendar_lead_qualifies(
 
     system_prompt = (
         prompt_text
-        + "\n\nResponde a�nicamente con 'SI' o 'NO' indicando si se debe crear un evento en Google Calendar."
+        + "\n\nResponde unicamente con 'SI' o 'NO' indicando si se debe crear un evento en Google Calendar."
     )
     context_lines = [
         f"Estado detectado: {status or 'desconocido'}",
@@ -3062,16 +3227,14 @@ def _google_calendar_lead_qualifies(
     ]
     user_content = "\n".join(context_lines)
     try:  # pragma: no cover - depende de red externa
-        response = client.responses.create(
+        decision = _openai_generate_text(
+            client,
+            system_prompt=system_prompt,
+            user_content=user_content,
             model="gpt-4o-mini",
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
             temperature=0,
             max_output_tokens=20,
-        )
-        decision = (response.output_text or "").strip().lower()
+        ).strip().lower()
     except Exception as exc:  # pragma: no cover - depende de red externa
         logger.warning(
             "No se pudo evaluar el criterio de Google Calendar con OpenAI: %s",
@@ -3199,7 +3362,7 @@ def _gohighlevel_lead_qualifies(
 
     system_prompt = (
         prompt_text
-        + "\n\nResponde a�nicamente con 'SI' o 'NO' indicando si se debe enviar el lead a GoHighLevel."
+        + "\n\nResponde unicamente con 'SI' o 'NO' indicando si se debe enviar el lead a GoHighLevel."
     )
     context_lines = [
         f"Estado detectado: {status or 'desconocido'}",
@@ -3210,16 +3373,14 @@ def _gohighlevel_lead_qualifies(
     ]
     user_content = "\n".join(context_lines)
     try:  # pragma: no cover - depende de red externa
-        response = client.responses.create(
+        decision = _openai_generate_text(
+            client,
+            system_prompt=system_prompt,
+            user_content=user_content,
             model="gpt-4o-mini",
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
             temperature=0,
             max_output_tokens=20,
-        )
-        decision = (response.output_text or "").strip().lower()
+        ).strip().lower()
     except Exception as exc:  # pragma: no cover - depende de red externa
         logger.warning(
             "No se pudo evaluar el criterio de GoHighLevel con OpenAI: %s",
@@ -5065,6 +5226,7 @@ def _process_inbox(
                 continue
 
             action_label = "RESPONDER" if stage != _STAGE_FOLLOWUP else "FOLLOWUP"
+            stats.record_reply_attempt(user)
             print(style_text(f"Thread {idx}/{total_threads} | Acción={action_label} | {now_time_str}", color=Fore.GREEN))
             logger.info(
                 "Decision responder @%s thread=%s stage=%s reason=%s",
@@ -5114,6 +5276,12 @@ def _process_inbox(
         
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
+        print(
+            style_text(
+                f"Thread {idx}/{total_threads} | Respondido a {_format_handle(recipient_username)}",
+                color=Fore.GREEN,
+            )
+        )
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
 
         # Paso 9: Volver al inbox view (sin reload)
@@ -5122,12 +5290,36 @@ def _process_inbox(
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
 
 def _print_bot_summary(stats: BotStats) -> None:
+    def _format_elapsed(seconds: float) -> str:
+        total = max(0, int(seconds))
+        hh = total // 3600
+        mm = (total % 3600) // 60
+        ss = total % 60
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+    now_ts = time.time()
+    account_elapsed = dict(stats.account_elapsed_s)
+    for account, start_ts in stats.account_started_at.items():
+        account_elapsed[account] = account_elapsed.get(account, 0.0) + max(
+            0.0, now_ts - float(start_ts)
+        )
+    accounts_used = sorted(set(stats.accounts) | set(account_elapsed.keys()))
+
     print(full_line(color=Fore.MAGENTA))
     print(style_text("=== BOT DETENIDO ===", color=Fore.YELLOW, bold=True))
     print(style_text(f"Alias: {stats.alias}", color=Fore.WHITE, bold=True))
-    print(style_text(f"Mensajes respondidos: {stats.responded}", color=Fore.GREEN, bold=True))
-    print(style_text(f"Cuentas activas: {len(stats.accounts)}", color=Fore.CYAN, bold=True))
+    print(style_text(f"Cuentas usadas: {len(accounts_used)}", color=Fore.CYAN, bold=True))
+    print(style_text(f"Respuestas intentadas: {stats.reply_attempts}", color=Fore.WHITE, bold=True))
+    print(style_text(f"Respuestas enviadas: {stats.responded}", color=Fore.GREEN, bold=True))
+    print(style_text(f"Follow-ups intentados: {stats.followup_attempts}", color=Fore.WHITE, bold=True))
+    print(style_text(f"Follow-ups enviados: {stats.followups}", color=Fore.MAGENTA, bold=True))
     print(style_text(f"Errores: {stats.errors}", color=Fore.RED if stats.errors else Fore.GREEN, bold=True))
+    print(style_text(f"Tiempo total: {_format_elapsed(now_ts - stats.started_at)}", color=Fore.WHITE, bold=True))
+    if accounts_used:
+        print(style_text("Tiempo por cuenta:", color=Fore.WHITE, bold=True))
+        for account in accounts_used:
+            elapsed = account_elapsed.get(account, 0.0)
+            print(style_text(f" - @{account}: {_format_elapsed(elapsed)}", color=Fore.WHITE))
     print(full_line(color=Fore.MAGENTA))
     press_enter()
 
@@ -5213,6 +5405,7 @@ def _activate_bot() -> None:
     )
 
     account_queue = list(active_accounts)
+    active_clients: Dict[str, object] = {}
     try:
         with _suppress_console_noise():
             while not STOP_EVENT.is_set() and account_queue:
@@ -5225,6 +5418,8 @@ def _activate_bot() -> None:
                     client = None
                     try:
                         client = _client_for(user)
+                        stats.mark_account_start(user)
+                        active_clients[user] = client
                     except Exception as exc:
                         stats.record_error(user)
                         _handle_account_issue(user, exc, active_accounts)
@@ -5251,16 +5446,18 @@ def _activate_bot() -> None:
                                 allowed_thread_ids=allowed_thread_ids if followup_only else None,
                                 threads_limit=threads_limit,
                             )
-                        _process_followups(
-                            client,
-                            user,
-                            api_key,
-                            delay_min,
-                            delay_max,
-                            max_age_days,
-                            threads_limit=threads_limit,
-                            followup_schedule_hours=followup_schedule_hours,
-                        )
+                        if not STOP_EVENT.is_set():
+                            _process_followups(
+                                client,
+                                user,
+                                api_key,
+                                delay_min,
+                                delay_max,
+                                max_age_days,
+                                threads_limit=threads_limit,
+                                followup_schedule_hours=followup_schedule_hours,
+                                stats=stats,
+                            )
                     except KeyboardInterrupt:
                         raise
                     except Exception as exc:  # pragma: no cover - depende de SDK/insta
@@ -5281,12 +5478,20 @@ def _activate_bot() -> None:
                     finally:
                         if client is not None:
                             try:
-                                if not client.headless:
-                                    print(style_text(f"[Debug] Navegador de @{user} queda abierto 120s para inspección manual.", color=Fore.YELLOW))
-                                    time.sleep(120)
+                                if not client.headless and max(0, int(float(os.getenv("AUTORESPONDER_KEEP_BROWSER_OPEN_SECONDS", "0")))) > 0:
+                                    print(
+                                        style_text(
+                                            f"[Debug] Navegador de @{user} queda abierto {max(0, int(float(os.getenv('AUTORESPONDER_KEEP_BROWSER_OPEN_SECONDS', '0'))))}s para inspeccion manual.",
+                                            color=Fore.YELLOW,
+                                        )
+                                    )
+                                    time.sleep(max(0, int(float(os.getenv("AUTORESPONDER_KEEP_BROWSER_OPEN_SECONDS", "0")))))
                                 client.close()
                             except Exception:
                                 pass
+                            finally:
+                                active_clients.pop(user, None)
+                        stats.mark_account_end(user)
 
                     if user not in active_accounts and user in account_queue:
                         account_queue.remove(user)
@@ -5303,6 +5508,16 @@ def _activate_bot() -> None:
         request_stop("interrupcion con CtrlaC")
     finally:
         request_stop("auto-responder detenido")
+        for open_user, open_client in list(active_clients.items()):
+            try:
+                close_fn = getattr(open_client, "close", None)
+                if callable(close_fn):
+                    close_fn()
+            except Exception:
+                pass
+            finally:
+                stats.mark_account_end(open_user)
+                active_clients.pop(open_user, None)
         if listener:
             listener.join(timeout=0.1)
         ACTIVE_ALIAS = None
@@ -5431,6 +5646,75 @@ def _clean_conversation_state(state: _Dict_for_state[str, object]) -> _Dict_for_
     state["last_cleanup_ts"] = now_ts
     return state
 
+
+_FOLLOWUP_STAGE_STRONG_OBJECTION_TOKENS = (
+    "no me va a servir",
+    "no me sirve",
+    "no es para mi",
+    "no es para mí",
+    "no me interesa",
+    "no gracias",
+    "paso",
+)
+
+_FOLLOWUP_STAGE_SOFT_OBJECTION_TOKENS = (
+    "dejame verlo",
+    "dejame pensarlo",
+    "despues te digo",
+    "despues lo veo",
+    "pasame info",
+    "te aviso",
+    "mas adelante",
+)
+
+_FOLLOWUP_STAGE_CALL_TOKENS = (
+    "llamada",
+    "call",
+    "reunion",
+    "zoom",
+    "google meet",
+    "15 minutos",
+    "15 min",
+    "agend",
+)
+
+_FOLLOWUP_STAGE_SCHEDULE_HINT = re.compile(
+    r"\b(?:hoy|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b|\ba las \d{1,2}\b|\b\d{1,2}(?::\d{2})?\s?(?:hs|h)\b",
+    re.IGNORECASE,
+)
+
+
+def _infer_followup_business_stage(messages: List[object], client_user_id: object) -> int:
+    inbound_messages = [
+        msg for msg in messages if not _same_user_id(getattr(msg, "user_id", ""), client_user_id)
+    ]
+    if not inbound_messages:
+        return 0
+
+    outbound_messages = [
+        msg for msg in messages if _same_user_id(getattr(msg, "user_id", ""), client_user_id)
+    ]
+    latest_outbound_text = ""
+    if outbound_messages:
+        latest_outbound_text = _normalize_text_for_match(str(getattr(outbound_messages[0], "text", "") or ""))
+
+    inbound_text_joined = " ".join(
+        _normalize_text_for_match(str(getattr(msg, "text", "") or "")) for msg in inbound_messages[:20]
+    )
+    outbound_text_joined = " ".join(
+        _normalize_text_for_match(str(getattr(msg, "text", "") or "")) for msg in outbound_messages[:20]
+    )
+
+    if latest_outbound_text and _FOLLOWUP_STAGE_SCHEDULE_HINT.search(latest_outbound_text):
+        return 5
+    if any(token in inbound_text_joined for token in _FOLLOWUP_STAGE_STRONG_OBJECTION_TOKENS):
+        return 4
+    if any(token in inbound_text_joined for token in _FOLLOWUP_STAGE_SOFT_OBJECTION_TOKENS):
+        return 3
+    if any(token in outbound_text_joined for token in _FOLLOWUP_STAGE_CALL_TOKENS):
+        return 2
+    return 1
+
 def _process_followups_extended(
     client,
     user: str,
@@ -5440,6 +5724,7 @@ def _process_followups_extended(
     max_age_days: int = 7,
     threads_limit: int = 15,
     followup_schedule_hours: Optional[List[int]] = None,
+    stats: Optional[BotStats] = None,
 ) -> None:
     # Implementaci�n extendida de seguimientos con memoria persistente
     alias, entry = _followup_enabled_entry_for(user)
@@ -5595,6 +5880,11 @@ def _process_followups_extended(
                 "seguimiento_actual": 0,
                 "last_sent_ts": 0.0,
                 "last_eval_ts": 0.0,
+                "cycle_anchor_ts": 0.0,
+                "cycle_followup_count": 0,
+                "cycle_last_sent_ts": 0.0,
+                "cycle_last_eval_ts": 0.0,
+                "etapa_negocio_actual": 0,
                 "ultimo_contacto_ts": 0.0,
                 "cerrado": False,
                 "ultima_actualizacion_ts": now_ts,
@@ -5602,39 +5892,90 @@ def _process_followups_extended(
             convs[conv_key] = conv_record
             updated_state = True
 
+        business_stage = _infer_followup_business_stage(messages, client.user_id)
+        cycle_anchor_ts = float(last_outbound_ts or 0.0)
+        if cycle_anchor_ts <= 0:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "missing_cycle_anchor_ts",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                }
+            )
+            continue
+
+        try:
+            stored_anchor_ts = float(conv_record.get("cycle_anchor_ts", 0) or 0)
+        except Exception:
+            stored_anchor_ts = 0.0
+        if abs(stored_anchor_ts - cycle_anchor_ts) > 1.0:
+            conv_record["cycle_anchor_ts"] = cycle_anchor_ts
+            conv_record["cycle_followup_count"] = 0
+            conv_record["cycle_last_sent_ts"] = 0.0
+            conv_record["cycle_last_eval_ts"] = 0.0
+            conv_record["seguimiento_actual"] = 0
+            conv_record["last_sent_ts"] = 0.0
+            conv_record["cerrado"] = False
+            conv_record["ultima_actualizacion_ts"] = now_ts
+            updated_state = True
+
+        conv_record["etapa_negocio_actual"] = business_stage
+
         if conv_record.get("cerrado"):
             continue
 
-        if has_inbound:
+        if has_inbound and last_inbound_ts and last_outbound_ts and last_inbound_ts > last_outbound_ts:
             conv_record["seguimiento_actual"] = 0
+            conv_record["cycle_followup_count"] = 0
+            conv_record["cycle_last_sent_ts"] = 0.0
+            conv_record["cycle_last_eval_ts"] = 0.0
             conv_record["ultimo_contacto_ts"] = last_inbound_ts or now_ts
             conv_record["ultima_actualizacion_ts"] = now_ts
             updated_state = True
 
         try:
-            last_eval_float = float(conv_record.get("last_eval_ts", 0) or 0)
+            last_eval_float = float(
+                conv_record.get("cycle_last_eval_ts", conv_record.get("last_eval_ts", 0)) or 0
+            )
         except Exception:
             last_eval_float = 0.0
         if now_ts - last_eval_float < _FOLLOWUP_MIN_INTERVAL:
             continue
 
-        followups_sent = int(conv_record.get("seguimiento_actual", 0) or 0)
-        last_followup_ts = conv_record.get("last_sent_ts") or 0.0
+        followups_sent = int(
+            conv_record.get("cycle_followup_count", conv_record.get("seguimiento_actual", 0)) or 0
+        )
+        last_followup_ts = conv_record.get(
+            "cycle_last_sent_ts", conv_record.get("last_sent_ts", 0.0)
+        ) or 0.0
         try:
             last_followup_float = float(last_followup_ts)
         except Exception:
             last_followup_float = 0.0
 
-        if first_outbound_ts is None:
-            first_outbound_ts = conv_record.get("first_sent_ts") or last_outbound_ts
-        if first_outbound_ts:
-            conv_record.setdefault("first_sent_ts", first_outbound_ts)
         schedule = [h for h in (followup_schedule_hours or []) if isinstance(h, int) and h > 0]
         schedule = sorted(set(schedule))
+        required_hours: Optional[float] = None
         if schedule:
             if followups_sent >= len(schedule):
+                conv_record["cerrado"] = True
+                conv_record["ultima_actualizacion_ts"] = now_ts
+                convs[conv_key] = conv_record
+                updated_state = True
+                _append_message_log(
+                    {
+                        "action": "followup_skip",
+                        "reason": "max_followups_reached",
+                        "account": user,
+                        "thread_id": str(thread_id),
+                        "lead": recipient_username or str(recipient_id),
+                        "etapa_negocio": business_stage,
+                    }
+                )
                 continue
-            if not first_outbound_ts:
+            if not cycle_anchor_ts:
                 _append_message_log(
                     {
                         "action": "followup_skip",
@@ -5645,9 +5986,9 @@ def _process_followups_extended(
                     }
                 )
                 continue
-            hours_since_initial = (now_ts - first_outbound_ts) / 3600.0
-            required_hours = schedule[followups_sent]
-            if hours_since_initial < required_hours:
+            hours_since_anchor = (now_ts - cycle_anchor_ts) / 3600.0
+            required_hours = float(schedule[followups_sent])
+            if hours_since_anchor < required_hours:
                 _append_message_log(
                     {
                         "action": "followup_skip",
@@ -5655,7 +5996,7 @@ def _process_followups_extended(
                         "account": user,
                         "thread_id": str(thread_id),
                         "lead": recipient_username or str(recipient_id),
-                        "hours_since_initial": round(hours_since_initial, 2),
+                        "hours_since_initial": round(hours_since_anchor, 2),
                         "required_hours": required_hours,
                     }
                 )
@@ -5698,6 +6039,10 @@ def _process_followups_extended(
             "cuenta_origen": f"@{user}",
             "lead": recipient_username or str(recipient_id),
             "seguimientos_previos": followups_sent,
+            "seguimientos_previos_en_esta_etapa": followups_sent,
+            "etapa_negocio": business_stage,
+            "intento_followup_siguiente": followups_sent + 1,
+            "horas_objetivo": required_hours if required_hours is not None else "sin_regla",
             "segundos_desde_ultimo_seguimiento": int(now_ts - last_followup_float)
             if last_followup_float
             else "nunca",
@@ -5716,10 +6061,14 @@ def _process_followups_extended(
                 "thread_id": str(thread_id),
                 "lead": recipient_username or str(recipient_id),
                 "seguimientos_previos": followups_sent,
+                "etapa_negocio": business_stage,
+                "intento_followup_siguiente": followups_sent + 1,
+                "horas_objetivo": required_hours if required_hours is not None else "sin_regla",
             }
         )
         decision = _followup_decision(api_key, prompt_text, conversation_text, metadata)
         conv_record["last_eval_ts"] = now_ts
+        conv_record["cycle_last_eval_ts"] = now_ts
         updated_state = True
 
         if not decision:
@@ -5735,39 +6084,38 @@ def _process_followups_extended(
             convs[conv_key] = conv_record
             record = history.get(conv_key, {})
             record["last_eval_ts"] = now_ts
+            record["etapa_negocio"] = business_stage
+            record["cycle_anchor_ts"] = cycle_anchor_ts
             history[conv_key] = record
             updated_history = True
             continue
 
-        message_text, stage = decision
+        message_text, stage_requested = decision
+        stage_int = followups_sent + 1
         try:
-            stage_int = int(stage)
+            requested_int = int(stage_requested)
         except Exception:
-            stage_int = followups_sent + 1
-        stage_int = max(1, stage_int)
-
-        expected_stage = followups_sent + 1
-        if stage_int != expected_stage:
-            _append_message_log(
-                {
-                    "action": "followup_skip",
-                    "reason": "stage_mismatch",
-                    "account": user,
-                    "thread_id": str(thread_id),
-                    "lead": recipient_username or str(recipient_id),
-                    "stage_requested": stage_int,
-                    "stage_expected": expected_stage,
-                }
+            requested_int = stage_int
+        if requested_int != stage_int:
+            logger.info(
+                "followup_stage_override account=@%s thread=%s etapa_negocio=%s requested=%s expected=%s",
+                user,
+                thread_id,
+                business_stage,
+                requested_int,
+                stage_int,
             )
-            continue
 
         logger.info(
-            "Decision seguimiento @%s thread=%s stage=%s reason=%s",
+            "Decision seguimiento @%s thread=%s stage=%s etapa_negocio=%s reason=%s",
             user,
             thread_id,
             stage_int,
+            business_stage,
             "ok",
         )
+        if stats is not None:
+            stats.record_followup_attempt(user)
 
         _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
 
@@ -5786,6 +6134,8 @@ def _process_followups_extended(
             updated_state = True
             record = history.get(conv_key, {})
             record["last_error"] = str(exc)
+            record["etapa_negocio"] = business_stage
+            record["cycle_anchor_ts"] = cycle_anchor_ts
             history[conv_key] = record
             updated_history = True
             continue
@@ -5810,8 +6160,12 @@ def _process_followups_extended(
             }
         )
         conv_record["seguimiento_actual"] = stage_int
+        conv_record["cycle_followup_count"] = stage_int
         conv_record["last_sent_ts"] = now_ts
+        conv_record["cycle_last_sent_ts"] = now_ts
         conv_record.pop("last_error", None)
+        conv_record["etapa_negocio_actual"] = business_stage
+        conv_record["ultimo_contacto_ts"] = now_ts
         conv_record["ultima_actualizacion_ts"] = now_ts
         convs[conv_key] = conv_record
         updated_state = True
@@ -5820,19 +6174,24 @@ def _process_followups_extended(
         record["count"] = stage_int
         record["last_sent_ts"] = now_ts
         record["last_message_id"] = message_id or ""
+        record["etapa_negocio"] = business_stage
+        record["cycle_anchor_ts"] = cycle_anchor_ts
+        record["cycle_followup_count"] = stage_int
         record.pop("last_error", None)
         history[conv_key] = record
         updated_history = True
+        if stats is not None:
+            stats.record_followup_success(user)
 
         try:
             print(
                 style_text(
-                    f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}",
+                    f"Seguimiento | @{user} -> {_format_handle(recipient_username)} | etapa {stage_int}",
                     color=Fore.MAGENTA,
                 )
             )
         except Exception:
-            print(f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}")
+            print(f"Seguimiento | @{user} -> {_format_handle(recipient_username)} | etapa {stage_int}")
 
     # Guardamos cambios al terminar
     if updated_state:
@@ -5842,3 +6201,4 @@ def _process_followups_extended(
 
 # Sustituimos la implementaci�n original por la extendida
 _process_followups = _process_followups_extended
+

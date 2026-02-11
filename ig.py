@@ -93,6 +93,16 @@ def _env_flag(name: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def _resolve_overnight(override: Optional[bool]) -> bool:
     if override is not None:
         return bool(override)
@@ -107,6 +117,14 @@ def _resolve_headless(override: Optional[bool], overnight: bool) -> bool:
     if override is not None:
         return bool(override)
     return True
+
+
+ALLOW_SENT_UNVERIFIED = _env_flag("HUMAN_DM_ALLOW_UNVERIFIED")
+ACCOUNT_ERROR_STREAK_LIMIT = max(
+    1,
+    _env_int("IG_ACCOUNT_ERROR_STREAK_LIMIT", 3),
+)
+_ACCOUNT_STREAK_SCOPES = {"", "account", "network", "campaign"}
 
 
 class CampaignUI:
@@ -789,6 +807,15 @@ _ERROR_SIGNATURES = [
             "please wait a few minutes",
             "try again later",
             "we restrict certain activity",
+            "something went wrong",
+            "please try again later",
+            "ha ocurrido un error",
+            "ocurrio un error",
+            "prueba mas tarde",
+            "pruebalo mas tarde",
+            "intentalo de nuevo mas tarde",
+            "send_failed_toast",
+            "send_failed_indicator",
         ),
         "code": "temporary_block",
         "detail": "Instagram bloqueó temporalmente las acciones de esta cuenta",
@@ -798,7 +825,7 @@ _ERROR_SIGNATURES = [
         "scope": "account",
     },
     {
-        "keywords": ("rate_limit", "too many requests", "throttled", "429"),
+        "keywords": ("rate_limit", "too many requests", "throttled", "429", "daily limit", "límite diario"),
         "code": "rate_limit",
         "detail": "Se alcanzó un límite de envíos (rate limit)",
         "attention": "Se alcanzó un rate limit. Conviene pausar unos minutos.",
@@ -898,6 +925,13 @@ def _classify_exception(exc: Exception) -> tuple[str, str | None, str | None, st
     return fallback_detail, _diagnose_exception(exc), None, text or "Error desconocido", None, None
 
 
+def _classify_failure_detail(detail: str) -> tuple[str, str | None, str | None, str | None, str | None, str | None]:
+    normalized = (detail or "").strip()
+    if not normalized:
+        return "envío falló", None, None, "Error desconocido", None, None
+    return _classify_exception(RuntimeError(normalized))
+
+
 _RETRYABLE_SEND_HINTS = (
     "timeout",
     "timed out",
@@ -916,7 +950,7 @@ NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
 NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
 SENT_UNVERIFIED_REASON = "SENT_UNVERIFIED"
 SENT_UNVERIFIED_DETAIL = (
-    "Se intentó enviar y no se pudo verificar en DOM; no cuenta como error"
+    "Se intentó enviar y no se pudo verificar en DOM"
 )
 
 
@@ -1128,8 +1162,14 @@ def _handle_event(
             _LIVE_COUNTS["run_fail"] += 1
         bump("errors", 1)
         emit_log(username, event.lead, "error", detail, None)
-        streak = int(account_error_streaks.get(username, 0)) + 1
-        account_error_streaks[username] = streak
+        scope_key = (event.scope or "").strip().lower()
+        streak_eligible = scope_key in _ACCOUNT_STREAK_SCOPES
+        if streak_eligible:
+            streak = int(account_error_streaks.get(username, 0)) + 1
+            account_error_streaks[username] = streak
+        else:
+            streak = 0
+            account_error_streaks.pop(username, None)
         normalized_username = username.lower()
         if overnight and event.reason_code == "overnight_retries_exhausted":
             if normalized_username not in paused_accounts:
@@ -1151,12 +1191,12 @@ def _handle_event(
                 status="paused",
                 reason="overnight_retries_exhausted",
             )
-        if streak >= 2 and normalized_username not in paused_accounts:
+        if streak >= ACCOUNT_ERROR_STREAK_LIMIT and normalized_username not in paused_accounts:
             emit_log(
                 username,
                 event.lead,
                 "warning",
-                "Proteccion activada (2 errores consecutivos).",
+                f"Proteccion activada ({ACCOUNT_ERROR_STREAK_LIMIT} errores consecutivos).",
                 None,
             )
             if overnight:
@@ -1709,12 +1749,19 @@ def menu_send_rotating(
                     or (payload.get("reason_code") or "").strip().upper() == SENT_UNVERIFIED_REASON
                     or (info or "").strip().lower() == "sent_unverified"
                 ):
-                    success_flag = True
                     verified_flag = False
                     detail = info or "sent_unverified"
                     reason_code = SENT_UNVERIFIED_REASON
                     reason_label = "Enviado sin verificación"
                     scope = "lead"
+                    if ALLOW_SENT_UNVERIFIED:
+                        success_flag = True
+                    else:
+                        success_flag = False
+                        suggestion = (
+                            suggestion
+                            or "Instagram no confirmó el mensaje. Se tomó como error para evitar falsos enviados."
+                        )
                     break
                 if success_flag:
                     verified_flag = bool(payload.get("verified", True))
@@ -1727,7 +1774,24 @@ def menu_send_rotating(
                     if retryable_failure and attempt < max_retries:
                         time.sleep(_retry_delay_seconds(attempt))
                         continue
-                    normalized_info = (info or "").lower()
+                    (
+                        _classified_detail,
+                        diag_attention,
+                        code,
+                        label,
+                        suggestion_hint,
+                        scope_hint,
+                    ) = _classify_failure_detail(detail)
+                    if code and not reason_code:
+                        reason_code = code
+                    if label and not reason_label:
+                        reason_label = label
+                    if suggestion_hint and not suggestion:
+                        suggestion = suggestion_hint
+                    if diag_attention and not attention_message:
+                        attention_message = diag_attention
+                    scope = scope_hint or scope
+                    normalized_info = (detail or "").lower()
                     if "cancel" in normalized_info:
                         reason_code = reason_code or "send_cancelled"
                         reason_label = reason_label or "Envío cancelado"
@@ -2125,7 +2189,8 @@ def menu_send_rotating(
             lead="-",
             status="stopped" if STOP_EVENT.is_set() else "completed",
             reason=(
-                f"{final_reason} sent={sum(success.values())} "
+                f"{final_reason} sent={max(0, sum(success.values()) - sum(sent_unverified_by_account.values()))} "
+                f"sent_unverified={sum(sent_unverified_by_account.values())} "
                 f"errors={sum(failed.values())} remaining={len(users)}"
             ),
         )
@@ -2141,11 +2206,26 @@ def menu_send_rotating(
             sent_unverified_by_account,
         )
 
-    total_ok = sum(success.values())
-    emit_log("-", "-", "resumen", f"OK: {total_ok}", None)
+    total_unverified = sum(sent_unverified_by_account.values())
+    total_ok = max(0, sum(success.values()) - total_unverified)
+    emit_log(
+        "-",
+        "-",
+        "resumen",
+        f"OK confirmados: {total_ok} | sin verificación: {total_unverified}",
+        None,
+    )
     for account in accounts:
         user = account["username"]
-        emit_log(user, "-", "resumen", f"{success[user]} enviados, {failed[user]} errores", None)
+        unverified = int(sent_unverified_by_account.get(user, 0))
+        verified_ok = max(0, int(success[user]) - unverified)
+        emit_log(
+            user,
+            "-",
+            "resumen",
+            f"{verified_ok} enviados confirmados, {failed[user]} errores, {unverified} sin verificación",
+            None,
+        )
     if STOP_EVENT.is_set():
         logger.info("Proceso detenido (%s).", "stop_event activo")
     if not overnight_mode:

@@ -10,6 +10,7 @@ from . import audit
 from .config import OptInSettings, get_settings
 from .session_store import SessionStore
 from .utils import random_human_delay
+from src.playwright_service import resolve_playwright_executable
 
 
 class BrowserManager:
@@ -44,6 +45,9 @@ class BrowserManager:
         }
         if self.settings.proxy_url:
             launch_kwargs["proxy"] = {"server": self.settings.proxy_url}
+        executable = resolve_playwright_executable(headless=self.settings.headless)
+        if executable:
+            launch_kwargs["executable_path"] = str(executable)
 
         self.browser = self._playwright.chromium.launch(**launch_kwargs)
 

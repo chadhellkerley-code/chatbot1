@@ -1,12 +1,26 @@
 [
   {
     "username": "matidiazlife",
-    "alias": "1",
+    "alias": "45dm",
     "active": true,
     "connected": true,
     "password": "Flor12345.",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-07T05:04:49Z"
+    "first_seen": "2026-02-10T03:32:59Z"
+  },
+  {
+    "username": "matiid.life1",
+    "alias": "10dm",
+    "active": true,
+    "connected": true,
+    "proxy_url": "http://72.1.129.111:7504",
+    "proxy_user": "bosxdoew",
+    "proxy_pass": "zg6i4lre5zkj",
+    "proxy_sticky_minutes": 10,
+    "password": "LAwxw3",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-10T06:53:27Z"
   }
 ]

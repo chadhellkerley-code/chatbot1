@@ -46,6 +46,10 @@ except Exception as exc:  # pragma: no cover - depende de entorno
     onboard_accounts_from_csv = None
     _ONBOARDING_BACKEND_ERROR = exc
     _ONBOARDING_AVAILABLE = False
+try:
+    from src.auth.persistent_login import check_session as _check_playwright_session
+except Exception:
+    _check_playwright_session = None
 from proxy_manager import (
     ProxyConfig,
     apply_proxy_to_client,
@@ -1371,10 +1375,113 @@ def _has_playwright_session(username: str) -> bool:
         return False
 
 
+def _playwright_cookie_session_active(username: str) -> bool:
+    if not username:
+        return False
+    try:
+        path = Path(BASE_PROFILES) / username / "storage_state.json"
+        if not path.exists() or path.stat().st_size <= 0:
+            return False
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    cookies = payload.get("cookies")
+    if not isinstance(cookies, list):
+        return False
+
+    now = time.time()
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        name = str(cookie.get("name") or "").strip().lower()
+        if name != "sessionid":
+            continue
+        value = str(cookie.get("value") or "").strip()
+        if not value:
+            continue
+        expires = cookie.get("expires")
+        if expires in (None, "", -1, 0):
+            return True
+        try:
+            if float(expires) > now:
+                return True
+        except Exception:
+            return True
+    return False
+
+
+def _playwright_session_active(
+    username: str,
+    *,
+    account: Optional[Dict] = None,
+    strict: bool = False,
+) -> bool:
+    if not _has_playwright_session(username):
+        return False
+
+    if strict and _check_playwright_session:
+        proxy_payload = None
+        with contextlib.suppress(Exception):
+            proxy_payload = _playwright_proxy_payload(account)
+        try:
+            ok, _reason = _check_playwright_session(
+                username,
+                proxy=proxy_payload,
+                headless=True,
+            )
+            return bool(ok)
+        except Exception as exc:
+            logger.debug(
+                "No se pudo validar la sesion de Playwright para @%s: %s",
+                username,
+                exc,
+            )
+
+    return _playwright_cookie_session_active(username)
+
+
 def _session_label(username: str) -> str:
     if has_session(username) or _has_playwright_session(username):
         return "[sesión]"
     return "[sin sesión]"
+
+
+def connected_status(
+    account: Dict,
+    *,
+    strict: bool = False,
+    reason: str = "connection-status",
+) -> bool:
+    username = str(account.get("username") or "").strip().lstrip("@")
+    if not username:
+        return False
+
+    has_api_session = has_session(username)
+    has_playwright_file = _has_playwright_session(username)
+    has_playwright_cookie = _playwright_cookie_session_active(username) if has_playwright_file else False
+
+    current = bool(account.get("connected"))
+    quick_connected = has_api_session or has_playwright_cookie
+    strict_playwright = strict and (current != quick_connected)
+
+    connected = False
+    if has_api_session:
+        connected = _session_active(username, account=account, reason=reason)
+        account["connected"] = connected
+    if not connected and has_playwright_file:
+        connected = _playwright_session_active(
+            username,
+            account=account,
+            strict=strict_playwright,
+        )
+
+    current = bool(account.get("connected"))
+    if current != connected:
+        mark_connected(username, connected)
+        account["connected"] = connected
+
+    return connected
 
 
 def _health_cache_key(username: str) -> str:
@@ -2600,7 +2707,12 @@ def menu_accounts():
             pending_refresh: List[Dict] = []
             for it in group:
                 flag = em("🟢") if it.get("active") else em("⚪")
-                conn = "[conectada]" if it.get("connected") else "[no conectada]"
+                is_connected = connected_status(
+                    it,
+                    strict=True,
+                    reason="menu-display-status",
+                )
+                conn = "[conectada]" if is_connected else "[no conectada]"
                 sess = _session_label(it["username"])
                 proxy_flag = _proxy_indicator(it)
                 totp_flag = _totp_indicator(it)

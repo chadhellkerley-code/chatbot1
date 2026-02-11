@@ -321,6 +321,7 @@ class LeadFilterRunConfig:
     concurrency: int
     delay_min: float
     delay_max: float
+    headless: Optional[bool] = None
 
 
 def _dedupe_preserve_order(usernames: Iterable[str]) -> List[str]:
@@ -1255,12 +1256,24 @@ def _prompt_run_config() -> Optional[LeadFilterRunConfig]:
     if delay_max < delay_min:
         warn("El delay maximo era menor al minimo. Se invirtieron los valores.")
         delay_min, delay_max = delay_max, delay_min
+    print("\nModo navegador:")
+    print("[1] Segundo plano (headless)")
+    print("[2] Visible (headful)")
+    print("[3] Usar configuración del env (LEADS_HEADFUL/HUMAN_HEADFUL)")
+    headless_choice = ask("Opcion (1/2/3): ").strip() or "1"
+    if headless_choice == "1":
+        headless = True
+    elif headless_choice == "2":
+        headless = False
+    else:
+        headless = None
     return LeadFilterRunConfig(
         alias=alias,
         accounts=accounts,
         concurrency=concurrency,
         delay_min=float(delay_min),
         delay_max=float(delay_max),
+        headless=headless,
     )
 
 
@@ -1558,18 +1571,26 @@ def _run_config_to_dict(cfg: LeadFilterRunConfig) -> Dict[str, Any]:
         "concurrency": cfg.concurrency,
         "delay_min": cfg.delay_min,
         "delay_max": cfg.delay_max,
+        "headless": cfg.headless,
     }
 
 
 def _run_config_from_dict(data: Dict[str, Any]) -> Optional[LeadFilterRunConfig]:
     if not data:
         return None
+    headless_raw = data.get("headless")
+    headless: Optional[bool]
+    if isinstance(headless_raw, bool):
+        headless = headless_raw
+    else:
+        headless = None
     return LeadFilterRunConfig(
         alias=str(data.get("alias") or ""),
         accounts=list(data.get("accounts") or []),
         concurrency=int(data.get("concurrency") or 1),
         delay_min=float(data.get("delay_min") or 0),
         delay_max=float(data.get("delay_max") or 0),
+        headless=headless,
     )
 
 
@@ -1872,9 +1893,37 @@ async def _execute_filter_list_async(
         )
         tasks.append(task)
 
-    await queue.join()
-    for task in tasks:
-        await task
+    async def _drain_queue() -> int:
+        drained = 0
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            queue.task_done()
+            drained += 1
+        return drained
+
+    # Evitar bloqueo infinito si todos los workers terminan antes de consumir la cola.
+    while True:
+        if all(task.done() for task in tasks):
+            remaining = await _drain_queue()
+            if remaining:
+                warn(
+                    "Filtrado detenido: quedaron pendientes sin procesar. "
+                    "Podes reanudar luego."
+                )
+            break
+        try:
+            await asyncio.wait_for(queue.join(), timeout=1.0)
+            break
+        except asyncio.TimeoutError:
+            continue
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            warn(f"Worker terminó con error: {result}")
 
     _refresh_list_stats(list_data)
     _save_filter_list(list_data)
@@ -1905,14 +1954,28 @@ async def _filter_worker(
         return
 
     try:
-        svc, ctx, page = await ensure_logged_in_async(
-            account,
-            headless=not _env_truthy(
+        headless = run_cfg.headless
+        if headless is None:
+            headless = not _env_truthy(
                 "LEADS_HEADFUL",
                 _env_truthy("HUMAN_HEADFUL", False),
-            ),
-            proxy=proxy_payload,
             )
+        prev_overnight = os.getenv("IG_OVERNIGHT")
+        if headless:
+            # Evita prompts bloqueantes en modo headless.
+            os.environ["IG_OVERNIGHT"] = "1"
+        try:
+            svc, ctx, page = await ensure_logged_in_async(
+                account,
+                headless=headless,
+                proxy=proxy_payload,
+            )
+        finally:
+            if headless:
+                if prev_overnight is None:
+                    os.environ.pop("IG_OVERNIGHT", None)
+                else:
+                    os.environ["IG_OVERNIGHT"] = prev_overnight
         while True:
             idx = await queue.get()
             if idx is None:
@@ -1962,6 +2025,11 @@ async def _filter_worker(
             queue.task_done()
     except ChallengeRequired as exc:
         warn(f"Challenge requerido para @{account_username}: {exc}")
+        if headless:
+            warn(
+                "Modo headless no permite resolver el challenge. "
+                "Inicia sesion en modo visible una vez y reintenta."
+            )
     finally:
         if svc or ctx:
             try:

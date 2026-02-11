@@ -7362,6 +7362,502 @@
       "created_at": 1768916891.6985211,
       "updated_at": 1768917448.2687428,
       "first_message_sent_at": 1768876728.672481
+    },
+    "matiid.life1|17848557974649260": {
+      "account": "matiid.life1",
+      "thread_id": "17848557974649260",
+      "recipient_username": "Marcos Razzetti | Empresario Digital",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770832762.8588784,
+      "updated_at": 1770843715.9844358,
+      "last_interaction_at": 1770843706.7962346,
+      "source": "playwright",
+      "captured_at_epoch": 1770843715.9844358,
+      "messages": [
+        {
+          "message_id": "079d04fd0ba0",
+          "direction": "outbound",
+          "text": "tengo una duda\ntengo una duda",
+          "timestamp_epoch": 1770843715.9264216
+        }
+      ]
+    },
+    "matiid.life1|17842928525376378": {
+      "account": "matiid.life1",
+      "thread_id": "17842928525376378",
+      "recipient_username": "Huspy",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770832769.8620594,
+      "last_message_id_seen": "9860cdf78dc9",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770832769.8043294,
+      "updated_at": 1770843712.0590403,
+      "last_interaction_at": 1770843706.7962346,
+      "source": "playwright",
+      "captured_at_epoch": 1770843712.0395594,
+      "messages": [
+        {
+          "message_id": "3bf233badc19",
+          "direction": "outbound",
+          "text": "Gracias por tu mensaje ���� -aCa�mo te puedo ayudar?\nGracias por tu mensaje ���� -aCa�mo te puedo ayudar?",
+          "timestamp_epoch": 1770843711.9907212
+        },
+        {
+          "message_id": "0dc2c3fbb9f5",
+          "direction": "inbound",
+          "text": "Hey there \n\n\nThanks for reaching out! Huspy is here to help you find and finance your dream home \n\n\nLet us know what you are looking for, along with your phone number \n and one of our experts will be in touch with you within 24 hours.\n\n- The Huspy Message Bot\nHey there \n\n\nThanks for reaching out! Huspy is here to help you find and finance your dream home \n\n\nLet us know what you are looking for, along with your phone number \n and one of our experts will be in touch with you within 24 hours.\n\n- The Huspy Message Bot",
+          "timestamp_epoch": 1770843711.8965778
+        },
+        {
+          "message_id": "ea4f76798da5",
+          "direction": "outbound",
+          "text": "tengo una duda\ntengo una duda",
+          "timestamp_epoch": 1770843711.814891
+        }
+      ]
+    },
+    "matiid.life1|17847803535228266": {
+      "account": "matiid.life1",
+      "thread_id": "17847803535228266",
+      "recipient_username": "WHITELABEL AI CALLING FOR AGENCY",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770832853.7600687,
+      "updated_at": 1770843720.2339005,
+      "last_interaction_at": 1770843706.7962346,
+      "source": "playwright",
+      "captured_at_epoch": 1770843720.2339005,
+      "messages": [
+        {
+          "message_id": "5bbfcdc3d8cb",
+          "direction": "outbound",
+          "text": "como va\ncomo va",
+          "timestamp_epoch": 1770843720.1764545
+        }
+      ]
+    },
+    "matiid.life1|17851783847786931": {
+      "account": "matiid.life1",
+      "thread_id": "17851783847786931",
+      "recipient_username": "THE SETTER JOB CREATOR",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770832864.874145,
+      "updated_at": 1770843723.9779656,
+      "last_interaction_at": 1770843706.7962346,
+      "source": "playwright",
+      "captured_at_epoch": 1770843723.9779656,
+      "messages": [
+        {
+          "message_id": "9f4b85bb3491",
+          "direction": "outbound",
+          "text": "holaa que tal\nholaa que tal",
+          "timestamp_epoch": 1770843723.921541
+        }
+      ]
+    },
+    "matiid.life1|17846569517955592": {
+      "account": "matiid.life1",
+      "thread_id": "17846569517955592",
+      "recipient_username": "Thermalis",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770837518.3484483,
+      "updated_at": 1770843727.7323706,
+      "last_interaction_at": 1770843706.7962346,
+      "source": "playwright",
+      "captured_at_epoch": 1770843727.7323706,
+      "messages": [
+        {
+          "message_id": "27d7b13a9859",
+          "direction": "outbound",
+          "text": "tengo una duda\ntengo una duda",
+          "timestamp_epoch": 1770843727.6772957
+        }
+      ]
+    },
+    "matidiazlife|114479856604367": {
+      "account": "matidiazlife",
+      "thread_id": "114479856604367",
+      "recipient_username": "Andrea & Cheva | Marketing en Redes sociales",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770837668.3327932,
+      "last_message_id_seen": "37c570402780",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770837668.275926,
+      "updated_at": 1770843849.0913398,
+      "last_interaction_at": 1770843825.342022,
+      "source": "playwright",
+      "captured_at_epoch": 1770843849.0913398,
+      "messages": [
+        {
+          "message_id": "8e39d8e1cd7d",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770843849.0350137
+        },
+        {
+          "message_id": "0dcb0fc873cb",
+          "direction": "inbound",
+          "text": "Hola Matias cuentame en que te puedo ayudar\nHola Matias cuentame en que te puedo ayudar",
+          "timestamp_epoch": 1770843848.9524424
+        },
+        {
+          "message_id": "5d5ff81c79fa",
+          "direction": "outbound",
+          "text": "tengo una duda\ntengo una duda",
+          "timestamp_epoch": 1770843848.8668158
+        },
+        {
+          "message_id": "3be1f52415fe",
+          "direction": "outbound",
+          "text": "Historia no disponible",
+          "timestamp_epoch": 1770843848.7847762
+        }
+      ]
+    },
+    "matidiazlife|17842052876930477": {
+      "account": "matidiazlife",
+      "thread_id": "17842052876930477",
+      "recipient_username": "GURU BHAI",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770842150.444491,
+      "last_message_id_seen": "b2366e1c59c4",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770837746.2179415,
+      "updated_at": 1770844146.693967,
+      "last_interaction_at": 1770844131.339786,
+      "source": "playwright",
+      "captured_at_epoch": 1770844146.693967,
+      "messages": [
+        {
+          "message_id": "4a66cfe8c508",
+          "direction": "outbound",
+          "text": "Para entender mejor tu caso hoy cuántas llamadas calificadas están generando por día o por semana?\nPara entender mejor tu caso hoy cuántas llamadas calificadas están generando por día o por semana?",
+          "timestamp_epoch": 1770844146.5989678
+        },
+        {
+          "message_id": "d2e9335bee32",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1770844146.4957235
+        },
+        {
+          "message_id": "5f1a7a78ad6d",
+          "direction": "inbound",
+          "text": "tradingwithyouuu",
+          "timestamp_epoch": 1770844146.3094897
+        },
+        {
+          "message_id": "cf69d4175c1e",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770844146.206467
+        },
+        {
+          "message_id": "11e54feafe17",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1770844146.093861
+        },
+        {
+          "message_id": "0174bae3ded1",
+          "direction": "inbound",
+          "text": "tradingwithyouuu",
+          "timestamp_epoch": 1770844145.9768338
+        }
+      ]
+    },
+    "matidiazlife|17842416878919186": {
+      "account": "matidiazlife",
+      "thread_id": "17842416878919186",
+      "recipient_username": "HORIZON DUBAI VIP | Establece tu Vida y Negocios en Dubái",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770837824.457419,
+      "last_message_id_seen": "a78bba3b9c53",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770837824.0047874,
+      "updated_at": 1770844161.6104643,
+      "last_interaction_at": 1770844131.339786,
+      "source": "playwright",
+      "captured_at_epoch": 1770844161.6104643,
+      "messages": [
+        {
+          "message_id": "8f2eb9238b0b",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770844161.2891514
+        },
+        {
+          "message_id": "0f9ea3796550",
+          "direction": "inbound",
+          "text": "Buen día ¿Cómo estás? \nUn gusto bienvenido a Horizon Dubai VIP, mi nombre es Liseth. \n\n¿En qué tenemos el gusto de ayudarte?\nBuen día ¿Cómo estás? \nUn gusto bienvenido a Horizon Dubai VIP, mi nombre es Liseth. \n\n¿En qué tenemos el gusto de ayudarte?",
+          "timestamp_epoch": 1770844161.1255548
+        },
+        {
+          "message_id": "a5b1e23c36d8",
+          "direction": "outbound",
+          "text": "como va\ncomo va",
+          "timestamp_epoch": 1770844160.6395063
+        }
+      ]
+    },
+    "matidiazlife|17844371435582553": {
+      "account": "matidiazlife",
+      "thread_id": "17844371435582553",
+      "recipient_username": "Jeremias Brizuela",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770837898.919275,
+      "last_message_id_seen": "50642c63d103",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770837898.8636742,
+      "updated_at": 1770844155.2738752,
+      "last_interaction_at": 1770844131.339786,
+      "source": "playwright",
+      "captured_at_epoch": 1770844155.2738752,
+      "messages": [
+        {
+          "message_id": "4c09a88b7828",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770844155.2176452
+        },
+        {
+          "message_id": "90039b33737a",
+          "direction": "inbound",
+          "text": "Contame\nContame",
+          "timestamp_epoch": 1770844155.1361303
+        },
+        {
+          "message_id": "d0d1fd515b62",
+          "direction": "inbound",
+          "text": "Mati!\nMati!",
+          "timestamp_epoch": 1770844155.0525844
+        },
+        {
+          "message_id": "df8a84ed210b",
+          "direction": "inbound",
+          "text": "Buenas Mari\nBuenas Mari",
+          "timestamp_epoch": 1770844154.964488
+        },
+        {
+          "message_id": "caf4a9527a2d",
+          "direction": "outbound",
+          "text": "tengo una duda\ntengo una duda",
+          "timestamp_epoch": 1770844154.8765762
+        }
+      ]
+    },
+    "matidiazlife|118410526219248": {
+      "account": "matidiazlife",
+      "thread_id": "118410526219248",
+      "recipient_username": "Zach Kieran | Online Coach",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770842071.707558,
+      "last_message_id_seen": "0ca376ff6e6a",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770842071.6507053,
+      "updated_at": 1770844151.010785,
+      "last_interaction_at": 1770844131.339786,
+      "source": "playwright",
+      "captured_at_epoch": 1770844151.010785,
+      "messages": [
+        {
+          "message_id": "ffbd01e7a005",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770844150.9466558
+        },
+        {
+          "message_id": "0b04cca6d770",
+          "direction": "inbound",
+          "text": "Hey bro! How are you?\nHey bro! How are you?",
+          "timestamp_epoch": 1770844150.859633
+        },
+        {
+          "message_id": "38e1f54547eb",
+          "direction": "outbound",
+          "text": "holaa que tal\nholaa que tal",
+          "timestamp_epoch": 1770844150.7726219
+        }
+      ]
+    },
+    "matiid.life1|17848566815817461": {
+      "account": "matiid.life1",
+      "thread_id": "17848566815817461",
+      "recipient_username": "Agustín Rondinelli | Ventas",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770843731.5251722,
+      "updated_at": 1770843731.5251722,
+      "last_interaction_at": 1770843706.7962346,
+      "source": "playwright",
+      "captured_at_epoch": 1770843731.5251722,
+      "messages": [
+        {
+          "message_id": "ae419fa2d587",
+          "direction": "outbound",
+          "text": "como va\ncomo va",
+          "timestamp_epoch": 1770843731.4690642
+        }
+      ]
+    },
+    "matidiazlife|100685294663311": {
+      "account": "matidiazlife",
+      "thread_id": "100685294663311",
+      "recipient_username": "Agustín Tolosa",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770843853.0164864,
+      "last_message_id_seen": "76b95ae4d4e7",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770843852.9915128,
+      "updated_at": 1770844140.6026204,
+      "last_interaction_at": 1770844131.339786,
+      "source": "playwright",
+      "captured_at_epoch": 1770844140.6026204,
+      "messages": [
+        {
+          "message_id": "672cce0bcdb7",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770844140.5446048
+        },
+        {
+          "message_id": "e1c9d8dd7926",
+          "direction": "inbound",
+          "text": "Hola, cómo estás ?\nHola, cómo estás ?",
+          "timestamp_epoch": 1770844140.4165714
+        },
+        {
+          "message_id": "1d3fc4a917bf",
+          "direction": "outbound",
+          "text": "holaa que tal\nholaa que tal",
+          "timestamp_epoch": 1770844140.3155475
+        }
+      ]
+    },
+    "matidiazlife|110235563709210": {
+      "account": "matidiazlife",
+      "thread_id": "110235563709210",
+      "recipient_username": "Jose Sanchez",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1770843930.9622447,
+      "last_message_id_seen": "895bbdb03e5f",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770843930.9144273,
+      "updated_at": 1770844136.3752651,
+      "last_interaction_at": 1770844131.339786,
+      "source": "playwright",
+      "captured_at_epoch": 1770844136.3742647,
+      "messages": [
+        {
+          "message_id": "bcca27167729",
+          "direction": "outbound",
+          "text": "Te escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?\nTe escribía porque llevamos a negocios que venden servicios hi tech a generar muchas más conversaciones y llamadas calificadas en automático. Hoy la mayoría paga entre 15 y 30 dólares por llamada con anuncios y funnels. Con nuestro sistema las llamadas terminan costando alrededor de 2 dólares manteniendo la calidad. En promedio nuestros clientes generan de 2 a 3 llamadas calificadas por día gastando mucho menos. Te interesaría saber cómo funciona?",
+          "timestamp_epoch": 1770844136.318251
+        },
+        {
+          "message_id": "b7d065069199",
+          "direction": "inbound",
+          "text": "Hola bro, todo bien\nHola bro, todo bien",
+          "timestamp_epoch": 1770844136.233228
+        },
+        {
+          "message_id": "b0559b37b1ec",
+          "direction": "outbound",
+          "text": "como va\ncomo va",
+          "timestamp_epoch": 1770844136.1332042
+        }
+      ]
+    },
+    "matidiazlife|17844755928022939": {
+      "account": "matidiazlife",
+      "thread_id": "17844755928022939",
+      "recipient_username": "Laura Deldom | Consultora de Publicidad y Marketing",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1770844010.4971955,
+      "updated_at": 1770844010.4971955,
+      "last_interaction_at": 1770843825.342022,
+      "source": "playwright",
+      "captured_at_epoch": 1770844010.4971955,
+      "messages": [
+        {
+          "message_id": "a84e1170168c",
+          "direction": "outbound",
+          "text": "holaa que tal\nholaa que tal",
+          "timestamp_epoch": 1770844010.4327958
+        }
+      ]
     }
   },
   "version": "1.0",

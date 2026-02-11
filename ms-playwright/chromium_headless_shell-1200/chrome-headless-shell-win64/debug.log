@@ -476,3 +476,18 @@
 [0115/035320.185:ERROR:gpu\command_buffer\service\gles2_cmd_decoder_passthrough.cc:1091] [GroupMarkerNotSet(crbug.com/242999)!:A8C01800CC290000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
 [0115/035323.826:ERROR:gpu\command_buffer\service\gles2_cmd_decoder_passthrough.cc:1091] [GroupMarkerNotSet(crbug.com/242999)!:A8C01800CC290000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
 [0115/035325.748:ERROR:gpu\command_buffer\service\gles2_cmd_decoder_passthrough.cc:1091] [GroupMarkerNotSet(crbug.com/242999)!:A8C01800CC290000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
+[0210/040718.350:WARNING:net\spdy\spdy_session.cc:3026] Received WINDOW_UPDATE for invalid stream 1
+[0210/040718.362:WARNING:net\spdy\spdy_session.cc:3071] Received HEADERS for invalid stream 1
+[0210/041108.825:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0210/041129.129:WARNING:net\spdy\spdy_session.cc:3026] Received WINDOW_UPDATE for invalid stream 3
+[0210/041129.135:WARNING:net\spdy\spdy_session.cc:3071] Received HEADERS for invalid stream 3
+[0210/050646.045:WARNING:net\spdy\spdy_session.cc:3026] Received WINDOW_UPDATE for invalid stream 1
+[0210/050646.426:WARNING:net\spdy\spdy_session.cc:3071] Received HEADERS for invalid stream 1
+[0210/062649.627:WARNING:net\spdy\spdy_session.cc:3026] Received WINDOW_UPDATE for invalid stream 1
+[0210/063226.557:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0210/070050.503:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0211/133002.102:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0211/135218.411:ERROR:net\socket\ssl_client_socket_impl.cc:916] handshake failed; returned -1, SSL error code 1, net_error -101
+[0211/140115.483:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0211/160145.208:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[0211/180108.918:ERROR:gpu\ipc\client\command_buffer_proxy_impl.cc:122] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.

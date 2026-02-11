@@ -89,6 +89,38 @@ NO_DM_SKIP_REASON = "NO_DM_BUTTON"
 NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
 NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
 NO_DM_SEND_METHOD = "skip_no_dm"
+_UNVERIFIED_REASONS = {"message_not_present_after_send", "composer_not_cleared"}
+_TOAST_FAILURE_RE = re.compile(
+    r"("
+    r"not sent|couldn'?t send|failed to send|"
+    r"no se pudo enviar|mensaje no enviado|"
+    r"something went wrong|ha ocurrido un error|ocurri[oó] un error|"
+    r"try again later|please wait a few minutes|"
+    r"prueba(?:lo)? m[aá]s tarde|int[eé]ntalo de nuevo m[aá]s tarde|"
+    r"we restrict certain activity"
+    r")",
+    re.IGNORECASE,
+)
+_UNSENT_INDICATOR_SELECTORS = (
+    "[aria-label*='Not sent']",
+    "[aria-label*=\"Couldn't send\"]",
+    "[aria-label*='Couldn’t send']",
+    "[aria-label*='No se pudo enviar']",
+    "[aria-label*='No enviado']",
+    "[aria-label*='No enviado.']",
+    "[aria-label*='Error sending']",
+    "button:has-text('Retry')",
+    "button:has-text('Try again')",
+    "button:has-text('Reintentar')",
+    "button:has-text('Intentar de nuevo')",
+)
+
+
+def _compact_text(value: str, limit: int = 180) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)] + "..."
 
 
 class HumanInstagramSender:
@@ -495,9 +527,11 @@ class HumanInstagramSender:
             "[role='alert']",
             "[data-testid='toast']",
             "div[role='status']",
+            "[aria-live='assertive']",
+            "[aria-live='polite']",
         ]
         toast_success = re.compile(r"(sent|enviado|mensaje enviado|message sent)", re.IGNORECASE)
-        toast_negative = re.compile(r"(not sent|no se pudo enviar|no enviado)", re.IGNORECASE)
+        toast_negative = _TOAST_FAILURE_RE
 
         message_selectors = [
             "div[role='list'] div[role='listitem']",
@@ -529,9 +563,13 @@ class HumanInstagramSender:
                 pass
             for selector in toast_selectors:
                 try:
-                    toast = page.locator(selector).last
-                    if await toast.count() > 0:
-                        toast_text = (await toast.inner_text() or "").strip()
+                    toasts = page.locator(selector)
+                    count = await toasts.count()
+                    if count > 0:
+                        toast = toasts.nth(max(0, count - 1))
+                        toast_text = _compact_text((await toast.inner_text() or ""))
+                        if toast_text and toast_negative.search(toast_text):
+                            return False, f"send_failed_toast: {toast_text}"
                         if toast_text and toast_success.search(toast_text) and not toast_negative.search(toast_text):
                             return True, "toast_sent"
                 except Exception:
@@ -558,9 +596,50 @@ class HumanInstagramSender:
                             except Exception:
                                 text_value = await item.text_content() or ""
                             if _contains_snippet(text_value) or _contains_prefix(text_value):
+                                indicator_text = ""
+                                for marker_selector in _UNSENT_INDICATOR_SELECTORS:
+                                    try:
+                                        markers = item.locator(marker_selector)
+                                        marker_count = await markers.count()
+                                        if marker_count <= 0:
+                                            continue
+                                        marker = markers.nth(max(0, marker_count - 1))
+                                        for attr in ("aria-label", "title", "data-tooltip-content"):
+                                            value = await marker.get_attribute(attr)
+                                            if value:
+                                                indicator_text = value
+                                                break
+                                        if not indicator_text:
+                                            indicator_text = (await marker.inner_text() or "").strip()
+                                        break
+                                    except Exception:
+                                        continue
+                                if indicator_text:
+                                    return False, f"send_failed_indicator: {_compact_text(indicator_text)}"
                                 return True, "message_present"
                         matches = items.filter(has_text=snippet)
                         if await matches.count() > 0:
+                            matched_item = matches.nth(max(0, (await matches.count()) - 1))
+                            indicator_text = ""
+                            for marker_selector in _UNSENT_INDICATOR_SELECTORS:
+                                try:
+                                    markers = matched_item.locator(marker_selector)
+                                    marker_count = await markers.count()
+                                    if marker_count <= 0:
+                                        continue
+                                    marker = markers.nth(max(0, marker_count - 1))
+                                    for attr in ("aria-label", "title", "data-tooltip-content"):
+                                        value = await marker.get_attribute(attr)
+                                        if value:
+                                            indicator_text = value
+                                            break
+                                    if not indicator_text:
+                                        indicator_text = (await marker.inner_text() or "").strip()
+                                    break
+                                except Exception:
+                                    continue
+                            if indicator_text:
+                                return False, f"send_failed_indicator: {_compact_text(indicator_text)}"
                             return True, "message_present"
                 except Exception:
                     continue
@@ -760,7 +839,7 @@ class HumanInstagramSender:
                     reason = reason_retry
                     payload["verified"] = True
             if not ok:
-                if reason in {"message_not_present_after_send", "composer_not_cleared"}:
+                if reason in _UNVERIFIED_REASONS:
                     current_url = page.url if page else ""
                     detail = "sent_request" if "/direct/requests" in (current_url or "") else "sent_unverified"
                     payload["verification_reason"] = reason
@@ -768,6 +847,11 @@ class HumanInstagramSender:
                     if detail == "sent_unverified":
                         payload["sent_unverified"] = True
                         payload["reason_code"] = "SENT_UNVERIFIED"
+                    if detail == "sent_unverified" and not ALLOW_UNVERIFIED:
+                        strict_detail = f"sent_unverified ({reason})"
+                        if return_payload:
+                            return False, strict_detail, payload
+                        return (False, strict_detail) if return_detail else False
                     if return_payload:
                         return True, detail, payload
                     return (True, detail) if return_detail else True

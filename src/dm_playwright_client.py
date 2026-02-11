@@ -38,6 +38,16 @@ DM_DEBUG_DIRNAME = "dm_debug"
 
 VERIFY_TIMEOUT_S = float(os.getenv("HUMAN_DM_VERIFY_TIMEOUT", "10.0"))
 
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "si", "on"}
+
+
+_DM_VERBOSE_PROBES = _env_enabled("AUTORESPONDER_DM_VERBOSE_PROBES", False)
+
 # Selectores mínimos necesarios (eliminadas constantes legacy de anchors)
 ROW_SELECTOR = "div[role='button'][tabindex='0']"
 _MESSAGE_CONTAINER_SELECTORS = (
@@ -50,7 +60,7 @@ _MESSAGE_NODE_SELECTORS = (
     "div[role='none']",
     "div[dir='auto']",
 )
-THREAD_ROW_SELECTOR = "div[role='button'][tabindex='0'] >> div[role='listitem'] >> div[aria-label][data-testid='user-avatar']"
+THREAD_ROW_SELECTOR = "div[role='main'] a[href*='/direct/t/']"
 _COMPOSER_SELECTORS = (
     "div[role='main'] div[role='textbox'][contenteditable='true']",
     "div[role='main'] div[contenteditable='true'][role='textbox']",
@@ -60,6 +70,17 @@ _COMPOSER_SELECTORS = (
 )
 
 _UNREAD_HINTS = ("unread", "sin leer", "no leido", "no leido")
+_NOTE_PHRASES = (
+    "tu nota",
+    "your note",
+    "share a note",
+    "compartir una nota",
+    "agrega una nota",
+    "agregar una nota",
+    "create note",
+    "create a note",
+    "primera nota",
+)
 
 
 @dataclass
@@ -187,7 +208,8 @@ class PlaywrightDMClient:
             try:
                 rows = page.locator(selector)
                 total = rows.count()
-                print(style_text(f"[Probe] Selector '{selector}' -> count={total}", color=Fore.WHITE))
+                if _DM_VERBOSE_PROBES:
+                    print(style_text(f"[Probe] Selector '{selector}' -> count={total}", color=Fore.WHITE))
                 if total == 0:
                     continue
 
@@ -230,6 +252,17 @@ class PlaywrightDMClient:
 
         return threads
 
+    def open_thread(self, thread_id: str) -> bool:
+        key = str(thread_id or "").strip()
+        if not key:
+            logger.error("PlaywrightDM open_thread called with empty thread_id")
+            return False
+        thread = self._thread_cache.get(key)
+        if thread is None:
+            logger.error("PlaywrightDM open_thread cache_miss thread_id=%s", key)
+            return False
+        return self._open_thread(thread)
+
     # LEGACY: Función deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_anchors(...)
 
@@ -257,22 +290,32 @@ class PlaywrightDMClient:
         return [line.strip() for line in parent_text.splitlines() if line.strip()]
 
     def _row_selector_candidates(self) -> List[str]:
-        # Priorizar selectores m?s espec?ficos de lista de threads
+        # Prioritize selectors scoped to actual inbox thread rows.
         return [
+            "div[role='navigation'][aria-label='Lista de conversaciones'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'][aria-label='Conversation list'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'][aria-label='List of conversations'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'][aria-label='Lista de conversaciones'] div[role='button'][tabindex='0']:has(abbr)",
+            "div[role='navigation'][aria-label='Conversation list'] div[role='button'][tabindex='0']:has(abbr)",
+            "div[role='navigation'][aria-label='List of conversations'] div[role='button'][tabindex='0']:has(abbr)",
+            "div[role='navigation'] div[role='button'][tabindex='0']:has(abbr)",
+            "div[role='navigation'][aria-label='Lista de conversaciones'] div[role='button'][tabindex='0']",
+            "div[role='navigation'][aria-label='Conversation list'] div[role='button'][tabindex='0']",
+            "div[role='navigation'][aria-label='List of conversations'] div[role='button'][tabindex='0']",
+            "div[role='navigation'] div[role='button'][tabindex='0']",
             THREAD_ROW_SELECTOR,
             "a[href*='/direct/t/']",
             "div[role='main'] div[role='list'] a[href*='/direct/t/']",
+            "div[aria-label='Chats'] a[href*='/direct/t/']",
+            "div[aria-label='Mensajes'] a[href*='/direct/t/']",
+            "div[aria-label='Messages'] a[href*='/direct/t/']",
             "div[role='main'] div[role='list'] div[role='listitem']",
             "div[role='main'] div[role='list'] div[role='row']",
             "div[role='main'] div[role='list'] div[role='button'][tabindex='0']",
-            "div[role='navigation'] div[role='button']",
-            "div[aria-label='Chats'] div[role='button']",
-            "div[aria-label='Mensajes'] div[role='button']",
-            "div[aria-label='Messages'] div[role='button']",
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
             "div[role='main'] div[role='button'][tabindex='0']",
-            "div[role='button'][tabindex='0']",
         ]
 
     def _get_inbox_panel(self, page: Page):
@@ -280,15 +323,23 @@ class PlaywrightDMClient:
         [Probe/Fix] Intenta encontrar el panel lateral de mensajes.
         Retorna (locator, metodo, selector, meta).
         """
-        for selector in ("div[role='main']", "main", "div[role='navigation']"):
+        for selector in (
+            "div[role='navigation'][aria-label='Lista de conversaciones']",
+            "div[role='navigation'][aria-label='Conversation list']",
+            "div[role='navigation']",
+            "div[role='main']",
+            "main",
+        ):
             try:
                 loc = page.locator(selector)
                 if loc.count() > 0:
-                    print(style_text(f"[Probe] _get_inbox_panel encontró '{selector}'", color=Fore.WHITE))
+                    if _DM_VERBOSE_PROBES:
+                        print(style_text(f"[Probe] _get_inbox_panel encontró '{selector}'", color=Fore.WHITE))
                     return loc.first, "selector", selector, {"count": loc.count()}
             except Exception:
                 continue
-        print(style_text("[Probe] _get_inbox_panel no encontró nada, usando page", color=Fore.YELLOW))
+        if _DM_VERBOSE_PROBES:
+            print(style_text("[Probe] _get_inbox_panel no encontró nada, usando page", color=Fore.YELLOW))
         return page, "page", "", {"count": 1}
 
     def _row_is_valid(self, row, *, selector: str | None = None) -> bool:
@@ -303,24 +354,133 @@ class PlaywrightDMClient:
 
             # Filtros de exclusión de UI básica (incluye Notas)
             first_line = lines[0].lower()
-            if first_line in {"primary", "general", "request", "buscar", "search", "enviar mensaje", "solicitudes", "principal", "mensajes", "chats", "direct"}:
+            if first_line in {
+                "primary",
+                "general",
+                "request",
+                "buscar",
+                "search",
+                "enviar mensaje",
+                "nuevo mensaje",
+                "new message",
+                "solicitudes",
+                "principal",
+                "mensajes",
+                "chats",
+                "direct",
+            }:
                 return False
-            # Notas/Notes (evitar click en historias/nota)
-            if first_line in {"tu nota", "nota", "notas", "notes"}:
+            note_reason = self._note_reason(row)
+            if note_reason:
+                logger.info(
+                    "PlaywrightDM row_discard reason=note selector=%s token=%s first_line=%s",
+                    selector or "-",
+                    note_reason,
+                    self._row_preview(row),
+                )
                 return False
-            for line in lines:
-                lowered = line.lower()
-                if "tu nota" in lowered:
-                    return False
 
-            # Para selectores amplios (buttons/rows), exigir marcador de thread real
-            if selector and "/direct/t/" not in selector and "data-testid='user-avatar'" not in selector:
-                if not self._row_has_thread_marker(row):
-                    return False
+            if self._is_non_thread_control_row(lines):
+                return False
+
+            # Descartar botones internos (avatar/nota) por tamaño.
+            if not self._row_has_thread_dimensions(row):
+                logger.info(
+                    "PlaywrightDM row_discard reason=small_button selector=%s first_line=%s",
+                    selector or "-",
+                    self._row_preview(row),
+                )
+                return False
+
+            # Exigir marcador de thread real para evitar abrir burbujas de nota.
+            if not self._row_has_thread_marker(row):
+                logger.info(
+                    "PlaywrightDM row_discard reason=no_thread_marker selector=%s first_line=%s",
+                    selector or "-",
+                    self._row_preview(row),
+                )
+                return False
 
             return True
         except Exception:
             return False
+
+    def _is_non_thread_control_row(self, lines: List[str]) -> bool:
+        if not lines:
+            return True
+        text = " ".join((line or "").strip().lower() for line in lines if line)
+        if not text:
+            return True
+        control_tokens = (
+            "nuevo mensaje",
+            "new message",
+            "icono de comilla angular",
+            "desde el corazón",
+            "solicitudes",
+            "requests",
+        )
+        return any(token in text for token in control_tokens)
+
+    def _note_reason(self, row) -> str:
+        candidates: List[str] = []
+        try:
+            lines = self._row_lines(row)
+        except Exception:
+            lines = []
+        if lines:
+            for line in lines[:6]:
+                candidates.append((line or "").lower())
+        for attr_name in ("aria-label", "data-testid"):
+            try:
+                value = (row.get_attribute(attr_name) or "").strip().lower()
+            except Exception:
+                value = ""
+            if value:
+                candidates.append(value)
+        try:
+            parent = row.locator("xpath=ancestor-or-self::*[@aria-label][1]").first
+            parent_aria = (parent.get_attribute("aria-label") or "").strip().lower()
+        except Exception:
+            parent_aria = ""
+        if parent_aria:
+            candidates.append(parent_aria)
+
+        for text in candidates:
+            clean = re.sub(r"\s+", " ", text)
+            if clean in {"notes", "notas", "nota"}:
+                return clean
+            for token in _NOTE_PHRASES:
+                if token in clean:
+                    return token
+
+        try:
+            if row.locator(
+                "xpath=ancestor-or-self::*[contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'note') or contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'nota')]"
+            ).count() > 0:
+                return "aria_ancestor_note"
+        except Exception:
+            pass
+        return ""
+
+    def _row_preview(self, row) -> str:
+        try:
+            lines = self._row_lines(row)
+        except Exception:
+            lines = []
+        if lines:
+            return lines[0][:120]
+        return ""
+
+    def _row_has_thread_dimensions(self, row) -> bool:
+        try:
+            box = row.bounding_box()
+        except Exception:
+            box = None
+        if not box:
+            return False
+        width = float(box.get("width") or 0.0)
+        height = float(box.get("height") or 0.0)
+        return width >= 220.0 and height >= 44.0
 
     def _row_has_thread_marker(self, row) -> bool:
         """
@@ -345,6 +505,16 @@ class PlaywrightDMClient:
                 return True
         except Exception:
             pass
+        try:
+            if row.locator("abbr[aria-label]").count() > 0:
+                return True
+        except Exception:
+            pass
+        try:
+            if row.locator("abbr").count() > 0:
+                return True
+        except Exception:
+            pass
 
         # Unread badge tambi?n indica thread real
         try:
@@ -352,6 +522,19 @@ class PlaywrightDMClient:
                 return True
         except Exception:
             pass
+
+        # Modern inbox rows may not expose anchors/time tags; detect timestamp-like text.
+        try:
+            full = " ".join(self._row_lines(row)).lower()
+        except Exception:
+            full = ""
+        if full:
+            if re.search(r"\b\d+\s*(s|min|h|d|sem|sec|hr|hrs)\b", full):
+                return True
+            if any(token in full for token in (" ahora", " now", " ayer", " yesterday")):
+                return True
+            if " · " in full and ("tú:" in full or "tu:" in full or "you:" in full):
+                return True
 
         return False
 
@@ -485,7 +668,8 @@ class PlaywrightDMClient:
         if self._page is not None:
             return self._page
 
-        print(style_text(f"[PlaywrightDM] Iniciando navegador para @{self.username}...", color=Fore.WHITE))
+        if _DM_VERBOSE_PROBES:
+            print(style_text(f"[PlaywrightDM] Iniciando navegador para @{self.username}...", color=Fore.WHITE))
 
         storage_state = self.storage_state_path(self.username)
         if not storage_state.exists():
@@ -567,7 +751,8 @@ class PlaywrightDMClient:
             except Exception:
                 pass
 
-        print(style_text(f"[Probe] Inbox container: {found_container}", color=Fore.WHITE))
+        if _DM_VERBOSE_PROBES:
+            print(style_text(f"[Probe] Inbox container: {found_container}", color=Fore.WHITE))
         for search_selector in ("input[placeholder='Buscar']", "input[placeholder='Search']", "input[name='queryBox']"):
             try:
                 page.wait_for_selector(search_selector, timeout=15_000)
@@ -743,55 +928,238 @@ class PlaywrightDMClient:
             self.return_to_inbox()
 
         # 3. Intentar clickear por índice usando el selector cacheado del scan
-        opened_visual = False
+        # source_index path
         if thread.source_index != -1:
             meta = self._thread_cache_meta.get(thread.id, {})
             row_selector = meta.get("selector") or THREAD_ROW_SELECTOR
             try:
                 rows = page.locator(row_selector)
-                row = rows.nth(thread.source_index)
-                if row.count() > 0:
+                row_count = rows.count()
+                if row_count > thread.source_index:
+                    row = rows.nth(thread.source_index)
+                    row_preview = self._row_preview(row)
                     if not self._row_is_valid(row, selector=row_selector):
-                        return False
-                    row.click()
-                    opened_visual = True
-            except Exception:
-                opened_visual = False
-            if not opened_visual:
-                # Si falla el click por índice, descartar (sin re-scan)
-                return False
+                        logger.error(
+                            "PlaywrightDM open_thread_invalid_row account=@%s thread_id=%s selector=%s idx=%s row=%s",
+                            self.username,
+                            thread.id,
+                            row_selector,
+                            thread.source_index,
+                            row_preview,
+                        )
+                    else:
+                        pre_url = page.url or ""
+                        clicked, click_href = self._click_row_target(
+                            row,
+                            selector=row_selector,
+                            idx=thread.source_index,
+                        )
+                        if clicked and self._validate_open_state(
+                            thread,
+                            pre_url=pre_url,
+                            selector=row_selector,
+                            idx=thread.source_index,
+                            row_preview=row_preview,
+                            click_href=click_href,
+                        ):
+                            return True
+                        self.return_to_inbox()
+                else:
+                    logger.error(
+                        "PlaywrightDM open_thread_missing_row account=@%s thread_id=%s selector=%s idx=%s row_count=%s",
+                        self.username,
+                        thread.id,
+                        row_selector,
+                        thread.source_index,
+                        row_count,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "PlaywrightDM open_thread_click_error account=@%s thread_id=%s selector=%s idx=%s error=%s",
+                    self.username,
+                    thread.id,
+                    row_selector,
+                    thread.source_index,
+                    exc,
+                )
+        if self._open_thread_by_cache(thread):
+            return True
+
+        logger.error(
+            "PlaywrightDM open_thread_failed account=@%s thread_id=%s title=%s",
+            self.username,
+            thread.id,
+            thread.title,
+        )
+        return False
+
+    def _click_row_target(self, row, *, selector: str, idx: int) -> tuple[bool, str]:
+        click_target = row
+        click_href = ""
+        page = self._ensure_page()
+        self._dismiss_transient_overlay(page)
+        try:
+            href = (row.get_attribute("href") or "").strip()
+        except Exception:
+            href = ""
+        if "/direct/t/" in href:
+            click_href = _normalize_direct_link(href)
         else:
-            # Fallback a búsqueda por cache solo cuando no hay índice válido
-            opened_visual = self._open_thread_by_cache(thread)
-            if not opened_visual:
-                return False
+            try:
+                anchor = row.locator("a[href*='/direct/t/']").first
+                if anchor.count() > 0:
+                    click_target = anchor
+                    href = (anchor.get_attribute("href") or "").strip()
+                    if "/direct/t/" in href:
+                        click_href = _normalize_direct_link(href)
+            except Exception:
+                pass
 
-        # 5. VALIDACIÓN POST-CLICK (Pseudocódigo Paso 5)
-        # El wait(300) solicitado por el usuario (aprox)
-        time.sleep(0.3)
+        try:
+            click_target.scroll_into_view_if_needed()
+        except Exception:
+            pass
 
-        is_real_dm = self._wait_thread_open(page, timeout_ms=6000)
-        if not is_real_dm:
-            # No es thread real -> volver al inbox para el siguiente
-            self.return_to_inbox()
+        try:
+            box = None
+            try:
+                box = click_target.bounding_box()
+            except Exception:
+                box = None
+            if box:
+                width = float(box.get("width") or 0.0)
+                height = float(box.get("height") or 0.0)
+                if width > 0 and height > 0:
+                    safe_x = max(8.0, min(width - 8.0, width * 0.82))
+                    safe_y = max(8.0, min(height - 8.0, height * 0.5))
+                    click_target.click(timeout=3000, position={"x": safe_x, "y": safe_y})
+                    return True, click_href
+            click_target.click(timeout=3000)
+            return True, click_href
+        except Exception:
+            try:
+                click_target.click(timeout=3000, force=True)
+                return True, click_href
+            except Exception as exc:
+                logger.error(
+                    "PlaywrightDM click_failed selector=%s idx=%s error=%s",
+                    selector,
+                    idx,
+                    exc,
+                )
+                return False, click_href
+
+    def _dismiss_transient_overlay(self, page: Page) -> None:
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        close_selectors = (
+            "button[aria-label='Cerrar']",
+            "button[aria-label='Close']",
+            "svg[aria-label='Close']",
+        )
+        for selector in close_selectors:
+            try:
+                loc = page.locator(selector)
+                if loc.count() <= 0:
+                    continue
+                if selector.startswith("svg"):
+                    btn = loc.first.locator("xpath=ancestor::button[1]")
+                    if btn.count() > 0:
+                        btn.first.click(timeout=500)
+                        return
+                else:
+                    loc.first.click(timeout=500)
+                    return
+            except Exception:
+                continue
+
+    def _validate_open_state(
+        self,
+        thread: ThreadLike,
+        *,
+        pre_url: str,
+        selector: str,
+        idx: int,
+        row_preview: str,
+        click_href: str,
+    ) -> bool:
+        page = self._ensure_page()
+        pre_thread_id = _extract_thread_id(pre_url)
+        deadline = time.time() + 8.0
+        post_url = page.url or ""
+        post_thread_id = _extract_thread_id(post_url)
+        composer_visible = False
+        url_is_thread = False
+        thread_id_changed = False
+
+        while time.time() < deadline:
+            post_url = page.url or ""
+            post_thread_id = _extract_thread_id(post_url)
+            url_is_thread = bool(post_thread_id)
+            thread_id_changed = bool(post_thread_id) and post_thread_id != pre_thread_id
+
+            composer = self._find_composer(page)
+            composer_visible = False
+            if composer is not None:
+                try:
+                    composer_visible = bool(composer.is_visible())
+                except Exception:
+                    composer_visible = False
+
+            if url_is_thread and composer_visible and thread_id_changed:
+                break
+            try:
+                page.wait_for_timeout(200)
+            except Exception:
+                time.sleep(0.2)
+
+        if not (url_is_thread and composer_visible and thread_id_changed):
+            logger.error(
+                "PlaywrightDM open_thread_validation_error account=@%s target_thread=%s selector=%s idx=%s row=%s pre_url=%s post_url=%s click_href=%s url_is_thread=%s composer_visible=%s thread_id_changed=%s",
+                self.username,
+                thread.id,
+                selector,
+                idx,
+                row_preview,
+                pre_url,
+                post_url,
+                click_href,
+                url_is_thread,
+                composer_visible,
+                thread_id_changed,
+            )
+            self._dismiss_transient_overlay(page)
             return False
 
-        # 6. Capturar y actualizar ID real
-        new_url = page.url or ""
-        real_id = _extract_thread_id(new_url)
-        if real_id and real_id != thread.id:
-            old_id = thread.id
-            thread.id = real_id
-            thread.pk = real_id
-            if old_id in self._thread_cache:
-                self._thread_cache[real_id] = self._thread_cache.pop(old_id)
-                self._thread_cache_meta[real_id] = self._thread_cache_meta.pop(old_id)
-
+        self._sync_thread_id(thread, post_thread_id)
         self._current_thread_id = thread.id
         self._assert_logged_in(page)
         self._refresh_thread_participants(page, thread)
-
+        logger.info(
+            "PlaywrightDM open_thread_ok account=@%s thread_id=%s selector=%s idx=%s row=%s url=%s",
+            self.username,
+            thread.id,
+            selector,
+            idx,
+            row_preview,
+            post_url,
+        )
         return True
+
+    def _sync_thread_id(self, thread: ThreadLike, real_id: str) -> None:
+        if not real_id:
+            return
+        if real_id == thread.id:
+            return
+        old_id = thread.id
+        thread.id = real_id
+        thread.pk = real_id
+        if old_id in self._thread_cache:
+            self._thread_cache[real_id] = self._thread_cache.pop(old_id)
+        if old_id in self._thread_cache_meta:
+            self._thread_cache_meta[real_id] = self._thread_cache_meta.pop(old_id)
 
     def _collect_message_nodes(self, page: Page):
         container = None
@@ -933,74 +1301,126 @@ class PlaywrightDMClient:
                 except Exception:
                     continue
 
+        if found_composer:
+            composer = self._find_composer(page)
+            if composer is None:
+                found_composer = False
+            else:
+                try:
+                    found_composer = bool(composer.is_visible())
+                except Exception:
+                    found_composer = False
+
         # Re-obtener URL después de la espera
         current_url = page.url or ""
         is_in_thread = bool(re.search(r"/direct/t/([^/]+)", current_url))
 
         # Probes de estado EXACTOS requeridos por el usuario
-        print(style_text(f"[Probe] URL = {current_url}", color=Fore.WHITE))
-        print(style_text(f"[Probe] thread_abierto = {is_in_thread and found_composer}", color=Fore.WHITE))
-        print(style_text(f"[Probe] existe_composer = {found_composer}", color=Fore.WHITE))
+        if _DM_VERBOSE_PROBES:
+            print(style_text(f"[Probe] URL = {current_url}", color=Fore.WHITE))
+            print(style_text(f"[Probe] thread_abierto = {is_in_thread and found_composer}", color=Fore.WHITE))
+            print(style_text(f"[Probe] existe_composer = {found_composer}", color=Fore.WHITE))
 
         return is_in_thread and found_composer
 
     def _open_thread_by_cache(self, thread: ThreadLike) -> bool:
-        """
-        [CLICK-FIRST] Intenta clickear un thread usando metadata del cache.
-        Retorna True si el click fue exitoso.
-        """
         page = self._ensure_page()
         meta = self._thread_cache_meta.get(thread.id)
         if not meta:
+            logger.error(
+                "PlaywrightDM open_thread_cache_missing account=@%s thread_id=%s",
+                self.username,
+                thread.id,
+            )
             return False
-        
+
         title = (meta.get("title") or "").strip()
         peer = (meta.get("peer_username") or "").strip()
         candidates = [title, peer]
         candidates = [c for c in candidates if c]
         if not candidates:
+            logger.error(
+                "PlaywrightDM open_thread_cache_candidates_empty account=@%s thread_id=%s",
+                self.username,
+                thread.id,
+            )
             return False
-        
-        # Obtener panel del inbox
+
+        if INBOX_URL not in (page.url or "") or re.search(r"/direct/t/", page.url):
+            self.return_to_inbox()
         inbox_panel, _method, _selector, _panel_counts = self._get_inbox_panel(page)
-        
+
         selector_candidates = [
+            "div[role='navigation'][aria-label='Lista de conversaciones'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'][aria-label='Conversation list'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
+            "div[role='navigation'][aria-label='Lista de conversaciones'] div[role='button'][tabindex='0']",
+            "div[role='navigation'][aria-label='Conversation list'] div[role='button'][tabindex='0']",
+            "div[role='navigation'] div[role='button'][tabindex='0']",
+            THREAD_ROW_SELECTOR,
+            "div[role='main'] div[role='list'] a[href*='/direct/t/']",
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
             "div[role='main'] div[role='button'][tabindex='0']",
         ]
-        
+
         rows = None
+        selected_selector = ""
         for selector in selector_candidates:
             try:
                 candidate = inbox_panel.locator(selector)
                 if candidate.count() > 0:
                     rows = candidate
+                    selected_selector = selector
                     break
             except Exception:
                 continue
-        
         if rows is None:
+            logger.error(
+                "PlaywrightDM open_thread_cache_no_rows account=@%s thread_id=%s",
+                self.username,
+                thread.id,
+            )
             return False
-        
+
         total = rows.count()
         for idx in range(total):
             row = rows.nth(idx)
-            if not self._row_is_valid(row):
+            if not self._row_is_valid(row, selector=selected_selector):
                 continue
-            
             try:
                 text_value = (row.inner_text() or "").lower()
             except Exception:
                 continue
-            
-            if any(c.lower() in text_value for c in candidates):
-                try:
-                    row.click()
-                    return True
-                except Exception:
-                    continue
+            if not any(c.lower() in text_value for c in candidates):
+                continue
 
+            row_preview = self._row_preview(row)
+            pre_url = page.url or ""
+            clicked, click_href = self._click_row_target(
+                row,
+                selector=selected_selector,
+                idx=idx,
+            )
+            if not clicked:
+                continue
+            if self._validate_open_state(
+                thread,
+                pre_url=pre_url,
+                selector=selected_selector,
+                idx=idx,
+                row_preview=row_preview,
+                click_href=click_href,
+            ):
+                return True
+            self.return_to_inbox()
+
+        logger.error(
+            "PlaywrightDM open_thread_cache_failed account=@%s thread_id=%s scanned=%s",
+            self.username,
+            thread.id,
+            total,
+        )
         return False
 
 
