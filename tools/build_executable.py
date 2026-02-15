@@ -134,9 +134,12 @@ _HIDDEN_IMPORTS = [
     "app",
     "backend_license_client",
     "config",
+    "gui_app",
     "ig",
+    "io_adapter",
     "leads",
     "licensekit",
+    "main_window",
     "media_norm",
     "proxy_manager",
     "responder",
@@ -150,6 +153,7 @@ _HIDDEN_IMPORTS = [
     "ui",
     "update_system",
     "utils",
+    "whatsapp",
 ]
 
 # Dependencias requeridas por pkg_resources/pyi_rth_pkgres
@@ -164,6 +168,7 @@ _EXTRA_HIDDEN_IMPORTS = [
 
 _COLLECT_ALL_BASE = [
     "openpyxl",
+    "PySide6",
 ]
 
 _DEFAULT_EXCLUDES = [
