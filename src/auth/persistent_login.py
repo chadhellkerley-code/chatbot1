@@ -18,6 +18,7 @@ from src.instagram_adapter import (
     _ensure_login_view,
 )
 from src.playwright_service import BASE_PROFILES, PlaywrightService, get_page
+from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,13 @@ async def _is_email_challenge(page: Page) -> bool:
     return await _has_email_challenge_text(page)
 
 
-async def _await_manual_email_challenge(page: Page, username: str) -> bool:
+async def _await_manual_email_challenge(page: Page, username: str, *, headless: bool = False) -> bool:
+    if headless:
+        logger.warning(
+            "Headless activo: se omite prompt manual de verificacion por email para @%s.",
+            username,
+        )
+        return False
     if _overnight_enabled():
         logger.warning("Overnight activo: se omite prompt manual para @%s.", username)
         return False
@@ -201,7 +208,19 @@ async def ensure_logged_in_async(
     profile_root_path = Path(derived_profile_root or BASE_PROFILES)
     storage_state = _storage_state_path(username, profile_root_path)
     account_profile = storage_state.parent
-    proxy_payload = derived_proxy or account.get("proxy")
+    if derived_proxy is not None:
+        proxy_payload = normalize_playwright_proxy(
+            derived_proxy,
+            proxy_user=account.get("proxy_user"),
+            proxy_pass=account.get("proxy_pass"),
+        )
+    else:
+        proxy_payload = proxy_from_account(account)
+    force_login = bool(
+        account.get("force_login")
+        or account.get("force_relogin")
+        or account.get("relogin")
+    )
 
     _session_log(profile_root_path, f"login_start username={username} headless={headless}")
 
@@ -226,103 +245,141 @@ async def ensure_logged_in_async(
     ctx: Optional[BrowserContext] = None
     page: Optional[Page] = None
 
-    if storage_state.exists():
-        _session_log(
-            profile_root_path,
-            f"session_loaded path={storage_state} size={_safe_stat_size(storage_state)}",
-        )
-        ctx, page = await _new_context(use_storage=True)
-        await _load_home(page)
-        ok, reason = await check_logged_in(page)
-        if ok:
-            _session_log(profile_root_path, f"session_check_ok reason={reason}")
-            logger.info("Sesi?n existente reutilizada para @%s", username)
-            return svc, ctx, page
-        _session_log(
-            profile_root_path,
-            f"session_check_fail stage=load reason={reason} url={page.url}",
-        )
-        logger.info("storage_state inv?lido para @%s. Se intentar? nuevo login.", username)
+    async def _update_account_health_best_effort() -> None:
+        # Health is Playwright-only; never use API checks here. Best-effort only.
+        if page is None:
+            return
         try:
-            await ctx.close()
+            from src.health_playwright import detect_account_health_async
+
+            import health_store
+        except Exception:
+            return
+        try:
+            status, reason = await detect_account_health_async(page)
+            health_store.update_from_playwright_status(username, status, reason=reason)
+        except Exception:
+            return
+
+    try:
+        if storage_state.exists() and not force_login:
+            _session_log(
+                profile_root_path,
+                f"session_loaded path={storage_state} size={_safe_stat_size(storage_state)}",
+            )
+            ctx, page = await _new_context(use_storage=True)
+            await _load_home(page)
+            ok, reason = await check_logged_in(page)
+            if ok:
+                _session_log(profile_root_path, f"session_check_ok reason={reason}")
+                logger.info("Sesi?n existente reutilizada para @%s", username)
+                await _update_account_health_best_effort()
+                return svc, ctx, page
+            _session_log(
+                profile_root_path,
+                f"session_check_fail stage=load reason={reason} url={page.url}",
+            )
+            await _update_account_health_best_effort()
+            logger.info("storage_state inv?lido para @%s. Se intentar? nuevo login.", username)
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+            ctx = None
+            page = None
+    
+        if not password:
+            await svc.close()
+            raise RuntimeError("Se requiere password para iniciar sesión por primera vez")
+    
+        ctx, page = await _new_context(use_storage=False)
+        await _load_home(page)
+        await _ensure_login_view(page)
+    
+        logger.info("No se encontró sesión activa para @%s. Iniciando login humano.", username)
+        try:
+            code_provider = (
+                account.get("challenge_code_provider")
+                or account.get("challenge_code_callback")
+                or account.get("code_provider")
+            )
+            login_ok = await human_login(
+                page,
+                username,
+                password,
+                totp_secret=account.get("totp_secret"),
+                totp_provider=account.get("totp_callback"),
+                code_provider=code_provider,
+                trace=trace if callable(trace) else None,
+                retry_on_still_login=not bool(account.get("strict_login")),
+            )
+        except Exception as exc:
+            await _update_account_health_best_effort()
+            raise await _raise_login_failure(page, username, profile_root_path, exc) from exc
+    
+        if login_ok:
+            ok, reason = await check_logged_in(page)
+            if ok:
+                _session_log(profile_root_path, f"session_check_ok reason={reason}")
+                _session_log(profile_root_path, f"login_success_condition_met condition={reason}")
+                await svc.save_storage_state(ctx, str(storage_state))
+                _session_log(
+                    profile_root_path,
+                    f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
+                )
+                logger.info("Login exitoso para @%s. storage_state guardado en %s", username, storage_state)
+                await _update_account_health_best_effort()
+                return svc, ctx, page
+            _session_log(
+                profile_root_path,
+                f"session_check_fail stage=post_login reason={reason} url={page.url}",
+            )
+            await _update_account_health_best_effort()
+
+        if await _is_email_challenge(page):
+            resolved = await _await_manual_email_challenge(page, username, headless=headless)
+            if resolved and await is_logged_in(page):
+                await svc.save_storage_state(ctx, str(storage_state))
+                _session_log(
+                    profile_root_path,
+                    f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
+                )
+                logger.info("Login confirmado tras verificacion manual para @%s", username)
+                await _update_account_health_best_effort()
+                return svc, ctx, page
+            logger.warning(
+                "Verificacion por email pendiente para @%s. Dejando navegador abierto.",
+                username,
+            )
+            await _update_account_health_best_effort()
+            raise ChallengeRequired("challenge_required")
+
+        # Si quedó en captcha/suspensión o en two_factor, dejar el navegador abierto
+        # para intervención manual en lugar de cerrarlo.
+        current_url = page.url or ""
+        if _is_challenge_url(current_url):
+            logger.warning(
+                "Login incompleto para @%s (URL: %s). Dejando navegador abierto para resolver manualmente.",
+                username,
+                current_url,
+            )
+            await _update_account_health_best_effort()
+            return svc, ctx, page
+
+        await _update_account_health_best_effort()
+
+        raise await _raise_login_failure(page, username, profile_root_path)
+    except Exception:
+        if ctx is not None:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        try:
+            await svc.close()
         except Exception:
             pass
-        ctx = None
-        page = None
-
-    if not password:
-        await svc.close()
-        raise RuntimeError("Se requiere password para iniciar sesión por primera vez")
-
-    ctx, page = await _new_context(use_storage=False)
-    await _load_home(page)
-    await _ensure_login_view(page)
-
-    logger.info("No se encontró sesión activa para @%s. Iniciando login humano.", username)
-    try:
-        code_provider = (
-            account.get("challenge_code_provider")
-            or account.get("challenge_code_callback")
-            or account.get("code_provider")
-        )
-        login_ok = await human_login(
-            page,
-            username,
-            password,
-            totp_secret=account.get("totp_secret"),
-            totp_provider=account.get("totp_callback"),
-            code_provider=code_provider,
-            trace=trace if callable(trace) else None,
-            retry_on_still_login=not bool(account.get("strict_login")),
-        )
-    except Exception as exc:
-        raise await _raise_login_failure(page, username, profile_root_path, exc) from exc
-
-    if login_ok:
-        ok, reason = await check_logged_in(page)
-        if ok:
-            _session_log(profile_root_path, f"session_check_ok reason={reason}")
-            _session_log(profile_root_path, f"login_success_condition_met condition={reason}")
-            await svc.save_storage_state(ctx, str(storage_state))
-            _session_log(
-                profile_root_path,
-                f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
-            )
-            logger.info("Login exitoso para @%s. storage_state guardado en %s", username, storage_state)
-            return svc, ctx, page
-        _session_log(
-            profile_root_path,
-            f"session_check_fail stage=post_login reason={reason} url={page.url}",
-        )
-
-    if await _is_email_challenge(page):
-        resolved = await _await_manual_email_challenge(page, username)
-        if resolved and await is_logged_in(page):
-            await svc.save_storage_state(ctx, str(storage_state))
-            _session_log(
-                profile_root_path,
-                f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
-            )
-            logger.info("Login confirmado tras verificacion manual para @%s", username)
-            return svc, ctx, page
-        logger.warning(
-            "Verificacion por email pendiente para @%s. Dejando navegador abierto.",
-            username,
-        )
-        raise ChallengeRequired("challenge_required")
-
-    # Si quedó en captcha/suspensión o en two_factor, dejar el navegador abierto
-    # para intervención manual en lugar de cerrarlo.
-    current_url = page.url or ""
-    if _is_challenge_url(current_url):
-        logger.warning(
-            "Login incompleto para @%s (URL: %s). Dejando navegador abierto para resolver manualmente.",
-            username,
-            current_url,
-        )
-        return svc, ctx, page
-
-    raise await _raise_login_failure(page, username, profile_root_path)
+        raise
 
 
 def ensure_logged_in(
@@ -444,7 +501,11 @@ async def _load_home(page: Page) -> None:
     try:
         await page.goto(inbox_url, wait_until="domcontentloaded", timeout=60_000)
     except Exception:
-        await page.goto(inbox_url)
+        try:
+            # Segundo intento sin propagar el fallo de navegación del proxy.
+            await page.goto(inbox_url, wait_until="domcontentloaded", timeout=60_000)
+        except Exception:
+            pass
     
     try:
         # Esperamos elementos clave del inbox

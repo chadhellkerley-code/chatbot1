@@ -1122,3 +1122,213 @@
 2026-02-11T16:58:11Z event=message account=matiid.life1 lead=sebasann__ status=sent reason=Enviado en modo humano
 2026-02-11T17:02:44Z event=message account=matiid.life1 lead=marcosrazzetti status=sent reason=Enviado en modo humano
 2026-02-11T17:02:44Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=15 errors=0 remaining=10
+2026-02-12T22:00:33Z event=start account=- lead=- status=started reason=accounts=1 leads=17 total=17 concurrency=1 per_account=17
+2026-02-12T22:04:48Z event=message account=matidiazlife lead=blinblinar status=sent reason=Enviado en modo humano
+2026-02-12T22:08:19Z event=message account=matidiazlife lead=vickyjorge21 status=sent reason=Enviado en modo humano
+2026-02-12T22:11:33Z event=message account=matidiazlife lead=luisvelazquez.oficial status=sent reason=Enviado en modo humano
+2026-02-12T22:14:45Z event=message account=matidiazlife lead=mevuelvolocoook status=sent reason=Enviado en modo humano
+2026-02-12T22:21:22Z event=message account=matidiazlife lead=buttomateo status=sent reason=Enviado en modo humano
+2026-02-12T22:25:52Z event=message account=matidiazlife lead=neisibastidas status=sent reason=Enviado en modo humano
+2026-02-12T22:31:59Z event=message account=matidiazlife lead=estrategafelipelondono status=sent reason=Enviado en modo humano
+2026-02-12T22:37:04Z event=message account=matidiazlife lead=susanapoletto.coach status=sent reason=Enviado en modo humano
+2026-02-12T22:42:22Z event=message account=matidiazlife lead=sergiosoleer7 status=sent reason=Enviado en modo humano
+2026-02-12T22:47:23Z event=message account=matidiazlife lead=matiamarilla status=sent reason=Enviado en modo humano
+2026-02-12T22:52:27Z event=message account=matidiazlife lead=eros.style1 status=sent reason=Enviado en modo humano
+2026-02-12T22:55:00Z event=message account=matidiazlife lead=luigi.antonini status=sent reason=Enviado en modo humano
+2026-02-12T22:57:56Z event=message account=matidiazlife lead=andresguerrero_finanzas status=sent reason=Enviado en modo humano
+2026-02-12T23:02:02Z event=message account=matidiazlife lead=camotorres status=sent reason=Enviado en modo humano
+2026-02-12T23:07:48Z event=message account=matidiazlife lead=mario.ormazabal.o status=sent reason=Enviado en modo humano
+2026-02-12T23:11:00Z event=message account=matidiazlife lead=seba_schonfeld24 status=sent reason=Enviado en modo humano
+2026-02-12T23:15:06Z event=message account=matidiazlife lead=brandon.andrade.98 status=sent reason=Enviado en modo humano
+2026-02-12T23:15:06Z event=stop account=- lead=- status=stopped reason=no quedan leads por procesar sent=17 sent_unverified=0 errors=0 remaining=0
+2026-02-13T03:09:14Z event=start account=- lead=- status=started reason=accounts=1 leads=99 total=45 concurrency=1 per_account=45
+2026-02-13T03:13:12Z event=message account=matidiazlife lead=_joacorengel status=error reason=Locator.type: Timeout 20000ms exceeded. Call log:   - waiting for locator("div[role='textbox'][aria-label='Mensaje'], div[role='textbox'][aria-label='Message'], div[contenteditable='true'], div[role='textbox'], textarea[placeholder*='message'], textarea[placeholder*='Mensaje'], textarea[aria-label*='Message'], textarea[data-testid='message-input'], div[data-testid='message-input'], textarea").first     - locator resolved to <div tabindex="0" role="textbox" spellcheck="true" aria-label="Mensaje" contenteditable="true" aria-describedby="Mensaje" data-lexical-editor="true" data-focus-visible-added="" aria-placeholder="Envía un mensaje..." class="xzsf02u x1a2a7pz x1n2onr6 x14wi4xw x1iyjqo2 x1gh3ibb xisnujt xeuugli x1odjw0f notranslate focus-visible">…</div>   - elementHandle.type("e")   - element was detached from the DOM, retrying
+2026-02-13T03:17:27Z event=message account=matidiazlife lead=nicogv7 status=sent reason=Enviado en modo humano
+2026-02-13T03:20:19Z event=message account=matidiazlife lead=kayruthrealtor status=sent reason=Enviado en modo humano
+2026-02-13T03:22:58Z event=message account=matidiazlife lead=_o.q01 status=sent reason=Enviado en modo humano
+2026-02-13T03:26:44Z event=message account=matidiazlife lead=manuelg2211 status=sent reason=Enviado en modo humano
+2026-02-13T03:30:36Z event=message account=matidiazlife lead=benedicto_fmx status=sent reason=Enviado en modo humano
+2026-02-13T03:35:52Z event=message account=matidiazlife lead=juanangaritaa status=sent reason=Enviado en modo humano
+2026-02-13T03:39:54Z event=message account=matidiazlife lead=estevia.r status=sent reason=Enviado en modo humano
+2026-02-13T03:44:54Z event=message account=matidiazlife lead=iam_arieli0 status=sent reason=Enviado en modo humano
+2026-02-13T03:50:19Z event=message account=matidiazlife lead=bautista.7834_ status=sent reason=Enviado en modo humano
+2026-02-13T03:54:56Z event=message account=matidiazlife lead=juann.aragones status=sent reason=Enviado en modo humano
+2026-02-13T03:58:00Z event=message account=matidiazlife lead=gelatoterpyoficial status=sent reason=Enviado en modo humano
+2026-02-13T04:00:38Z event=message account=matidiazlife lead=brandonn.14 status=sent reason=Enviado en modo humano
+2026-02-13T04:03:17Z event=message account=matidiazlife lead=daniel_villaloboss09 status=sent reason=Enviado en modo humano
+2026-02-13T04:08:31Z event=message account=matidiazlife lead=iferma_closer status=sent reason=Enviado en modo humano
+2026-02-13T04:11:52Z event=message account=matidiazlife lead=henryyyy.06 status=sent reason=Enviado en modo humano
+2026-02-13T04:17:00Z event=message account=matidiazlife lead=felipegreat status=sent reason=Enviado en modo humano
+2026-02-13T04:21:49Z event=message account=matidiazlife lead=cristhyan.prieto status=sent reason=Enviado en modo humano
+2026-02-13T04:26:41Z event=message account=matidiazlife lead=tomi.corral status=sent reason=Enviado en modo humano
+2026-02-13T04:31:15Z event=message account=matidiazlife lead=thelegendcriss status=sent reason=Enviado en modo humano
+2026-02-13T04:34:26Z event=message account=matidiazlife lead=eemienriquee status=sent reason=Enviado en modo humano
+2026-02-13T04:39:34Z event=message account=matidiazlife lead=ordenes.ess status=sent reason=Enviado en modo humano
+2026-02-13T04:42:14Z event=message account=matidiazlife lead=__justnin__ status=sent reason=Enviado en modo humano
+2026-02-13T04:46:41Z event=message account=matidiazlife lead=a.r.r.a_nekka status=sent reason=Enviado en modo humano
+2026-02-13T04:52:18Z event=message account=matidiazlife lead=escobar.cristian.agustin status=sent reason=Enviado en modo humano
+2026-02-13T04:56:57Z event=message account=matidiazlife lead=jose_vicenciorealestate status=sent reason=Enviado en modo humano
+2026-02-13T05:00:48Z event=message account=matidiazlife lead=luismeza_priv status=sent reason=Enviado en modo humano
+2026-02-13T05:05:01Z event=message account=matidiazlife lead=juancruz.tab status=sent reason=Enviado en modo humano
+2026-02-13T05:10:21Z event=message account=matidiazlife lead=alejo.mariluan status=sent reason=Enviado en modo humano
+2026-02-13T05:15:54Z event=message account=matidiazlife lead=jhordyrodriguez_oficial status=sent reason=Enviado en modo humano
+2026-02-13T05:19:05Z event=message account=matidiazlife lead=santiago.boterob status=sent reason=Enviado en modo humano
+2026-02-13T05:22:03Z event=message account=matidiazlife lead=yessicaoviedo77 status=sent reason=Enviado en modo humano
+2026-02-13T05:25:19Z event=message account=matidiazlife lead=luccasnvvarela status=sent reason=Enviado en modo humano
+2026-02-13T05:30:39Z event=message account=matidiazlife lead=francofernvndez status=sent reason=Enviado en modo humano
+2026-02-13T05:35:53Z event=message account=matidiazlife lead=_marcospistann_ status=sent reason=Enviado en modo humano
+2026-02-13T05:39:04Z event=message account=matidiazlife lead=lauradawnklein status=sent reason=Enviado en modo humano
+2026-02-13T05:42:02Z event=message account=matidiazlife lead=onlycheckm8s status=sent reason=Enviado en modo humano
+2026-02-13T05:45:28Z event=message account=matidiazlife lead=damian.duran_ status=sent reason=Enviado en modo humano
+2026-02-13T05:48:30Z event=message account=matidiazlife lead=joe_bon5 status=sent reason=Enviado en modo humano
+2026-02-13T05:52:23Z event=message account=matidiazlife lead=leonardo.reyees status=sent reason=Enviado en modo humano
+2026-02-13T05:56:59Z event=message account=matidiazlife lead=evelynmvera status=sent reason=Enviado en modo humano
+2026-02-13T06:01:53Z event=message account=matidiazlife lead=yeyesaturno status=sent reason=Enviado en modo humano
+2026-02-13T06:06:27Z event=message account=matidiazlife lead=miguel.iniesta1 status=sent reason=Enviado en modo humano
+2026-02-13T06:11:30Z event=message account=matidiazlife lead=leonell2619 status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T06:15:36Z event=message account=matidiazlife lead=gastondegrave status=sent reason=Enviado en modo humano
+2026-02-13T06:15:36Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=43 sent_unverified=0 errors=1 remaining=54
+2026-02-13T13:22:51Z event=start account=- lead=- status=started reason=accounts=2 leads=54 total=30 concurrency=2 per_account=15
+2026-02-13T13:27:28Z event=message account=matiid.life1 lead=fedeemont status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:28:10Z event=message account=mati.diazlife3 lead=llanos_pvt status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:31:54Z event=message account=matiid.life1 lead=adan_degonzalez status=sent reason=Enviado en modo humano
+2026-02-13T13:32:06Z event=message account=mati.diazlife3 lead=shelbydubai status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:35:30Z event=message account=matiid.life1 lead=laura_fornes status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:35:30Z event=message account=mati.diazlife3 lead=estefania.millan status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:40:48Z event=message account=mati.diazlife3 lead=dalk.studio status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:40:48Z event=message account=matiid.life1 lead=agusttinortiz status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:44:27Z event=message account=matiid.life1 lead=clipriseagency status=sent reason=Enviado en modo humano
+2026-02-13T13:45:40Z event=message account=mati.diazlife3 lead=maurozkr status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:49:25Z event=message account=matiid.life1 lead=_amkateh status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:49:26Z event=message account=mati.diazlife3 lead=crlsltmrn status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:52:32Z event=message account=matiid.life1 lead=joac_occ status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T13:53:30Z event=message account=mati.diazlife3 lead=agustiincarrera_ status=sent reason=Enviado en modo humano
+2026-02-13T13:56:45Z event=message account=matiid.life1 lead=dmon_on_wheels status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T14:01:32Z event=message account=mati.diazlife3 lead=joalgriv status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-13T14:01:32Z event=message account=matiid.life1 lead=aldmuz status=sent reason=Enviado en modo humano
+2026-02-13T14:01:33Z event=stop account=- lead=- status=stopped reason=stop_event sent=4 sent_unverified=0 errors=0 remaining=37
+2026-02-13T15:12:52Z event=start account=- lead=- status=started reason=accounts=2 leads=37 total=4 concurrency=2 per_account=2
+2026-02-13T15:16:46Z event=message account=mati.diazlife3 lead=diammiusic status=sent reason=Enviado en modo humano
+2026-02-13T15:16:51Z event=message account=matiid.life1 lead=agussbanchero status=sent reason=Enviado en modo humano
+2026-02-13T15:20:52Z event=message account=mati.diazlife3 lead=manolotelocuenta status=sent reason=Enviado en modo humano
+2026-02-13T15:20:52Z event=message account=matiid.life1 lead=jhon_ken19 status=sent reason=Enviado en modo humano
+2026-02-13T15:20:52Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=4 sent_unverified=0 errors=0 remaining=33
+2026-02-13T15:29:08Z event=start account=- lead=- status=started reason=accounts=2 leads=33 total=30 concurrency=2 per_account=15
+2026-02-13T15:33:58Z event=message account=matiid.life1 lead=matii_asvaz77 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T15:35:02Z event=message account=mati.diazlife3 lead=edwardtrainner status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T15:40:14Z event=message account=matiid.life1 lead=nunez.alejandrodiaz status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T15:40:34Z event=message account=mati.diazlife3 lead=niico_sosaa status=sent reason=Enviado en modo humano
+2026-02-13T15:44:53Z event=message account=matiid.life1 lead=samirnasif18 status=sent reason=Enviado en modo humano
+2026-02-13T15:45:07Z event=message account=mati.diazlife3 lead=carlosvaparcedo status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T15:47:43Z event=message account=mati.diazlife3 lead=moi.consultant status=sent reason=Enviado en modo humano
+2026-02-13T15:50:07Z event=message account=matiid.life1 lead=aleex._penaa status=sent reason=Enviado en modo humano
+2026-02-13T15:51:18Z event=message account=mati.diazlife3 lead=axelvetter status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T15:53:15Z event=message account=matiid.life1 lead=patricio.olivera_ status=sent reason=Enviado en modo humano
+2026-02-13T15:59:49Z event=start account=- lead=- status=started reason=accounts=2 leads=23 total=23 concurrency=1 per_account=15
+2026-02-13T16:06:40Z event=start account=- lead=- status=started reason=accounts=2 leads=23 total=23 concurrency=2 per_account=15
+2026-02-13T16:12:33Z event=message account=mati.diazlife3 lead=arturfrutos status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T16:13:16Z event=message account=matiid.life1 lead=gabifalconi status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T16:15:30Z event=message account=mati.diazlife3 lead=rapuvamindset status=sent reason=Enviado en modo humano
+2026-02-13T16:19:17Z event=message account=mati.diazlife3 lead=rodrigoinfante5 status=sent reason=Enviado en modo humano
+2026-02-13T16:19:27Z event=message account=matiid.life1 lead=hugoloncaricok status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T16:22:35Z event=message account=matiid.life1 lead=lucasaguero0 status=sent reason=Enviado en modo humano
+2026-02-13T16:23:12Z event=message account=mati.diazlife3 lead=ivancu1996 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T16:28:29Z event=message account=matiid.life1 lead=keeeyber status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T16:29:07Z event=message account=mati.diazlife3 lead=asiergarcia.kingz status=sent reason=Enviado en modo humano
+2026-02-13T17:02:33Z event=start account=- lead=- status=started reason=accounts=2 leads=14 total=14 concurrency=2 per_account=10
+2026-02-13T17:07:03Z event=message account=mati.diazlife3 lead=jhoanmousesr status=sent reason=Enviado en modo humano
+2026-02-13T17:08:20Z event=message account=matiid.life1 lead=angeldsavala status=sent reason=Enviado en modo humano
+2026-02-13T17:11:12Z event=message account=matiid.life1 lead=ferburgosal status=sent reason=Enviado en modo humano
+2026-02-13T17:12:47Z event=message account=mati.diazlife3 lead=joaopaulovasquezalva status=sent reason=Enviado en modo humano
+2026-02-13T17:15:11Z event=message account=matiid.life1 lead=alejolemosco status=sent reason=Enviado en modo humano
+2026-02-13T17:18:41Z event=message account=mati.diazlife3 lead=metamorfosysoficial status=sent reason=Enviado en modo humano
+2026-02-13T17:20:15Z event=message account=matiid.life1 lead=daviddzrr status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T17:24:14Z event=message account=mati.diazlife3 lead=santino_luceroooo status=sent reason=Enviado en modo humano
+2026-02-13T17:24:40Z event=message account=matiid.life1 lead=alejo.strategy status=sent reason=Enviado en modo humano
+2026-02-13T17:29:21Z event=message account=mati.diazlife3 lead=pautrapani status=sent reason=Enviado en modo humano
+2026-02-13T17:30:00Z event=message account=matiid.life1 lead=manuelmorenoventas status=sent reason=Enviado en modo humano
+2026-02-13T17:41:25Z event=message account=matiid.life1 lead=emmanuelmunizzz status=error reason=Composer no encontrado.
+2026-02-13T17:41:25Z event=message account=mati.diazlife3 lead=luiseduardoorozco status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-13T17:44:57Z event=message account=mati.diazlife3 lead=mau.emprende_ status=sent reason=Enviado en modo humano
+2026-02-13T17:45:10Z event=stop account=- lead=- status=stopped reason=no quedan leads por procesar sent=11 sent_unverified=0 errors=3 remaining=0
+2026-02-14T16:01:28Z event=start account=- lead=- status=started reason=accounts=1 leads=10 total=10 concurrency=1 per_account=45
+2026-02-14T16:04:48Z event=message account=matidiazlife lead=rizzoandpartners status=sent reason=Enviado en modo humano
+2026-02-14T16:07:41Z event=message account=matidiazlife lead=businessfreedomtg status=sent reason=Enviado en modo humano
+2026-02-14T17:02:33Z event=start account=- lead=- status=started reason=accounts=1 leads=8 total=8 concurrency=1 per_account=24
+2026-02-14T17:08:25Z event=message account=matidiazlife lead=unger_academy status=sent reason=Enviado en modo humano
+2026-02-14T17:08:25Z event=stop account=- lead=- status=stopped reason=stop_event sent=1 sent_unverified=0 errors=0 remaining=7
+2026-02-14T17:29:28Z event=start account=- lead=- status=started reason=accounts=2 leads=7 total=2 concurrency=1 per_account=1
+2026-02-14T17:31:37Z event=message account=mati.diazlife3 lead=fixcal.asesores status=sent reason=Enviado en modo humano
+2026-02-14T17:31:37Z event=stop account=- lead=- status=stopped reason=stop_event sent=1 sent_unverified=0 errors=0 remaining=6
+2026-02-14T17:51:41Z event=start account=- lead=- status=started reason=accounts=1 leads=6 total=2 concurrency=1 per_account=2
+2026-02-14T17:55:47Z event=message account=matidiazlife lead=salomon__perez status=sent reason=Enviado en modo humano
+2026-02-14T18:00:37Z event=message account=matidiazlife lead=keyperuae status=sent reason=Enviado en modo humano
+2026-02-14T18:00:37Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=2 sent_unverified=0 errors=0 remaining=4
+2026-02-14T18:17:32Z event=start account=- lead=- status=started reason=accounts=1 leads=4 total=2 concurrency=1 per_account=2
+2026-02-14T18:19:10Z event=message account=matidiazlife lead=omnifusion.ai status=sent reason=Enviado en modo humano
+2026-02-14T18:19:10Z event=stop account=- lead=- status=stopped reason=stop_event sent=1 sent_unverified=0 errors=0 remaining=3
+2026-02-14T22:09:28Z event=start account=- lead=- status=started reason=accounts=8 leads=302 total=302 concurrency=1 per_account=45
+2026-02-14T22:09:41Z event=start account=- lead=- status=started reason=accounts=2 leads=302 total=30 concurrency=2 per_account=15
+2026-02-14T22:10:39Z event=start account=- lead=- status=started reason=accounts=1 leads=302 total=45 concurrency=1 per_account=45
+2026-02-14T22:14:25Z event=message account=matiid.life1 lead=hwfunctional status=sent reason=Enviado en modo humano
+2026-02-14T22:14:25Z event=message account=mati.diazlife3 lead=ser.ghk status=sent reason=Enviado en modo humano
+2026-02-14T22:14:43Z event=message account=matidiazlife lead=ser.ghk status=sent reason=Enviado en modo humano
+2026-02-14T22:17:26Z event=message account=mati.diazlife3 lead=karenposada01 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-14T22:18:33Z event=message account=matidiazlife lead=hwfunctional status=sent reason=Enviado en modo humano
+2026-02-14T22:19:59Z event=message account=matiid.life1 lead=growyfunnels status=sent reason=Enviado en modo humano
+2026-02-14T22:23:32Z event=message account=mati.diazlife3 lead=maxiimo.ca status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-14T22:23:56Z event=message account=matidiazlife lead=growyfunnels status=sent reason=Enviado en modo humano
+2026-02-14T22:25:23Z event=message account=matiid.life1 lead=migue.respiraylibera status=sent reason=Enviado en modo humano
+2026-02-14T22:27:03Z event=message account=mati.diazlife3 lead=yeissonguarin status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-14T22:27:07Z event=message account=matidiazlife lead=karenposada01 status=sent reason=Enviado en modo humano
+2026-02-14T22:30:07Z event=message account=matidiazlife lead=maxiimo.ca status=sent reason=Enviado en modo humano
+2026-02-14T22:33:15Z event=message account=matidiazlife lead=migue.respiraylibera status=sent reason=Enviado en modo humano
+2026-02-14T22:37:21Z event=message account=matidiazlife lead=yeissonguarin status=sent reason=Enviado en modo humano
+2026-02-14T22:42:20Z event=message account=matidiazlife lead=elcuervonaranja status=sent reason=Enviado en modo humano
+2026-02-14T22:46:14Z event=message account=matidiazlife lead=santi_pine4 status=sent reason=Enviado en modo humano
+2026-02-14T22:50:38Z event=message account=matidiazlife lead=izansimon status=sent reason=Enviado en modo humano
+2026-02-14T22:53:53Z event=message account=matidiazlife lead=amarpereda status=sent reason=Enviado en modo humano
+2026-02-14T22:58:44Z event=message account=matidiazlife lead=luis.bravo.leon status=sent reason=Enviado en modo humano
+2026-02-14T23:03:28Z event=message account=matidiazlife lead=inncarlosdiaz status=sent reason=Enviado en modo humano
+2026-02-14T23:08:42Z event=message account=matidiazlife lead=ramiro.pastran status=sent reason=Enviado en modo humano
+2026-02-14T23:09:18Z event=message account=matiid.life1 lead=elcuervonaranja status=sent reason=Enviado en modo humano
+2026-02-14T23:12:49Z event=message account=matiid.life1 lead=izansimon status=sent reason=Enviado en modo humano
+2026-02-14T23:13:04Z event=message account=matidiazlife lead=adelxiscenteno status=sent reason=Enviado en modo humano
+2026-02-14T23:14:35Z event=message account=mati.diazlife3 lead=santi_pine4 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-14T23:16:08Z event=message account=matiid.life1 lead=amarpereda status=sent reason=Enviado en modo humano
+2026-02-14T23:18:32Z event=message account=matidiazlife lead=diegoyugra2510 status=sent reason=Enviado en modo humano
+2026-02-14T23:20:08Z event=message account=mati.diazlife3 lead=luis.bravo.leon status=sent reason=Enviado en modo humano
+2026-02-14T23:21:27Z event=message account=matiid.life1 lead=inncarlosdiaz status=sent reason=Enviado en modo humano
+2026-02-14T23:22:25Z event=message account=matidiazlife lead=paucfit status=sent reason=Enviado en modo humano
+2026-02-14T23:26:59Z event=message account=mati.diazlife3 lead=ramiro.pastran status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-14T23:26:59Z event=message account=matiid.life1 lead=adelxiscenteno status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-14T23:26:59Z event=stop account=- lead=- status=stopped reason=stop_event sent=9 sent_unverified=0 errors=6 remaining=287
+2026-02-14T23:27:06Z event=message account=matidiazlife lead=eduardoarayac status=sent reason=Enviado en modo humano
+2026-02-14T23:30:39Z event=message account=matidiazlife lead=tavoojedahotmail.es status=sent reason=Enviado en modo humano
+2026-02-14T23:36:23Z event=message account=matidiazlife lead=juandirocha status=sent reason=Enviado en modo humano
+2026-02-14T23:39:40Z event=message account=matidiazlife lead=gabybass status=sent reason=Enviado en modo humano
+2026-02-14T23:44:46Z event=message account=matidiazlife lead=alquimiainfinita9 status=sent reason=Enviado en modo humano
+2026-02-14T23:48:18Z event=message account=matidiazlife lead=micozcrea status=sent reason=Enviado en modo humano
+2026-02-14T23:53:43Z event=message account=matidiazlife lead=gs.milann status=sent reason=Enviado en modo humano
+2026-02-14T23:59:27Z event=message account=matidiazlife lead=tusanatentacion status=sent reason=Enviado en modo humano
+2026-02-15T00:03:54Z event=message account=matidiazlife lead=drjose.gineco status=sent reason=Enviado en modo humano
+2026-02-15T00:08:31Z event=message account=matidiazlife lead=ramsescoronadob status=sent reason=Enviado en modo humano
+2026-02-15T00:14:00Z event=message account=matidiazlife lead=luasseyer status=sent reason=Enviado en modo humano
+2026-02-15T00:18:40Z event=message account=matidiazlife lead=cesarlucentti status=sent reason=Enviado en modo humano
+2026-02-15T00:23:12Z event=message account=matidiazlife lead=ezolandia status=sent reason=Enviado en modo humano
+2026-02-15T00:29:19Z event=message account=matidiazlife lead=southvice_real status=sent reason=Enviado en modo humano
+2026-02-15T00:34:36Z event=message account=matidiazlife lead=betz_j25 status=sent reason=Enviado en modo humano
+2026-02-15T00:39:56Z event=message account=matidiazlife lead=influenciasiempre_12 status=sent reason=Enviado en modo humano
+2026-02-15T00:44:22Z event=message account=matidiazlife lead=rafosiles status=sent reason=Enviado en modo humano
+2026-02-15T00:47:14Z event=message account=matidiazlife lead=alvaro.pisaya status=sent reason=Enviado en modo humano
+2026-02-15T00:52:37Z event=message account=matidiazlife lead=vibraoficial_col status=sent reason=Enviado en modo humano
+2026-02-15T00:57:02Z event=message account=matidiazlife lead=eliandorin1 status=sent reason=Enviado en modo humano
+2026-02-15T01:00:17Z event=message account=matidiazlife lead=edgar.monty.7 status=sent reason=Enviado en modo humano
+2026-02-15T01:03:36Z event=message account=matidiazlife lead=psico.neuroafirmativa.autismo status=sent reason=Enviado en modo humano
+2026-02-15T01:07:57Z event=message account=matidiazlife lead=claudiograizman status=sent reason=Enviado en modo humano
+2026-02-15T01:13:01Z event=message account=matidiazlife lead=elgabo_97 status=sent reason=Enviado en modo humano
+2026-02-15T01:18:00Z event=message account=matidiazlife lead=ibraaa_.07 status=sent reason=Enviado en modo humano
+2026-02-15T01:22:16Z event=message account=matidiazlife lead=luciomamci status=sent reason=Enviado en modo humano
+2026-02-15T01:22:17Z event=stop account=- lead=- status=stopped reason=stop_event sent=43 sent_unverified=0 errors=0 remaining=259
+2026-02-15T02:53:31Z event=start account=- lead=- status=started reason=accounts=1 leads=259 total=15 concurrency=1 per_account=15
+2026-02-15T02:57:21Z event=message account=matiid.life1 lead=manuel.discipula status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.

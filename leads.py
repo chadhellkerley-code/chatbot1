@@ -58,6 +58,10 @@ _TEXT_FILTER_OMITTED_LOGGED = False
 _TEXT_FILTER_INVALID_KEY_LOGGED = False
 _IMAGE_FILTER_OMITTED_LOGGED = False
 
+FILTER_STATE_REQUIRED = "required"
+FILTER_STATE_INDIFFERENT = "indifferent"
+FILTER_STATE_DISABLED = "disabled"
+
 
 
 def _looks_like_login_error(exc: Exception) -> bool:
@@ -292,6 +296,13 @@ class ClassicFilterConfig:
     include_keywords: List[str]
     exclude_keywords: List[str]
     language: str  # es | pt | en | any
+    min_followers_state: str = FILTER_STATE_DISABLED
+    min_posts_state: str = FILTER_STATE_DISABLED
+    privacy_state: str = FILTER_STATE_DISABLED
+    link_in_bio_state: str = FILTER_STATE_DISABLED
+    include_keywords_state: str = FILTER_STATE_DISABLED
+    exclude_keywords_state: str = FILTER_STATE_DISABLED
+    language_state: str = FILTER_STATE_DISABLED
 
 
 @dataclass
@@ -299,12 +310,14 @@ class TextFilterConfig:
     enabled: bool
     criteria: str
     model_path: str
+    state: str = FILTER_STATE_DISABLED
 
 
 @dataclass
 class ImageFilterConfig:
     enabled: bool
     prompt: str
+    state: str = FILTER_STATE_DISABLED
 
 
 @dataclass
@@ -335,6 +348,117 @@ def _dedupe_preserve_order(usernames: Iterable[str]) -> List[str]:
         ordered.append(username.strip().lstrip("@"))
     return ordered
 
+
+def _normalize_filter_state(raw: Any, *, default: str = FILTER_STATE_DISABLED) -> str:
+    value = str(raw or "").strip().lower()
+    mapping = {
+        "required": FILTER_STATE_REQUIRED,
+        "requerido": FILTER_STATE_REQUIRED,
+        "requerida": FILTER_STATE_REQUIRED,
+        "indifferent": FILTER_STATE_INDIFFERENT,
+        "indiferente": FILTER_STATE_INDIFFERENT,
+        "disabled": FILTER_STATE_DISABLED,
+        "deshabilitado": FILTER_STATE_DISABLED,
+        "desactivado": FILTER_STATE_DISABLED,
+        "off": FILTER_STATE_DISABLED,
+    }
+    normalized = mapping.get(value, value)
+    valid_states = {
+        FILTER_STATE_REQUIRED,
+        FILTER_STATE_INDIFFERENT,
+        FILTER_STATE_DISABLED,
+    }
+    if normalized not in valid_states:
+        fallback = str(default or FILTER_STATE_DISABLED).strip().lower()
+        fallback = mapping.get(fallback, fallback)
+        if fallback in valid_states:
+            return fallback
+        return FILTER_STATE_DISABLED
+    return normalized
+
+
+def _filter_state_label(state: str) -> str:
+    normalized = _normalize_filter_state(state)
+    if normalized == FILTER_STATE_REQUIRED:
+        return "REQUIRED"
+    if normalized == FILTER_STATE_INDIFFERENT:
+        return "INDIFFERENT"
+    return "DISABLED"
+
+
+def _is_filter_active(state: str) -> bool:
+    normalized = _normalize_filter_state(state)
+    return normalized in {FILTER_STATE_REQUIRED, FILTER_STATE_INDIFFERENT}
+
+
+def _prompt_filter_state(label: str, *, default: str) -> str:
+    default_state = _normalize_filter_state(default)
+    default_choice = {
+        FILTER_STATE_REQUIRED: "1",
+        FILTER_STATE_INDIFFERENT: "2",
+        FILTER_STATE_DISABLED: "3",
+    }[default_state]
+    print(f"\nEstado para '{label}':")
+    print("[1] REQUIRED")
+    print("[2] INDIFFERENT")
+    print("[3] DISABLED")
+    choice = ask(f"Opcion ({default_choice} por defecto): ").strip() or default_choice
+    if choice == "1":
+        return FILTER_STATE_REQUIRED
+    if choice == "2":
+        return FILTER_STATE_INDIFFERENT
+    if choice == "3":
+        return FILTER_STATE_DISABLED
+    warn("Estado invalido. Se usara DISABLED.")
+    return FILTER_STATE_DISABLED
+
+
+def _append_filter_eval(
+    evaluations: List[Dict[str, Any]],
+    *,
+    name: str,
+    state: str,
+    evaluated: bool,
+    passed: Optional[bool],
+    detail: str,
+) -> None:
+    evaluations.append(
+        {
+            "name": name,
+            "state": _normalize_filter_state(state),
+            "evaluated": bool(evaluated),
+            "passed": passed if evaluated else None,
+            "detail": (detail or "").strip(),
+        }
+    )
+
+
+def _log_lead_check_report(
+    username: str,
+    evaluations: List[Dict[str, Any]],
+    *,
+    accepted: bool,
+    reason: str = "",
+) -> None:
+    lines: List[str] = [f"[LEAD CHECK] username: {username}"]
+    for item in evaluations:
+        state_label = _filter_state_label(item.get("state"))
+        name = str(item.get("name") or "?")
+        detail = str(item.get("detail") or "-")
+        if not item.get("evaluated"):
+            line = f"[LEAD CHECK] - {name} [{state_label}] SKIPPED | {detail}"
+        else:
+            mark = "\u2714" if item.get("passed") else "\u2718"
+            line = f"[LEAD CHECK] {mark} {name} [{state_label}] | {detail}"
+        lines.append(line)
+    result = "ACCEPTED" if accepted else "REJECTED"
+    tail = f"[LEAD CHECK] → RESULT: {result}"
+    if reason:
+        tail += f" ({reason})"
+    lines.append(tail)
+    for line in lines:
+        print(line, flush=True)
+        logging.info(line)
 
 
 
@@ -1077,34 +1201,61 @@ def _filter_config_menu() -> None:
 
 def _print_filter_config(cfg: LeadFilterConfig) -> None:
     print("\nFiltros actuales:")
-    print("- Clásicos:")
-    print(f"  · Seguidores mínimos: {cfg.classic.min_followers}")
-    print(f"  · Posts mínimos: {cfg.classic.min_posts}")
-    print(f"  · Privacidad: {cfg.classic.privacy}")
-    print(f"  · Link en bio: {cfg.classic.link_in_bio}")
+    print("- Clasicos:")
+    print(
+        f"  - Seguidores minimos: {cfg.classic.min_followers} "
+        f"[{_filter_state_label(cfg.classic.min_followers_state)}]"
+    )
+    print(
+        f"  - Posts minimos: {cfg.classic.min_posts} "
+        f"[{_filter_state_label(cfg.classic.min_posts_state)}]"
+    )
+    print(
+        f"  - Privacidad: {cfg.classic.privacy} "
+        f"[{_filter_state_label(cfg.classic.privacy_state)}]"
+    )
+    print(
+        f"  - Link en bio: {cfg.classic.link_in_bio} "
+        f"[{_filter_state_label(cfg.classic.link_in_bio_state)}]"
+    )
     lang_label = {
-        "es": "español",
-        "pt": "portugués",
-        "en": "inglés",
+        "es": "espanol",
+        "pt": "portugues",
+        "en": "ingles",
         "any": "indiferente",
     }.get(cfg.classic.language, "indiferente")
-    print(f"  · Idioma: {lang_label}")
+    print(
+        f"  - Idioma: {lang_label} "
+        f"[{_filter_state_label(cfg.classic.language_state)}]"
+    )
     includes = ", ".join(cfg.classic.include_keywords) if cfg.classic.include_keywords else "(ninguno)"
     excludes = ", ".join(cfg.classic.exclude_keywords) if cfg.classic.exclude_keywords else "(ninguno)"
-    print(f"  · Palabras obligatorias: {includes}")
-    print(f"  · Palabras prohibidas: {excludes}")
+    print(
+        f"  - Keywords include: {includes} "
+        f"[{_filter_state_label(cfg.classic.include_keywords_state)}]"
+    )
+    print(
+        f"  - Keywords exclude: {excludes} "
+        f"[{_filter_state_label(cfg.classic.exclude_keywords_state)}]"
+    )
     print("- Texto inteligente:")
-    print(f"  · Activado: {'sí' if cfg.text.enabled else 'no'}")
-    if cfg.text.enabled:
+    print(
+        f"  - Estado: {_filter_state_label(cfg.text.state)} "
+        f"(activado: {'si' if cfg.text.enabled else 'no'})"
+    )
+    if _is_filter_active(cfg.text.state):
         snippet = (cfg.text.criteria or "").strip()
         snippet = (snippet[:80] + "...") if len(snippet) > 80 else snippet
-        print(f"  · Criterio: {snippet or '(vacío)'}")
+        print(f"  - Criterio: {snippet or '(vacio)'}")
     print("- Imagen:")
-    print(f"  · Activado: {'sí' if cfg.image.enabled else 'no'}")
-    if cfg.image.enabled:
+    print(
+        f"  - Estado: {_filter_state_label(cfg.image.state)} "
+        f"(activado: {'si' if cfg.image.enabled else 'no'})"
+    )
+    if _is_filter_active(cfg.image.state):
         visual = (cfg.image.prompt or "").strip()
         visual = (visual[:80] + "...") if len(visual) > 80 else visual
-        print(f"  · Prompt visual: {visual or '(vacío)'}")
+        print(f"  - Prompt visual: {visual or '(vacio)'}")
 
 
 def _prompt_export_alias(existing: Optional[str]) -> str:
@@ -1368,6 +1519,25 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
         min_value=0,
         default=existing.min_posts if existing else 0,
     )
+    min_followers_state_default = (
+        existing.min_followers_state
+        if existing
+        else (FILTER_STATE_REQUIRED if min_followers > 0 else FILTER_STATE_DISABLED)
+    )
+    min_followers_state = _prompt_filter_state(
+        "Seguidores minimos",
+        default=min_followers_state_default,
+    )
+    min_posts_state_default = (
+        existing.min_posts_state
+        if existing
+        else (FILTER_STATE_REQUIRED if min_posts > 0 else FILTER_STATE_DISABLED)
+    )
+    min_posts_state = _prompt_filter_state(
+        "Posts minimos",
+        default=min_posts_state_default,
+    )
+
     print("\nPrivacidad del perfil:")
     print("[1] Publico")
     print("[2] Privado")
@@ -1381,6 +1551,13 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
         privacy = "public"
     elif privacy_choice == "2":
         privacy = "private"
+    privacy_state = _prompt_filter_state(
+        "Privacidad",
+        default=existing.privacy_state if existing else (FILTER_STATE_REQUIRED if privacy != "any" else FILTER_STATE_DISABLED),
+    )
+    if privacy_state != FILTER_STATE_DISABLED and privacy == "any":
+        warn("Privacidad en 'indiferente' no puede ser REQUIRED/INDIFFERENT. Se cambia a DISABLED.")
+        privacy_state = FILTER_STATE_DISABLED
 
     print("\nLink en biografia:")
     print("[1] Si")
@@ -1395,6 +1572,13 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
         link_in_bio = "yes"
     elif link_choice == "2":
         link_in_bio = "no"
+    link_in_bio_state = _prompt_filter_state(
+        "Link en biografia",
+        default=existing.link_in_bio_state if existing else (FILTER_STATE_REQUIRED if link_in_bio != "any" else FILTER_STATE_DISABLED),
+    )
+    if link_in_bio_state != FILTER_STATE_DISABLED and link_in_bio == "any":
+        warn("Link en bio en 'ignorar' no puede ser REQUIRED/INDIFFERENT. Se cambia a DISABLED.")
+        link_in_bio_state = FILTER_STATE_DISABLED
 
     include_keywords: List[str] = existing.include_keywords if existing else []
     if ask("¿Agregar palabras clave obligatorias? (s/N): ").strip().lower() == "s":
@@ -1402,6 +1586,13 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
             "Palabras clave que DEBE contener (coma o salto de linea):",
             include_keywords,
         )
+    include_keywords_state = _prompt_filter_state(
+        "Keywords include",
+        default=existing.include_keywords_state if existing else (FILTER_STATE_REQUIRED if include_keywords else FILTER_STATE_DISABLED),
+    )
+    if include_keywords_state != FILTER_STATE_DISABLED and not include_keywords:
+        warn("Keywords include vacio. Se cambia a DISABLED.")
+        include_keywords_state = FILTER_STATE_DISABLED
 
     exclude_keywords: List[str] = existing.exclude_keywords if existing else []
     if ask("¿Agregar palabras clave prohibidas? (s/N): ").strip().lower() == "s":
@@ -1409,6 +1600,14 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
             "Palabras clave que NO debe contener:",
             exclude_keywords,
         )
+    exclude_keywords_state = _prompt_filter_state(
+        "Keywords exclude",
+        default=existing.exclude_keywords_state if existing else (FILTER_STATE_REQUIRED if exclude_keywords else FILTER_STATE_DISABLED),
+    )
+    if exclude_keywords_state != FILTER_STATE_DISABLED and not exclude_keywords:
+        warn("Keywords exclude vacio. Se cambia a DISABLED.")
+        exclude_keywords_state = FILTER_STATE_DISABLED
+
     print("\nIdioma del perfil:")
     print("[1] Español")
     print("[2] Portugués")
@@ -1430,6 +1629,14 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
         language = "pt"
     elif lang_choice == "3":
         language = "en"
+    language_state = _prompt_filter_state(
+        "Idioma",
+        default=existing.language_state if existing else (FILTER_STATE_REQUIRED if language != "any" else FILTER_STATE_DISABLED),
+    )
+    if language_state != FILTER_STATE_DISABLED and language == "any":
+        warn("Idioma en 'indiferente' no puede ser REQUIRED/INDIFFERENT. Se cambia a DISABLED.")
+        language_state = FILTER_STATE_DISABLED
+
     return ClassicFilterConfig(
         min_followers=min_followers,
         min_posts=min_posts,
@@ -1438,36 +1645,71 @@ def _prompt_classic_filter(existing: Optional[ClassicFilterConfig]) -> Optional[
         include_keywords=include_keywords,
         exclude_keywords=exclude_keywords,
         language=language,
+        min_followers_state=min_followers_state,
+        min_posts_state=min_posts_state,
+        privacy_state=privacy_state,
+        link_in_bio_state=link_in_bio_state,
+        include_keywords_state=include_keywords_state,
+        exclude_keywords_state=exclude_keywords_state,
+        language_state=language_state,
     )
 
 
 def _prompt_text_filter(existing: Optional[TextFilterConfig]) -> Optional[TextFilterConfig]:
-    default_enabled = "s" if existing and existing.enabled else "n"
-    enabled = ask("Activar filtro de texto? (s/N): ").strip().lower() or default_enabled
-    if enabled != "s":
-        return TextFilterConfig(enabled=False, criteria="", model_path="")
+    default_state = (
+        existing.state
+        if existing
+        else FILTER_STATE_DISABLED
+    )
+    state = _prompt_filter_state("Texto inteligente", default=default_state)
+    if state == FILTER_STATE_DISABLED:
+        return TextFilterConfig(
+            enabled=False,
+            criteria=(existing.criteria if existing else ""),
+            model_path="",
+            state=FILTER_STATE_DISABLED,
+        )
+    if existing and existing.criteria:
+        print("(Deja vacio para mantener el criterio actual)")
     criteria = ask_multiline("Criterio de filtrado (texto):").strip()
+    if not criteria and existing:
+        criteria = (existing.criteria or "").strip()
     if not criteria:
         warn("El criterio de texto es obligatorio.")
         return None
-    return TextFilterConfig(enabled=True, criteria=criteria, model_path="")
+    return TextFilterConfig(
+        enabled=True,
+        criteria=criteria,
+        model_path="",
+        state=state,
+    )
 
 
 def _prompt_image_filter(existing: Optional[ImageFilterConfig]) -> Optional[ImageFilterConfig]:
-    default_enabled = "s" if existing and existing.enabled else "n"
-    enabled = ask("Activar filtro de imagen? (s/N): ").strip().lower() or default_enabled
-    if enabled != "s":
+    default_state = (
+        existing.state
+        if existing
+        else FILTER_STATE_DISABLED
+    )
+    state = _prompt_filter_state("Imagen", default=default_state)
+    if state == FILTER_STATE_DISABLED:
         return ImageFilterConfig(
             enabled=False,
-            prompt="",
+            prompt=(existing.prompt if existing else ""),
+            state=FILTER_STATE_DISABLED,
         )
+    if existing and existing.prompt:
+        print("(Deja vacio para mantener el prompt actual)")
     prompt = ask_multiline("Prompt visual:").strip()
+    if not prompt and existing:
+        prompt = (existing.prompt or "").strip()
     if not prompt:
         warn("El prompt visual es obligatorio.")
         return None
     return ImageFilterConfig(
         enabled=True,
         prompt=prompt,
+        state=state,
     )
 
 
@@ -1524,15 +1766,24 @@ def _filter_config_to_dict(cfg: LeadFilterConfig) -> Dict[str, Any]:
             "include_keywords": cfg.classic.include_keywords,
             "exclude_keywords": cfg.classic.exclude_keywords,
             "language": cfg.classic.language,
+            "min_followers_state": _normalize_filter_state(cfg.classic.min_followers_state),
+            "min_posts_state": _normalize_filter_state(cfg.classic.min_posts_state),
+            "privacy_state": _normalize_filter_state(cfg.classic.privacy_state),
+            "link_in_bio_state": _normalize_filter_state(cfg.classic.link_in_bio_state),
+            "include_keywords_state": _normalize_filter_state(cfg.classic.include_keywords_state),
+            "exclude_keywords_state": _normalize_filter_state(cfg.classic.exclude_keywords_state),
+            "language_state": _normalize_filter_state(cfg.classic.language_state),
         },
         "text": {
             "enabled": cfg.text.enabled,
             "criteria": cfg.text.criteria,
             "model_path": cfg.text.model_path,
+            "state": _normalize_filter_state(cfg.text.state),
         },
         "image": {
             "enabled": cfg.image.enabled,
             "prompt": cfg.image.prompt,
+            "state": _normalize_filter_state(cfg.image.state),
         },
     }
 
@@ -1543,23 +1794,72 @@ def _filter_config_from_dict(data: Dict[str, Any]) -> Optional[LeadFilterConfig]
     classic_raw = data.get("classic") or {}
     text_raw = data.get("text") or {}
     image_raw = data.get("image") or {}
+    min_followers = int(classic_raw.get("min_followers") or 0)
+    min_posts = int(classic_raw.get("min_posts") or 0)
+    privacy = str(classic_raw.get("privacy") or "any")
+    link_in_bio = str(classic_raw.get("link_in_bio") or "any")
+    include_keywords = list(classic_raw.get("include_keywords") or [])
+    exclude_keywords = list(classic_raw.get("exclude_keywords") or [])
+    language = str(classic_raw.get("language") or "any")
     classic = ClassicFilterConfig(
-        min_followers=int(classic_raw.get("min_followers") or 0),
-        min_posts=int(classic_raw.get("min_posts") or 0),
-        privacy=str(classic_raw.get("privacy") or "any"),
-        link_in_bio=str(classic_raw.get("link_in_bio") or "any"),
-        include_keywords=list(classic_raw.get("include_keywords") or []),
-        exclude_keywords=list(classic_raw.get("exclude_keywords") or []),
-        language=str(classic_raw.get("language") or "any"),
+        min_followers=min_followers,
+        min_posts=min_posts,
+        privacy=privacy,
+        link_in_bio=link_in_bio,
+        include_keywords=include_keywords,
+        exclude_keywords=exclude_keywords,
+        language=language,
+        min_followers_state=_normalize_filter_state(
+            classic_raw.get("min_followers_state"),
+            default=FILTER_STATE_REQUIRED if min_followers > 0 else FILTER_STATE_DISABLED,
+        ),
+        min_posts_state=_normalize_filter_state(
+            classic_raw.get("min_posts_state"),
+            default=FILTER_STATE_REQUIRED if min_posts > 0 else FILTER_STATE_DISABLED,
+        ),
+        privacy_state=_normalize_filter_state(
+            classic_raw.get("privacy_state"),
+            default=FILTER_STATE_REQUIRED if privacy != "any" else FILTER_STATE_DISABLED,
+        ),
+        link_in_bio_state=_normalize_filter_state(
+            classic_raw.get("link_in_bio_state"),
+            default=FILTER_STATE_REQUIRED if link_in_bio != "any" else FILTER_STATE_DISABLED,
+        ),
+        include_keywords_state=_normalize_filter_state(
+            classic_raw.get("include_keywords_state"),
+            default=FILTER_STATE_REQUIRED if include_keywords else FILTER_STATE_DISABLED,
+        ),
+        exclude_keywords_state=_normalize_filter_state(
+            classic_raw.get("exclude_keywords_state"),
+            default=FILTER_STATE_REQUIRED if exclude_keywords else FILTER_STATE_DISABLED,
+        ),
+        language_state=_normalize_filter_state(
+            classic_raw.get("language_state"),
+            default=FILTER_STATE_REQUIRED if language != "any" else FILTER_STATE_DISABLED,
+        ),
+    )
+    text_enabled = bool(text_raw.get("enabled"))
+    text_criteria = str(text_raw.get("criteria") or "")
+    text_state = _normalize_filter_state(
+        text_raw.get("state"),
+        default=FILTER_STATE_REQUIRED if text_enabled and text_criteria else FILTER_STATE_DISABLED,
     )
     text = TextFilterConfig(
-        enabled=bool(text_raw.get("enabled")),
-        criteria=str(text_raw.get("criteria") or ""),
+        enabled=_is_filter_active(text_state),
+        criteria=text_criteria,
         model_path="",
+        state=text_state,
+    )
+    image_enabled = bool(image_raw.get("enabled"))
+    image_prompt = str(image_raw.get("prompt") or "")
+    image_state = _normalize_filter_state(
+        image_raw.get("state"),
+        default=FILTER_STATE_REQUIRED if image_enabled and image_prompt else FILTER_STATE_DISABLED,
     )
     image = ImageFilterConfig(
-        enabled=bool(image_raw.get("enabled")),
-        prompt=str(image_raw.get("prompt") or ""),
+        enabled=_is_filter_active(image_state),
+        prompt=image_prompt,
+        state=image_state,
     )
     return LeadFilterConfig(classic=classic, text=text, image=image)
 
@@ -1811,10 +2111,41 @@ def _verify_image_dependencies() -> None:
 
 
 def _verify_dependencies_for_run(cfg: LeadFilterConfig) -> None:
-    if cfg.text.enabled:
+    api_key = (_get_openai_api_key() or "").strip()
+
+    text_state = _normalize_filter_state(cfg.text.state)
+    if text_state == FILTER_STATE_REQUIRED:
+        if not (cfg.text.criteria or "").strip():
+            raise RuntimeError(
+                "Filtro Texto inteligente en REQUIRED requiere un criterio no vacio."
+            )
         _verify_text_ai_dependencies()
-    if cfg.image.enabled:
+        if not api_key:
+            raise RuntimeError(
+                "Filtro Texto inteligente en REQUIRED requiere OPENAI_API_KEY configurada."
+            )
+    elif text_state == FILTER_STATE_INDIFFERENT and api_key:
+        try:
+            _verify_text_ai_dependencies()
+        except Exception as exc:
+            logging.warning("Texto inteligente INDIFFERENT sin dependencia disponible: %s", exc)
+
+    image_state = _normalize_filter_state(cfg.image.state)
+    if image_state == FILTER_STATE_REQUIRED:
+        if not (cfg.image.prompt or "").strip():
+            raise RuntimeError(
+                "Filtro Imagen en REQUIRED requiere un prompt no vacio."
+            )
         _verify_image_dependencies()
+        if not api_key:
+            raise RuntimeError(
+                "Filtro Imagen en REQUIRED requiere OPENAI_API_KEY configurada."
+            )
+    elif image_state == FILTER_STATE_INDIFFERENT and api_key:
+        try:
+            _verify_image_dependencies()
+        except Exception as exc:
+            logging.warning("Imagen INDIFFERENT sin dependencia disponible: %s", exc)
 
 def _run_async(coro):
     try:
@@ -2045,57 +2376,186 @@ async def _evaluate_username(
     text_lock: asyncio.Lock,
     image_lock: asyncio.Lock,
 ) -> Tuple[bool, str]:
+    normalized_username = (username or "").strip().lstrip("@")
+    evaluations: List[Dict[str, Any]] = []
+
     user, reason = await _pw_fetch_profile_snapshot(page, username)
     if not user:
-        return False, reason or "perfil_no_disponible"
-    ok, reason = _passes_classic_filters(user, filter_cfg.classic)
+        fail_reason = reason or "perfil_no_disponible"
+        _append_filter_eval(
+            evaluations,
+            name="Profile Snapshot",
+            state=FILTER_STATE_REQUIRED,
+            evaluated=True,
+            passed=False,
+            detail=f"snapshot_failed: {fail_reason}",
+        )
+        _log_lead_check_report(
+            normalized_username or username,
+            evaluations,
+            accepted=False,
+            reason=fail_reason,
+        )
+        return False, fail_reason
+
+    ok, reason = _passes_classic_filters(user, filter_cfg.classic, evaluations=evaluations)
     if not ok:
+        _log_lead_check_report(user.username, evaluations, accepted=False, reason=reason)
         return False, reason
-    text_reason = ""
-    if filter_cfg.text.enabled:
-        api_key = _get_openai_api_key()
-        if not api_key:
+
+    api_key = (_get_openai_api_key() or "").strip()
+
+    text_state_default = FILTER_STATE_REQUIRED if filter_cfg.text.enabled else FILTER_STATE_DISABLED
+    text_state = _normalize_filter_state(filter_cfg.text.state, default=text_state_default)
+    text_criteria = (filter_cfg.text.criteria or "").strip()
+    if text_state == FILTER_STATE_DISABLED:
+        _append_filter_eval(
+            evaluations,
+            name="AI Username+Bio",
+            state=text_state,
+            evaluated=False,
+            passed=None,
+            detail="disabled",
+        )
+    else:
+        if not text_criteria:
+            text_reason = "criterio_vacio"
+            _append_filter_eval(
+                evaluations,
+                name="AI Username+Bio",
+                state=text_state,
+                evaluated=True,
+                passed=False,
+                detail=text_reason,
+            )
+            if text_state == FILTER_STATE_REQUIRED:
+                _log_lead_check_report(user.username, evaluations, accepted=False, reason=text_reason)
+                return False, text_reason
+        elif not api_key:
+            if text_state == FILTER_STATE_REQUIRED:
+                text_reason = "openai_api_key_faltante"
+                _append_filter_eval(
+                    evaluations,
+                    name="AI Username+Bio",
+                    state=text_state,
+                    evaluated=True,
+                    passed=False,
+                    detail=text_reason,
+                )
+                _log_lead_check_report(user.username, evaluations, accepted=False, reason=text_reason)
+                return False, text_reason
             _log_text_filter_omitted_once()
+            _append_filter_eval(
+                evaluations,
+                name="AI Username+Bio",
+                state=text_state,
+                evaluated=False,
+                passed=None,
+                detail="skipped_missing_api_key",
+            )
         else:
             async with text_lock:
-                decision, reason = await asyncio.to_thread(
+                decision, text_reason = await asyncio.to_thread(
                     _text_ai_decision,
                     api_key,
                     user,
-                    filter_cfg.text.criteria,
+                    text_criteria,
                 )
-            if decision is None:
-                pass
-            elif not decision:
-                if reason:
-                    logging.info("Texto inteligente NO_CALIFICA (%s): %s", user.username, reason)
-                return False, reason or "texto_ia"
-            else:
-                if reason:
-                    text_reason = reason
-    if filter_cfg.image.enabled:
-        image_bytes = await _get_profile_image_bytes(page, user.profile_pic_url)
-        api_key = _get_openai_api_key()
-        if not api_key:
+            passed_text = decision is True
+            detail_text = text_reason or ("CALIFICA" if passed_text else "NO_CALIFICA")
+            _append_filter_eval(
+                evaluations,
+                name="AI Username+Bio",
+                state=text_state,
+                evaluated=True,
+                passed=passed_text,
+                detail=detail_text,
+            )
+            if text_state == FILTER_STATE_REQUIRED and not passed_text:
+                fail_reason = text_reason or "texto_ia"
+                _log_lead_check_report(user.username, evaluations, accepted=False, reason=fail_reason)
+                return False, fail_reason
+
+    image_state_default = FILTER_STATE_REQUIRED if filter_cfg.image.enabled else FILTER_STATE_DISABLED
+    image_state = _normalize_filter_state(filter_cfg.image.state, default=image_state_default)
+    image_prompt = (filter_cfg.image.prompt or "").strip()
+    if image_state == FILTER_STATE_DISABLED:
+        _append_filter_eval(
+            evaluations,
+            name="AI Bio Image",
+            state=image_state,
+            evaluated=False,
+            passed=None,
+            detail="disabled",
+        )
+    else:
+        if not image_prompt:
+            image_reason = "prompt_vacio"
+            _append_filter_eval(
+                evaluations,
+                name="AI Bio Image",
+                state=image_state,
+                evaluated=True,
+                passed=False,
+                detail=image_reason,
+            )
+            if image_state == FILTER_STATE_REQUIRED:
+                _log_lead_check_report(user.username, evaluations, accepted=False, reason=image_reason)
+                return False, image_reason
+        elif not api_key:
+            if image_state == FILTER_STATE_REQUIRED:
+                image_reason = "openai_api_key_faltante"
+                _append_filter_eval(
+                    evaluations,
+                    name="AI Bio Image",
+                    state=image_state,
+                    evaluated=True,
+                    passed=False,
+                    detail=image_reason,
+                )
+                _log_lead_check_report(user.username, evaluations, accepted=False, reason=image_reason)
+                return False, image_reason
             _log_image_filter_omitted_once()
+            _append_filter_eval(
+                evaluations,
+                name="AI Bio Image",
+                state=image_state,
+                evaluated=False,
+                passed=None,
+                detail="skipped_missing_api_key",
+            )
         else:
+            image_bytes = await _get_profile_image_bytes(page, user.profile_pic_url)
             try:
                 async with image_lock:
-                    ok, reason = await asyncio.wait_for(
+                    image_ok, image_reason = await asyncio.wait_for(
                         asyncio.to_thread(
                             _image_ai_decision,
                             api_key,
                             user,
-                            filter_cfg.image.prompt,
+                            image_prompt,
                             image_bytes=image_bytes,
                         ),
                         timeout=30.0,
                     )
             except asyncio.TimeoutError:
-                return False, "imagen_timeout"
-            if not ok:
-                return False, reason
-    return True, text_reason or "ok"
+                image_ok = False
+                image_reason = "imagen_timeout"
+            _append_filter_eval(
+                evaluations,
+                name="AI Bio Image",
+                state=image_state,
+                evaluated=True,
+                passed=bool(image_ok),
+                detail=image_reason or ("CALIFICA" if image_ok else "NO_CALIFICA"),
+            )
+            if image_state == FILTER_STATE_REQUIRED and not image_ok:
+                fail_reason = image_reason or "imagen_ia"
+                _log_lead_check_report(user.username, evaluations, accepted=False, reason=fail_reason)
+                return False, fail_reason
+
+    _log_lead_check_report(user.username, evaluations, accepted=True, reason="ok")
+    return True, "ok"
 
 
 async def _pw_fetch_profile_snapshot(page, username: str) -> Tuple[Optional[ScrapedUser], str]:
@@ -2427,34 +2887,207 @@ def _parse_count(raw: str) -> int:
         return 0
 
 
-def _passes_classic_filters(user: ScrapedUser, cfg: ClassicFilterConfig) -> Tuple[bool, str]:
-    if cfg.privacy == "public" and user.is_private:
-        return False, "perfil_privado"
-    if cfg.privacy == "private" and not user.is_private:
-        return False, "perfil_publico"
-    if cfg.min_followers and user.follower_count < cfg.min_followers:
-        return False, "seguidores_min"
-    if cfg.min_posts and user.media_count < cfg.min_posts:
-        return False, "posts_min"
-    link_present = _bio_has_link(user.biography)
-    if cfg.link_in_bio == "yes" and not link_present:
-        return False, "sin_link_bio"
-    if cfg.link_in_bio == "no" and link_present:
-        return False, "con_link_bio"
+def _passes_classic_filters(
+    user: ScrapedUser,
+    cfg: ClassicFilterConfig,
+    evaluations: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[bool, str]:
+    evals = evaluations if evaluations is not None else []
     haystack = _normalize_text(" ".join([user.username, user.full_name, user.biography]))
-    if cfg.exclude_keywords:
-        for term in cfg.exclude_keywords:
-            if _normalize_text(term) in haystack:
-                return False, "keyword_excluida"
+    link_present = _bio_has_link(user.biography)
+
+    followers_state = _normalize_filter_state(
+        getattr(cfg, "min_followers_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.min_followers > 0 else FILTER_STATE_DISABLED,
+    )
+    posts_state = _normalize_filter_state(
+        getattr(cfg, "min_posts_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.min_posts > 0 else FILTER_STATE_DISABLED,
+    )
+    privacy_state = _normalize_filter_state(
+        getattr(cfg, "privacy_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.privacy != "any" else FILTER_STATE_DISABLED,
+    )
+    link_state = _normalize_filter_state(
+        getattr(cfg, "link_in_bio_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.link_in_bio != "any" else FILTER_STATE_DISABLED,
+    )
+    include_state = _normalize_filter_state(
+        getattr(cfg, "include_keywords_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.include_keywords else FILTER_STATE_DISABLED,
+    )
+    exclude_state = _normalize_filter_state(
+        getattr(cfg, "exclude_keywords_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.exclude_keywords else FILTER_STATE_DISABLED,
+    )
+    language_state = _normalize_filter_state(
+        getattr(cfg, "language_state", None),
+        default=FILTER_STATE_REQUIRED if cfg.language != "any" else FILTER_STATE_DISABLED,
+    )
+
+    def _record_and_gate(
+        *,
+        name: str,
+        state: str,
+        passed: bool,
+        detail: str,
+        fail_reason: str,
+    ) -> Tuple[bool, str]:
+        normalized_state = _normalize_filter_state(state)
+        if normalized_state == FILTER_STATE_DISABLED:
+            _append_filter_eval(
+                evals,
+                name=name,
+                state=normalized_state,
+                evaluated=False,
+                passed=None,
+                detail="disabled",
+            )
+            return True, ""
+        _append_filter_eval(
+            evals,
+            name=name,
+            state=normalized_state,
+            evaluated=True,
+            passed=passed,
+            detail=detail,
+        )
+        if normalized_state == FILTER_STATE_REQUIRED and not passed:
+            return False, fail_reason
+        return True, ""
+
+    followers_ok = user.follower_count >= int(cfg.min_followers or 0)
+    ok, reason = _record_and_gate(
+        name="Followers",
+        state=followers_state,
+        passed=followers_ok,
+        detail=f"{user.follower_count} >= {int(cfg.min_followers or 0)}",
+        fail_reason="seguidores_min",
+    )
+    if not ok:
+        return False, reason
+
+    posts_ok = user.media_count >= int(cfg.min_posts or 0)
+    ok, reason = _record_and_gate(
+        name="Posts",
+        state=posts_state,
+        passed=posts_ok,
+        detail=f"{user.media_count} >= {int(cfg.min_posts or 0)}",
+        fail_reason="posts_min",
+    )
+    if not ok:
+        return False, reason
+
+    if cfg.privacy == "public":
+        privacy_ok = not user.is_private
+        privacy_detail = f"expected=public current={'private' if user.is_private else 'public'}"
+        privacy_fail_reason = "perfil_privado"
+    elif cfg.privacy == "private":
+        privacy_ok = user.is_private
+        privacy_detail = f"expected=private current={'private' if user.is_private else 'public'}"
+        privacy_fail_reason = "perfil_publico"
+    else:
+        privacy_ok = True
+        privacy_detail = "target=any"
+        privacy_fail_reason = "perfil_privado"
+    ok, reason = _record_and_gate(
+        name="Public Account",
+        state=privacy_state,
+        passed=privacy_ok,
+        detail=privacy_detail,
+        fail_reason=privacy_fail_reason,
+    )
+    if not ok:
+        return False, reason
+
+    if cfg.link_in_bio == "yes":
+        link_ok = link_present
+        link_detail = f"requires_link found={'yes' if link_present else 'no'}"
+        link_fail_reason = "sin_link_bio"
+    elif cfg.link_in_bio == "no":
+        link_ok = not link_present
+        link_detail = f"requires_no_link found={'yes' if link_present else 'no'}"
+        link_fail_reason = "con_link_bio"
+    else:
+        link_ok = True
+        link_detail = f"target=any found={'yes' if link_present else 'no'}"
+        link_fail_reason = "sin_link_bio"
+    ok, reason = _record_and_gate(
+        name="Link Presence",
+        state=link_state,
+        passed=link_ok,
+        detail=link_detail,
+        fail_reason=link_fail_reason,
+    )
+    if not ok:
+        return False, reason
+
+    matched_include_terms: List[str] = []
+    for term in cfg.include_keywords:
+        normalized = _normalize_text(term)
+        if normalized and normalized in haystack:
+            matched_include_terms.append(term)
     if cfg.include_keywords:
-        if not any(_normalize_text(term) in haystack for term in cfg.include_keywords):
-            return False, "keyword_faltante"
+        include_ok = bool(matched_include_terms)
+        include_detail = (
+            "matched=" + ", ".join(matched_include_terms)
+            if matched_include_terms
+            else "matched=(none)"
+        )
+    else:
+        include_ok = False
+        include_detail = "keywords_empty"
+    ok, reason = _record_and_gate(
+        name="Keyword Include",
+        state=include_state,
+        passed=include_ok,
+        detail=include_detail,
+        fail_reason="keyword_faltante",
+    )
+    if not ok:
+        return False, reason
+
+    blocked_exclude_terms: List[str] = []
+    for term in cfg.exclude_keywords:
+        normalized = _normalize_text(term)
+        if normalized and normalized in haystack:
+            blocked_exclude_terms.append(term)
+    exclude_ok = not blocked_exclude_terms
+    exclude_detail = (
+        "blocked=" + ", ".join(blocked_exclude_terms)
+        if blocked_exclude_terms
+        else "blocked=(none)"
+    )
+    ok, reason = _record_and_gate(
+        name="Keyword Exclude",
+        state=exclude_state,
+        passed=exclude_ok,
+        detail=exclude_detail,
+        fail_reason="keyword_excluida",
+    )
+    if not ok:
+        return False, reason
+
+    detected = "unknown"
     if cfg.language and cfg.language != "any":
         detected = _detect_language(" ".join([user.username, user.full_name, user.biography]))
-        if detected == "unknown":
-            return False, "idioma_desconocido"
-        if detected != cfg.language:
-            return False, "idioma_no_coincide"
+        language_ok = detected == cfg.language
+        language_fail_reason = "idioma_desconocido" if detected == "unknown" else "idioma_no_coincide"
+        language_detail = f"expected={cfg.language} detected={detected}"
+    else:
+        language_ok = True
+        language_fail_reason = "idioma_no_coincide"
+        language_detail = "target=any"
+    ok, reason = _record_and_gate(
+        name="Language",
+        state=language_state,
+        passed=language_ok,
+        detail=language_detail,
+        fail_reason=language_fail_reason,
+    )
+    if not ok:
+        return False, reason
+
     return True, ""
 
 
@@ -2466,13 +3099,10 @@ def _bio_has_link(bio: str) -> bool:
 
 def _playwright_proxy_from_account(account: Dict) -> Optional[Dict[str, str]]:
     try:
-        from src.auth.onboarding import build_proxy
+        from src.proxy_payload import proxy_from_account
     except Exception:
         return None
-    proxy_raw = account.get("proxy_url") or account.get("proxy")
-    if not proxy_raw:
-        return None
-    return build_proxy(proxy_raw)
+    return proxy_from_account(account)
 
 
 def _parse_text_ai_output(raw_text: str) -> Tuple[Optional[bool], str]:
@@ -2770,3 +3400,4 @@ def _ask_float(
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+

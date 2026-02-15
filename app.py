@@ -128,7 +128,12 @@ storage = _safe_import("storage")
 responder = _safe_import("responder")
 licensekit = _safe_import("licensekit")
 state_view = _safe_import("state_view")
-stats_engine = _safe_import("src.analytics.stats_engine")
+try:
+    # Static import so frozen builds (PyInstaller) don't miss this module.
+    from src.analytics import stats_engine as stats_engine  # type: ignore
+except Exception as e:
+    stats_engine = None
+    warn(f"Módulo no disponible o con error: src.analytics.stats_engine ({e})")
 whatsapp = _safe_import("whatsapp")
 
 
@@ -139,7 +144,15 @@ def _counts():
         resolver = getattr(accounts, "connected_status", None)
         if callable(resolver):
             connected = sum(
-                1 for it in items if resolver(it, strict=False, reason="dashboard-count")
+                1
+                for it in items
+                if resolver(
+                    it,
+                    strict=False,
+                    reason="dashboard-count",
+                    fast=True,
+                    persist=False,
+                )
             )
         else:
             connected = sum(1 for it in items if it.get("connected"))

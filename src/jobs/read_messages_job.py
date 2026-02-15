@@ -128,7 +128,11 @@ def poll_all_accounts() -> Dict[str, Any]:
     for account in active_accounts:
         username = account.get('username')
         password = account.get('password')
-        proxy = account.get('proxy')
+        try:
+            from src.proxy_payload import proxy_from_account
+            proxy = proxy_from_account(account)
+        except Exception:
+            proxy = account.get('proxy')
         
         if not username or not password:
             continue

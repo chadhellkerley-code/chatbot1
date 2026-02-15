@@ -18,29 +18,19 @@ def _bootstrap_playwright_env() -> None:
     else:
         exe_dir = Path(__file__).resolve().parent
     pw_root = exe_dir / "playwright_browsers"
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(pw_root)
     os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
     os.environ.setdefault("PLAYWRIGHT_DOWNLOAD_HOST", "")
+    if pw_root.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(pw_root)
+    elif (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip() == str(pw_root):
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     exists = pw_root.exists()
+    current = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
     print(
         "Playwright bootstrap: "
-        f"exe_dir={exe_dir} pw_root={pw_root} exists={'true' if exists else 'false'}"
+        f"exe_dir={exe_dir} pw_root={pw_root} exists={'true' if exists else 'false'} "
+        f"PLAYWRIGHT_BROWSERS_PATH={current or '-'}"
     )
-    if not exists:
-        print("Error: Falta la carpeta playwright_browsers al lado del exe.")
-        sys.exit(2)
-    try:
-        entries = [item.name for item in pw_root.iterdir() if item.is_dir()]
-    except Exception:
-        entries = []
-    has_chromium = any(name.startswith("chromium-") for name in entries)
-    has_headless = any(name.startswith("chromium_headless_shell-") for name in entries)
-    if not (has_chromium or has_headless):
-        print(
-            "Error: playwright_browsers no contiene Chromium válido "
-            "(chromium-* o chromium_headless_shell-*)."
-        )
-        sys.exit(2)
 
 
 _bootstrap_playwright_env()
@@ -138,11 +128,49 @@ def _headless_exe_candidates(browser_dir: Path) -> List[Path]:
     return [browser_dir / "chrome-headless-shell" / "chrome-headless-shell"]
 
 
+def _standalone_chrome_candidates(root: Path) -> List[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            root / "chrome-win64" / "chrome.exe",
+            root / "chrome-win" / "chrome.exe",
+            root / "browsers" / "chrome-win64" / "chrome.exe",
+            root / "browsers" / "chrome-win" / "chrome.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            root / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+            root / "browsers" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+        ]
+    return [
+        root / "chrome-linux" / "chrome",
+        root / "browsers" / "chrome-linux" / "chrome",
+    ]
+
+
 def _validate_executable(exe_path: Path) -> Tuple[bool, int]:
     size = _safe_stat_size(exe_path)
     if size <= _MIN_EXECUTABLE_BYTES:
         return False, size
     return True, size
+
+
+def _select_standalone_chrome(
+    root: Path,
+) -> Optional[Tuple[Path, int, str, Path, str, str]]:
+    for exe_path in _standalone_chrome_candidates(root):
+        ok, size = _validate_executable(exe_path)
+        if not ok:
+            continue
+        browser_dir = exe_path.parent
+        return (
+            exe_path,
+            size,
+            "standalone_chrome",
+            browser_dir,
+            "standalone_chrome",
+            browser_dir.name,
+        )
+    return None
 
 
 def _select_executable(
@@ -166,18 +194,10 @@ def _select_playwright_root(
     if not candidate.exists():
         return None
 
-    headless_dir = _pick_latest_dir(candidate, _PLAYWRIGHT_HEADLESS_PREFIX)
-    if headless_dir:
-        selection = _select_executable(
-            headless_dir,
-            _headless_exe_candidates(headless_dir),
-            "accepted_standalone",
-            "headless",
-            _PLAYWRIGHT_HEADLESS_PREFIX,
-        )
-        if selection:
-            exe_path, size, reason, browser_dir, browser_type, version = selection
-            return candidate, exe_path, size, reason, browser_dir, browser_type, version
+    standalone = _select_standalone_chrome(candidate)
+    if standalone:
+        exe_path, size, reason, browser_dir, browser_type, version = standalone
+        return candidate, exe_path, size, reason, browser_dir, browser_type, version
 
     chromium_dir = _pick_latest_dir(candidate, _PLAYWRIGHT_CHROMIUM_PREFIX)
     if chromium_dir:
@@ -187,6 +207,19 @@ def _select_playwright_root(
             "accepted_standalone",
             "chromium",
             _PLAYWRIGHT_CHROMIUM_PREFIX,
+        )
+        if selection:
+            exe_path, size, reason, browser_dir, browser_type, version = selection
+            return candidate, exe_path, size, reason, browser_dir, browser_type, version
+
+    headless_dir = _pick_latest_dir(candidate, _PLAYWRIGHT_HEADLESS_PREFIX)
+    if headless_dir:
+        selection = _select_executable(
+            headless_dir,
+            _headless_exe_candidates(headless_dir),
+            "accepted_standalone",
+            "headless",
+            _PLAYWRIGHT_HEADLESS_PREFIX,
         )
         if selection:
             exe_path, size, reason, browser_dir, browser_type, version = selection
@@ -235,15 +268,31 @@ def _resolve_playwright_browsers_path() -> Optional[
             [
                 exe_parent / "playwright_browsers",
                 exe_parent / "playwright",
+                exe_parent / "browsers",
+                exe_parent,
             ]
         )
 
     app_root = Path(__file__).resolve().parent
-    candidates.extend([app_root / "playwright_browsers", app_root / "playwright"])
+    candidates.extend(
+        [
+            app_root / "playwright_browsers",
+            app_root / "playwright",
+            app_root / "browsers",
+            app_root,
+        ]
+    )
 
     base = getattr(sys, "_MEIPASS", None)
     if base:
-        candidates.extend([Path(base) / "playwright_browsers", Path(base) / "playwright"])
+        candidates.extend(
+            [
+                Path(base) / "playwright_browsers",
+                Path(base) / "playwright",
+                Path(base) / "browsers",
+                Path(base),
+            ]
+        )
 
     for candidate in candidates:
         selection = _select_playwright_root(candidate)
@@ -258,24 +307,33 @@ def _configure_playwright_browsers() -> None:
         selection = _select_playwright_root(Path(current).expanduser())
         if selection:
             root, exe_path, size, reason, browser_dir, browser_type, version = selection
-            if str(root) != current:
+            os.environ["PLAYWRIGHT_CHROME_EXECUTABLE"] = str(exe_path)
+            if browser_type == "standalone_chrome":
+                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+            elif str(root) != current:
                 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
             _log_playwright_selection(
                 root, browser_dir, exe_path, size, reason, browser_type, version
             )
             return
         print(
-            "Error: No se encontró un Chromium/headless sano en PLAYWRIGHT_BROWSERS_PATH. "
-            f"Ruta: {current}"
+            "Warning: PLAYWRIGHT_BROWSERS_PATH no contiene un browser valido. "
+            f"Ruta ignorada: {current}"
         )
-        sys.exit(2)
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     selection = _resolve_playwright_browsers_path()
     if selection:
         root, exe_path, size, reason, browser_dir, browser_type, version = selection
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
+        os.environ["PLAYWRIGHT_CHROME_EXECUTABLE"] = str(exe_path)
+        if browser_type == "standalone_chrome":
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
         _log_playwright_selection(
             root, browser_dir, exe_path, size, reason, browser_type, version
         )
+        return
+    print("Warning: No se detecto ningun browser embebido valido.")
 
 
 _configure_playwright_browsers()
@@ -316,5 +374,26 @@ _configure_app_version()
 from license_client import launch_with_license
 
 
+def _launch_entrypoint() -> int:
+    try:
+        from gui_app import launch_gui_app
+    except Exception as exc:
+        print(f"GUI wrapper unavailable ({exc}). Running CLI mode.")
+        launch_with_license()
+        return 0
+
+    try:
+        return int(
+            launch_gui_app(
+                backend_entrypoint=launch_with_license,
+                mode="client",
+            )
+        )
+    except Exception as exc:
+        print(f"GUI wrapper failed ({exc}). Running CLI mode.")
+        launch_with_license()
+        return 0
+
+
 if __name__ == "__main__":
-    launch_with_license()
+    raise SystemExit(_launch_entrypoint())

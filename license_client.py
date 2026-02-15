@@ -157,6 +157,25 @@ def _headless_exe_candidates(browser_dir: Path) -> List[Path]:
     return [browser_dir / "chrome-headless-shell" / "chrome-headless-shell"]
 
 
+def _standalone_chrome_candidates(root: Path) -> List[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            root / "chrome-win64" / "chrome.exe",
+            root / "chrome-win" / "chrome.exe",
+            root / "browsers" / "chrome-win64" / "chrome.exe",
+            root / "browsers" / "chrome-win" / "chrome.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            root / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+            root / "browsers" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+        ]
+    return [
+        root / "chrome-linux" / "chrome",
+        root / "browsers" / "chrome-linux" / "chrome",
+    ]
+
+
 def _validate_executable(exe_path: Path) -> Tuple[bool, int]:
     size = _safe_stat_size(exe_path)
     if size <= _MIN_EXECUTABLE_BYTES:
@@ -176,11 +195,24 @@ def _select_executable(
     return None
 
 
+def _select_standalone_chrome(candidate: Path) -> Optional[Tuple[Path, int, str, Path]]:
+    for exe_path in _standalone_chrome_candidates(candidate):
+        ok, size = _validate_executable(exe_path)
+        if ok:
+            return exe_path, size, "standalone_chrome", exe_path.parent
+    return None
+
+
 def _select_playwright_root(
     candidate: Path,
 ) -> Optional[Tuple[Path, Path, int, str, Path]]:
     if not candidate.exists():
         return None
+
+    standalone = _select_standalone_chrome(candidate)
+    if standalone:
+        exe_path, size, reason, browser_dir = standalone
+        return candidate, exe_path, size, reason, browser_dir
 
     chromium_dir = _pick_latest_dir(candidate, _PLAYWRIGHT_CHROMIUM_PREFIX)
     if chromium_dir:
@@ -232,10 +264,24 @@ def _detect_playwright_browsers_path() -> Optional[Tuple[Path, Path, int, str, P
     candidates: List[Path] = []
     base = getattr(sys, "_MEIPASS", None)
     if base:
-        candidates.extend([Path(base) / "playwright_browsers", Path(base) / "playwright"])
+        candidates.extend(
+            [
+                Path(base) / "playwright_browsers",
+                Path(base) / "playwright",
+                Path(base) / "browsers",
+                Path(base),
+            ]
+        )
 
     app_root = _get_app_root()
-    candidates.extend([app_root / "playwright_browsers", app_root / "playwright"])
+    candidates.extend(
+        [
+            app_root / "playwright_browsers",
+            app_root / "playwright",
+            app_root / "browsers",
+            app_root,
+        ]
+    )
 
     exe_parent = None
     try:
@@ -245,7 +291,14 @@ def _detect_playwright_browsers_path() -> Optional[Tuple[Path, Path, int, str, P
     except Exception:
         exe_parent = None
     if exe_parent:
-        candidates.extend([exe_parent / "playwright_browsers", exe_parent / "playwright"])
+        candidates.extend(
+            [
+                exe_parent / "playwright_browsers",
+                exe_parent / "playwright",
+                exe_parent / "browsers",
+                exe_parent,
+            ]
+        )
 
     for candidate in candidates:
         selection = _select_playwright_root(candidate)
@@ -260,14 +313,22 @@ def _ensure_playwright_browsers_env() -> Optional[Path]:
         selection = _select_playwright_root(Path(current).expanduser())
         if selection:
             root, exe_path, size, reason, browser_dir = selection
-            if str(root) != current:
+            os.environ["PLAYWRIGHT_CHROME_EXECUTABLE"] = str(exe_path)
+            if reason == "standalone_chrome":
+                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+            elif str(root) != current:
                 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
             _log_playwright_selection(root, browser_dir, exe_path, size, reason)
             return root
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     selection = _detect_playwright_browsers_path()
     if selection:
         root, exe_path, size, reason, browser_dir = selection
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
+        os.environ["PLAYWRIGHT_CHROME_EXECUTABLE"] = str(exe_path)
+        if reason == "standalone_chrome":
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(root)
         _log_playwright_selection(root, browser_dir, exe_path, size, reason)
         return root
     return None
@@ -702,7 +763,9 @@ def _verify_playwright_bundle() -> None:
 
     resolved = _ensure_playwright_browsers_env()
     browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    chrome_executable = os.environ.get("PLAYWRIGHT_CHROME_EXECUTABLE", "").strip()
     print(style_text(f"PLAYWRIGHT_BROWSERS_PATH: {browsers_path or '-'}", color=Fore.WHITE))
+    print(style_text(f"PLAYWRIGHT_CHROME_EXECUTABLE: {chrome_executable or '-'}", color=Fore.WHITE))
     try:
         from playwright._impl import _driver
 

@@ -137,13 +137,13 @@ def send_dm(
                 "sent_unverified": bool(is_unverified),
             }
 
-        skip_reason = (payload.get("skip_reason") or detail or "").strip()
-        if skip_reason == "NO_DM_BUTTON":
+        skip_reason = (payload.get("skip_reason") or detail or "").strip().upper()
+        if skip_reason in {"SKIPPED_NO_DM", "NO_DM_BUTTON"}:
             logger.info("skip | no_dm | Perfil sin botón de mensaje / no permite DM")
             return {
                 "success": False,
                 "skipped": True,
-                "reason": "NO_DM_BUTTON",
+                "reason": "SKIPPED_NO_DM",
                 "sender": username,
                 "target": target_user,
             }

@@ -48,9 +48,9 @@ from runtime import (
 )
 from storage import get_auto_state, log_conversation_status, save_auto_state
 from ui import Fore, full_line, style_text
-from src.auth.onboarding import build_proxy, login_account_playwright
+from src.auth.onboarding import login_account_playwright
 from src.auth.persistent_login import check_session
-from src.dm_playwright_client import PlaywrightDMClient
+from src.dm_playwright_client import PlaywrightDMClient, ThreadLike, UserLike
 from utils import ask, ask_int, banner, ok, press_enter, warn
 
 _ZONEINFO_CLASS_SENTINEL = object()
@@ -411,6 +411,7 @@ def _update_conversation_state(
     engine = _load_conversation_engine()
     conversations = engine.setdefault("conversations", {})
     key = _get_conversation_key(account, thread_id)
+    print(style_text(f"[TRACE_ID ENGINE_KEY] key={key} existed={key in conversations}", color=Fore.WHITE))
     current = conversations.get(key, {})
     if not current:
         current = {
@@ -1153,7 +1154,8 @@ def _followup_configure_prompt() -> None:
     print(current_prompt.strip() or "(sin definir)")
     print(full_line(color=Fore.BLUE))
     print("Elige una opcian:")
-    print("  E) Editar prompt")
+    print("  E) Editar prompt (pegar en consola)")
+    print("  T) Cargar desde archivo .txt")
     print("  D) Restaurar valor predeterminado")
     print("  Enter) Cancelar")
     action = ask("Accian: ").strip().lower()
@@ -1164,6 +1166,30 @@ def _followup_configure_prompt() -> None:
     if action in {"d", "default", "predeterminado"}:
         _set_followup_entry(alias, {"prompt": _DEFAULT_FOLLOWUP_PROMPT})
         ok("Se restauro el prompt predeterminado de seguimiento.")
+        press_enter()
+        return
+    if action in {"t", "txt", "archivo", "file"}:
+        path_input = ask("Ruta del archivo .txt (vacio para cancelar): ").strip()
+        if not path_input:
+            warn("No se realizaron cambios.")
+            press_enter()
+            return
+        file_path = Path(path_input).expanduser()
+        if not file_path.exists():
+            warn("El archivo especificado no existe.")
+            press_enter()
+            return
+        try:
+            new_prompt = file_path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            warn(f"No se pudo leer el archivo: {exc}")
+            press_enter()
+            return
+        _set_followup_entry(alias, {"prompt": new_prompt})
+        if new_prompt:
+            ok(f"Prompt actualizado. Longitud: {len(new_prompt)} caracteres.")
+        else:
+            ok("Se elimino el prompt personalizado. Se usara el valor predeterminado.")
         press_enter()
         return
     if action not in {"e", "editar"}:
@@ -1838,58 +1864,6 @@ def _latest_message(messages: List[object]) -> Optional[object]:
     return messages[-1]
 
 
-def _fetch_inbox_threads(client, amount: int = 10) -> List[object]:
-    collected: List[object] = []
-    try:
-        threads = client.list_threads(amount=amount, filter_unread=False)
-        if threads:
-            collected.extend(threads)
-    except TypeError:
-        try:
-            threads = client.list_threads(amount=amount)
-            if threads:
-                collected.extend(threads)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-    if not collected:
-        try:
-            threads = client.list_threads(amount=amount, filter_unread=True)
-            if threads:
-                collected.extend(threads)
-        except TypeError:
-            pass
-        except Exception:
-            pass
-
-    if not collected:
-        try:
-            threads = client.list_threads(amount=amount)
-            if threads:
-                collected.extend(threads)
-        except Exception:
-            pass
-
-    if not collected:
-        return []
-    seen_ids: set[str] = set()
-    deduped: List[object] = []
-    for thread in collected:
-        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
-        if thread_id_val is None:
-            continue
-        thread_id = str(thread_id_val)
-        if thread_id in seen_ids:
-            continue
-        seen_ids.add(thread_id)
-        deduped.append(thread)
-        if len(deduped) >= amount:
-            break
-    return deduped
-
-
 def _contains_token(text: str, token: str) -> bool:
     token = token.strip()
     if not token:
@@ -2015,19 +1989,11 @@ def _playwright_storage_state_path(username: str) -> Path:
 
 
 def _proxy_payload_for_playwright(account: Optional[Dict]) -> Optional[Dict[str, str]]:
-    if not account:
-        return None
-    if account.get("proxy"):
-        return account.get("proxy")
-    payload = {
-        "url": account.get("proxy_url"),
-        "username": account.get("proxy_user"),
-        "password": account.get("proxy_pass"),
-    }
     try:
-        return build_proxy(payload)
+        from src.proxy_payload import proxy_from_account
     except Exception:
         return None
+    return proxy_from_account(account)
 
 
 def _has_playwright_session(username: str, *, account: Optional[Dict] = None) -> bool:
@@ -2152,6 +2118,7 @@ def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
         return output or _OPENAI_REPLY_FALLBACK
     except Exception as e:  # pragma: no cover - depende de red externa
         logger.warning("Fallo al generar respuesta con OpenAI: %s", e, exc_info=False)
+        warn(f"[OPENAI FALLBACK] error={e} status={getattr(e, 'status_code', None)}")
         return _OPENAI_REPLY_FALLBACK
 
 
@@ -4993,32 +4960,101 @@ def _process_inbox(
     client._open_inbox()
     print(style_text(f"Cuenta {user} | Inbox cargado", color=Fore.CYAN))
     
-    inbox = _fetch_inbox_threads(client, amount=threads_limit)
-    if not inbox:
+    state.setdefault(user, {})
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
+    now = time.time()
+
+    page = client._ensure_page()
+    rows = None
+    selected_selector = ""
+    for selector in client._row_selector_candidates():
+        try:
+            candidate = page.locator(selector)
+            if candidate.count() > 0:
+                rows = candidate
+                selected_selector = selector
+                break
+        except Exception:
+            continue
+    if rows is None:
         print(style_text(f"[Barrido] Sin chats visibles para @{user}", color=Fore.YELLOW))
         logger.warning(
             "No threads visibles para @%s: ver screenshot/html en storage/logs (dm_debug_...)",
             user,
         )
-        # Extraer dump para saber por qué no hay threads
         try:
             client.debug_dump_inbox("no_threads_found")
         except Exception:
             pass
         return
-    state.setdefault(user, {})
-    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
-    now = time.time()
-    
-    total_threads = len(inbox)
-    for idx, thread in enumerate(inbox, start=1):
+
+    inbox_panel, _method, _selector, _panel_meta = client._get_inbox_panel(page, rows=rows)
+    client._scroll_panel_to_top(inbox_panel)
+
+    total_threads = max(1, int(threads_limit or 1))
+    processed_threads = 0
+    seen_thread_ids: set[str] = set()
+
+    while processed_threads < total_threads:
         if STOP_EVENT.is_set():
             break
 
+        thread: Optional[ThreadLike] = None
+        try:
+            total_rows = rows.count()
+        except Exception:
+            total_rows = 0
+
+        for row_idx in range(total_rows):
+            row = rows.nth(row_idx)
+            if not client._row_is_valid(row, selector=selected_selector):
+                continue
+            lines = client._row_lines(row)
+            title = (lines[0] if lines else "unknown").strip()
+            if not title:
+                continue
+            stable_id = f"{client.username}:{title}"
+            if stable_id in seen_thread_ids:
+                continue
+            thread = ThreadLike(
+                id=stable_id,
+                pk=stable_id,
+                users=[UserLike(pk=title, id=title, username=title)],
+                title=title,
+                source_index=row_idx,
+            )
+            client._thread_cache[stable_id] = thread
+            client._thread_cache_meta[stable_id] = {
+                "title": title,
+                "idx": row_idx,
+                "selector": selected_selector,
+            }
+            seen_thread_ids.add(stable_id)
+            break
+
+        if thread is None:
+            moved = client._scroll_panel_down(inbox_panel)
+            if not moved:
+                break
+            try:
+                page.wait_for_timeout(120)
+            except Exception:
+                pass
+            continue
+
+        processed_threads += 1
+        idx = processed_threads
         time_str = datetime.now().strftime('%H:%M')
         print(style_text(f"Cuenta @{user} | Thread {idx}/{total_threads}", color=Fore.CYAN, bold=True))
 
         # Paso 4/5: CLICK THREAD REAL + VALIDACIÓN (Ocurre dentro de get_messages)
+        pre_open_key = _get_conversation_key(user, str(thread.id))
+        print(
+            style_text(
+                f"[TRACE_ID PRE_OPEN] id={thread.id} pk={getattr(thread, 'pk', None)} title={getattr(thread, 'title', '')} source_index={getattr(thread, 'source_index', None)} url={getattr(page, 'url', '')} key={pre_open_key}",
+                color=Fore.WHITE,
+            )
+        )
         messages = client.get_messages(thread, amount=10)
 
         if not messages:
@@ -5029,6 +5065,15 @@ def _process_inbox(
 
         thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
+        msg_fingerprint = ", ".join(
+            f"{getattr(m, 'id', '')}@{getattr(m, 'timestamp', '')}" for m in messages[:2]
+        )
+        print(
+            style_text(
+                f"[TRACE_ID PRE_SNAPSHOT] id={thread.id} pk={getattr(thread, 'pk', None)} key={_get_conversation_key(user, thread_id)} msg_count={len(messages)} sample={msg_fingerprint}",
+                color=Fore.WHITE,
+            )
+        )
 
         # Paso 6/7: CAPTURAR + PERSISTIR EN MEMORIA (OBLIGATORIO)
         msgs_snapshot = [
@@ -5288,6 +5333,7 @@ def _process_inbox(
         client.return_to_inbox()
 
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
+    print(style_text(f"TRACE_CYCLE AFTER_SCAN user=@{user} now={time.time()} stop_event={STOP_EVENT.is_set()}", color=Fore.WHITE))
 
 def _print_bot_summary(stats: BotStats) -> None:
     def _format_elapsed(seconds: float) -> str:
@@ -5433,6 +5479,7 @@ def _activate_bot() -> None:
 
                     try:
                         if not followup_only or allowed_thread_ids:
+                            print(style_text(f"TRACE_CYCLE ENTER _process_inbox user=@{user} ts={time.time()}", color=Fore.WHITE))
                             _process_inbox(
                                 client,
                                 user,
@@ -5446,7 +5493,10 @@ def _activate_bot() -> None:
                                 allowed_thread_ids=allowed_thread_ids if followup_only else None,
                                 threads_limit=threads_limit,
                             )
+                            print(style_text(f"TRACE_CYCLE EXIT _process_inbox user=@{user} ts={time.time()}", color=Fore.WHITE))
                         if not STOP_EVENT.is_set():
+                            followup_start_ts = time.time()
+                            print(style_text(f"TRACE_FU ENTER followups user=@{user} ts={followup_start_ts}", color=Fore.WHITE))
                             _process_followups(
                                 client,
                                 user,
@@ -5458,6 +5508,8 @@ def _activate_bot() -> None:
                                 followup_schedule_hours=followup_schedule_hours,
                                 stats=stats,
                             )
+                            followup_end_ts = time.time()
+                            print(style_text(f"TRACE_FU EXIT followups user=@{user} ts={followup_end_ts} duration_s={round(followup_end_ts - followup_start_ts, 3)}", color=Fore.WHITE))
                     except KeyboardInterrupt:
                         raise
                     except Exception as exc:  # pragma: no cover - depende de SDK/insta
@@ -5727,14 +5779,17 @@ def _process_followups_extended(
     stats: Optional[BotStats] = None,
 ) -> None:
     # Implementaci�n extendida de seguimientos con memoria persistente
+    print(style_text(f"TRACE_FU START _process_followups_extended accounts=@{user} followup_only=n/a ts={_time_for_state.time()}", color=Fore.WHITE))
     alias, entry = _followup_enabled_entry_for(user)
     if not alias or not entry or not entry.get("enabled"):
         if not _FORCE_ALWAYS_FOLLOWUP:
+            print(style_text(f"TRACE_FU RETURN reason=followups_disabled user=@{user} ts={_time_for_state.time()}", color=Fore.WHITE))
             return
         alias = alias or ACTIVE_ALIAS or user
         entry = _get_followup_entry(alias) if alias else {}
     prompt_text = str(entry.get("prompt") or _DEFAULT_FOLLOWUP_PROMPT)
     if not prompt_text.strip():
+        print(style_text(f"TRACE_FU RETURN reason=empty_prompt user=@{user} ts={_time_for_state.time()}", color=Fore.WHITE))
         return
 
     conv_state = _load_conversation_state()
@@ -5759,13 +5814,34 @@ def _process_followups_extended(
             exc,
             exc_info=False,
         )
+        print(style_text(f"TRACE_FU RETURN reason=list_threads_error user=@{user} ts={_time_for_state.time()} err={exc}", color=Fore.WHITE))
         return
+    fu_candidates = len(threads) if isinstance(threads, list) else 0
+    fu_processed = 0
+    fu_sent = 0
+    fu_last_heartbeat = _time_for_state.time()
 
     for thread in threads:
         if STOP_EVENT.is_set():
             break
+        fu_processed += 1
+        now_hb_ts = _time_for_state.time()
+        if fu_processed % 10 == 0 or (now_hb_ts - fu_last_heartbeat) >= 60:
+            print(style_text(f"TRACE_FU HEARTBEAT processed={fu_processed} skipped={max(0, fu_processed - fu_sent)} candidates={fu_candidates} ts={now_hb_ts}", color=Fore.WHITE))
+            fu_last_heartbeat = now_hb_ts
         thread_id = getattr(thread, "id", None)
         if not thread_id:
+            _append_message_log(
+                {
+                    "action": "followup_pre_skip",
+                    "reason": "pre_skip_no_thread_id",
+                    "account": user,
+                    "thread_id": str(thread_id or ""),
+                    "unread_int": None,
+                    "recipient_id": None,
+                    "loop_index": fu_processed,
+                }
+            )
             continue
         unread_count = getattr(thread, "unread_count", None)
         try:
@@ -5773,6 +5849,17 @@ def _process_followups_extended(
         except Exception:
             unread_int = 0
         if unread_int > 0:
+            _append_message_log(
+                {
+                    "action": "followup_pre_skip",
+                    "reason": "pre_skip_unread_thread",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "unread_int": unread_int,
+                    "recipient_id": None,
+                    "loop_index": fu_processed,
+                }
+            )
             continue
 
         participants = getattr(thread, "users", None)
@@ -5787,6 +5874,17 @@ def _process_followups_extended(
                     recipient_username = getattr(participant, "username", pk)
                     break
         if not recipient_id:
+            _append_message_log(
+                {
+                    "action": "followup_pre_skip",
+                    "reason": "pre_skip_no_recipient",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "unread_int": unread_int,
+                    "recipient_id": recipient_id,
+                    "loop_index": fu_processed,
+                }
+            )
             continue
 
         try:
@@ -5799,6 +5897,7 @@ def _process_followups_extended(
                 exc_info=False,
             )
             continue
+        thread_id = str(getattr(thread, "id", "") or thread_id or "")
         if not messages:
             continue
 
@@ -5811,10 +5910,6 @@ def _process_followups_extended(
         if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
             continue
 
-        last_message = messages[0]
-        if not _same_user_id(getattr(last_message, 'user_id', ''), client.user_id):
-            continue
-
         def _msg_ts(msg: object) -> float | None:
             ts_obj = getattr(msg, "timestamp", None)
             if isinstance(ts_obj, _datetime_for_state):
@@ -5824,15 +5919,64 @@ def _process_followups_extended(
             except Exception:
                 return None
 
-        last_outbound_ts = _msg_ts(last_message)
-        if last_outbound_ts and now_ts - last_outbound_ts < 60:
+        outbound_ts_values = []
+        inbound_ts_values = []
+        all_ts_values = []
+        for msg in messages:
+            msg_ts = _msg_ts(msg)
+            if msg_ts is None:
+                continue
+            all_ts_values.append(msg_ts)
+            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id):
+                outbound_ts_values.append(msg_ts)
+            else:
+                inbound_ts_values.append(msg_ts)
+
+        if not outbound_ts_values:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "skip_no_outbound_messages",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                }
+            )
             continue
-        outbound_ts_values = [
-            _msg_ts(msg)
-            for msg in messages
-            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and _msg_ts(msg) is not None
-        ]
-        first_outbound_ts = min(outbound_ts_values) if outbound_ts_values else None
+
+        last_outbound_ts = max(outbound_ts_values)
+        last_inbound_ts = max(inbound_ts_values) if inbound_ts_values else None
+        if last_inbound_ts and last_inbound_ts > last_outbound_ts:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "skip_latest_is_inbound_or_lead_replied",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                }
+            )
+            continue
+
+        fallback_suspected = False
+        has_much_older_ts = any((now_ts - ts) > 600 for ts in all_ts_values)
+        if abs(now_ts - last_outbound_ts) < 120 and has_much_older_ts:
+            fallback_suspected = True
+            older_outbound_ts = [ts for ts in outbound_ts_values if ts < (now_ts - 120)]
+            if older_outbound_ts:
+                last_outbound_ts = max(older_outbound_ts)
+        if last_outbound_ts and now_ts - last_outbound_ts < 60:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "skip_last_outbound_lt_60s_or_fallback_suspected",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
+                    "fallback_suspected": fallback_suspected,
+                }
+            )
+            continue
 
         inbound_messages = [
             msg
@@ -5840,8 +5984,6 @@ def _process_followups_extended(
             if not _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and isinstance(getattr(msg, "text", None), str)
         ]
         has_inbound = bool(inbound_messages)
-        last_inbound = inbound_messages[0] if has_inbound else None
-        last_inbound_ts = _msg_ts(last_inbound) if last_inbound else None
         if has_inbound and last_inbound_ts and now_ts - last_inbound_ts < 60:
             continue
 
@@ -6159,6 +6301,7 @@ def _process_followups_extended(
                 "message_text": message_text,
             }
         )
+        fu_sent += 1
         conv_record["seguimiento_actual"] = stage_int
         conv_record["cycle_followup_count"] = stage_int
         conv_record["last_sent_ts"] = now_ts

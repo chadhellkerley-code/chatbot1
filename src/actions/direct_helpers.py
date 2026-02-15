@@ -156,6 +156,25 @@ DM_TEXT_BLOCK_PATTERNS = [
     re.compile(r"confirma que eres t[uú]", re.IGNORECASE),
     re.compile(r"restringimos cierta actividad", re.IGNORECASE),
 ]
+
+# Señales explícitas de que NO se puede enviar DM al destinatario.
+# Importante: NO confundirse con "cuenta privada"; muchas cuentas privadas
+# igualmente aceptan solicitudes de mensaje via /direct/new.
+NO_DM_TEXT_PATTERNS = [
+    # EN
+    re.compile(r"you\s+can('|’|’)t\s+message\s+this\s+account", re.IGNORECASE),
+    re.compile(r"can('|’|’)t\s+message\s+this\s+account", re.IGNORECASE),
+    re.compile(r"can('|’|’)t\s+receive\s+your\s+message", re.IGNORECASE),
+    re.compile(r"this\s+account\s+can('|’|’)t\s+receive\s+your\s+message", re.IGNORECASE),
+    re.compile(r"only\s+people\s+you\s+follow\s+can\s+message\s+you", re.IGNORECASE),
+    # ES
+    re.compile(r"no\s+puedes\s+enviar\s+mensajes?\s+a\s+esta\s+cuenta", re.IGNORECASE),
+    re.compile(r"no\s+puedes\s+enviar\s+mensajes?\s+a\s+este\s+usuario", re.IGNORECASE),
+    re.compile(r"esta\s+cuenta\s+no\s+permite\s+mensajes?", re.IGNORECASE),
+    re.compile(r"no\s+puede\s+recibir\s+tu\s+mensaje", re.IGNORECASE),
+    re.compile(r"no\s+puede\s+recibir\s+tus\s+mensajes?", re.IGNORECASE),
+    re.compile(r"solo\s+las\s+personas?\s+que\s+sigues\s+pueden\s+enviarte\s+mensajes?", re.IGNORECASE),
+]
 DM_BLOCKING_URL_TOKENS = (
     "accounts/login",
     "/challenge/",
@@ -306,7 +325,19 @@ async def detect_dm_availability(page: Page) -> DmAvailability:
         if await _has_blocking_signals(page):
             return DmAvailability.UNKNOWN
 
-    return DmAvailability.NO_DM
+    # No encontrar el botón en el header NO es suficiente para asegurar NO_DM.
+    # IG cambia frecuentemente la UI (A/B tests, icon-only actions, overflow menus).
+    try:
+        body_text = await page.locator("body").inner_text()
+    except Exception:
+        body_text = ""
+    for pattern in NO_DM_TEXT_PATTERNS:
+        try:
+            if body_text and pattern.search(body_text):
+                return DmAvailability.NO_DM
+        except Exception:
+            continue
+    return DmAvailability.UNKNOWN
 
 
 def _selector_candidates(value: list[str] | str) -> list[str]:

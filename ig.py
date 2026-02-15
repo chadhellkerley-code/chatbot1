@@ -11,6 +11,7 @@ import queue
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, time as dt_time, timezone
@@ -101,6 +102,26 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _tune_concurrency(requested: int, available_accounts: int) -> int:
+    hard_cap = max(1, _env_int("IG_MAX_CONCURRENCY_HARD", 75))
+    tuned = max(1, min(int(requested or 1), max(1, available_accounts), hard_cap))
+    if tuned != requested:
+        warn(
+            f"Concurrencia ajustada a {tuned} (solicitada={requested}, cuentas={available_accounts}, tope={hard_cap})."
+        )
+    return tuned
 
 
 def _resolve_overnight(override: Optional[bool]) -> bool:
@@ -514,9 +535,7 @@ def _ensure_session(username: str) -> bool:
 def _has_playwright_session(username: str, *, account: Optional[Dict] = None) -> bool:
     if not username:
         return False
-    proxy = None
-    if account:
-        proxy = account.get("proxy")
+    proxy = _proxy_payload_from_account(account or {})
     try:
         ok, reason = check_session(username, proxy=proxy, headless=True)
     except Exception as exc:
@@ -550,27 +569,11 @@ def _resolve_account_password(account: Dict) -> str:
 
 
 def _proxy_payload_from_account(account: Dict) -> Optional[Dict]:
-    proxy = account.get("proxy")
-    if proxy:
-        return proxy
-    proxy_url = (account.get("proxy_url") or "").strip()
-    if not proxy_url:
+    try:
+        from src.proxy_payload import proxy_from_account
+    except Exception:
         return None
-    payload = {"url": proxy_url}
-    proxy_user = (account.get("proxy_user") or "").strip()
-    proxy_pass = (account.get("proxy_pass") or "").strip()
-    if proxy_user:
-        payload["username"] = proxy_user
-    if proxy_pass:
-        payload["password"] = proxy_pass
-    try:
-        from src.auth.onboarding import build_proxy as _build_proxy  # type: ignore
-    except Exception:
-        return payload
-    try:
-        return _build_proxy(payload)
-    except Exception:
-        return payload
+    return proxy_from_account(account)
 
 
 def _enqueue_background_send(
@@ -945,7 +948,9 @@ _RETRYABLE_SEND_HINTS = (
     "execution context was destroyed",
 )
 
-NO_DM_SKIP_REASON = "NO_DM_BUTTON"
+SKIPPED_NO_DM_REASON = "SKIPPED_NO_DM"
+LEGACY_NO_DM_REASON = "NO_DM_BUTTON"
+NO_DM_SKIP_REASON = SKIPPED_NO_DM_REASON
 NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
 NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
 SENT_UNVERIFIED_REASON = "SENT_UNVERIFIED"
@@ -1056,7 +1061,7 @@ def _handle_event(
 ) -> Optional[str]:
     username = event.username
     skip_reason = (event.reason_code or "").strip().upper()
-    if not event.success and skip_reason == NO_DM_SKIP_REASON:
+    if not event.success and skip_reason in {NO_DM_SKIP_REASON, LEGACY_NO_DM_REASON}:
         account_error_streaks.pop(username, None)
         detail = event.detail or NO_DM_SKIP_DETAIL
         if no_dm_by_account is not None:
@@ -1546,6 +1551,19 @@ def menu_send_rotating(
     accounts = _build_accounts_for_alias(alias, overnight=overnight_mode)
     if not accounts:
         return
+    concurr = _tune_concurrency(concurr, len(accounts))
+    proxy_ready_accounts = [acct for acct in accounts if _proxy_payload_from_account(acct)]
+    if concurr >= 20 and len(proxy_ready_accounts) < concurr:
+        adjusted = max(1, min(concurr, len(proxy_ready_accounts)))
+        warn(
+            "Concurrencia alta sin proxies suficientes. "
+            f"Se ajusta concurrencia a {adjusted} (cuentas con proxy={len(proxy_ready_accounts)})."
+        )
+        concurr = adjusted
+    if concurr >= 20 and delay_min < 20:
+        warn("Concurrencia alta detectada: delay minimo ajustado a 20s para reducir riesgo de bloqueo.")
+        delay_min = 20
+        delay_max = max(delay_max, delay_min)
 
     sender = HumanInstagramSender(headless=headless_mode)
 
@@ -1597,6 +1615,26 @@ def menu_send_rotating(
     error_tracker: Dict[str, Dict[str, object]] = {}
     account_error_streaks: Dict[str, int] = defaultdict(int)
     paused_runtime: set[str] = {name.lower() for name in paused_accounts_today()}
+    ramp_enabled = concurr > 5 and not _env_flag("IG_DISABLE_CONCURRENCY_RAMP")
+    ramp_start_default = min(concurr, max(5, min(10, concurr)))
+    active_limit = concurr if not ramp_enabled else max(
+        1,
+        min(concurr, _env_int("IG_CONCURRENCY_RAMP_START", ramp_start_default)),
+    )
+    ramp_step = max(1, _env_int("IG_CONCURRENCY_RAMP_STEP", 5))
+    ramp_every = max(5, _env_int("IG_CONCURRENCY_RAMP_EVERY", 20))
+    ramp_fail_threshold = min(0.90, max(0.01, _env_float("IG_CONCURRENCY_RAMP_FAIL_RATE", 0.18)))
+    inflight_lock = threading.Lock()
+    inflight = 0
+    ramp_seen = 0
+    ramp_failed = 0
+    ramp_ignored_codes = {
+        NO_DM_SKIP_REASON,
+        LEGACY_NO_DM_REASON,
+        "template_empty",
+        "template_selected_empty",
+        "send_cancelled",
+    }
 
     global _CAMPAIGN_UI
     _CAMPAIGN_UI = CampaignUI(
@@ -1629,8 +1667,59 @@ def menu_send_rotating(
             stop_reason = reason
         request_stop(reason)
 
+    def _on_event_processed(event: SendEvent) -> None:
+        nonlocal inflight, active_limit, ramp_seen, ramp_failed
+        with inflight_lock:
+            if inflight > 0:
+                inflight -= 1
+
+        if not ramp_enabled:
+            return
+        if event.reason_code in ramp_ignored_codes:
+            return
+        ramp_seen += 1
+        if not event.success:
+            ramp_failed += 1
+        if ramp_seen < ramp_every:
+            return
+
+        fail_rate = (ramp_failed / ramp_seen) if ramp_seen else 0.0
+        if fail_rate <= ramp_fail_threshold and active_limit < concurr:
+            new_limit = min(concurr, active_limit + ramp_step)
+            if new_limit != active_limit:
+                logger.info(
+                    "Ramp-up concurrencia: %d -> %d (ventana=%d, fail_rate=%.2f).",
+                    active_limit,
+                    new_limit,
+                    ramp_seen,
+                    fail_rate,
+                )
+                active_limit = new_limit
+        elif fail_rate > ramp_fail_threshold and active_limit > 1:
+            new_limit = max(1, active_limit - ramp_step)
+            if new_limit != active_limit:
+                logger.warning(
+                    "Freno automatico de concurrencia: %d -> %d (ventana=%d, fail_rate=%.2f).",
+                    active_limit,
+                    new_limit,
+                    ramp_seen,
+                    fail_rate,
+                )
+                active_limit = new_limit
+        ramp_seen = 0
+        ramp_failed = 0
+
     listener = start_q_listener("Presioná Q para detener la campaña.", logger)
-    threads: list[threading.Thread] = []
+    executor = ThreadPoolExecutor(max_workers=concurr, thread_name_prefix="ig-send")
+    if ramp_enabled:
+        logger.info(
+            "Concurrencia dinámica activa: inicio=%d objetivo=%d paso=%d ventana=%d fail_rate_max=%.2f",
+            active_limit,
+            concurr,
+            ramp_step,
+            ramp_every,
+            ramp_fail_threshold,
+        )
 
     logger.info(
         "Iniciando campaña con %d cuentas activas y %d leads pendientes. Límite/cuenta: %d, concurrencia: %d, delay: %s-%ss",
@@ -1723,7 +1812,7 @@ def menu_send_rotating(
                     text=message,
                     base_delay_seconds=delay_min_target,
                     jitter_seconds=jitter_window,
-                    proxy=account.get("proxy"),
+                    proxy=_proxy_payload_from_account(account),
                     return_detail=True,
                     return_payload=True,
                 )
@@ -1737,7 +1826,7 @@ def menu_send_rotating(
                 else:
                     success_flag, info = send_result, None
                 skip_reason = (payload.get("skip_reason") or info or "").strip().upper()
-                if skip_reason == NO_DM_SKIP_REASON:
+                if skip_reason in {NO_DM_SKIP_REASON, LEGACY_NO_DM_REASON}:
                     success_flag = False
                     detail = NO_DM_SKIP_DETAIL
                     reason_code = NO_DM_SKIP_REASON
@@ -1944,6 +2033,7 @@ def menu_send_rotating(
                         overnight=overnight_mode,
                         request_stop_fn=_request_stop,
                     )
+                    _on_event_processed(event)
                     if action == "stop":
                         break
             except queue.Empty:
@@ -1967,6 +2057,12 @@ def menu_send_rotating(
                 acquired = semaphore.acquire(timeout=0.1)
                 if not acquired:
                     account_lock.release()
+                    continue
+                with inflight_lock:
+                    over_limit = inflight >= active_limit
+                if over_limit:
+                    account_lock.release()
+                    semaphore.release()
                     continue
 
                 lead = users.popleft()
@@ -2074,20 +2170,28 @@ def menu_send_rotating(
                 emit_log(username, lead, "escribiendo", "iniciando envio", None)
                 remaining[username] -= 1
                 live_table.begin(username, lead)
-                thread = threading.Thread(
-                    target=_worker,
-                    args=(account, lead, message, account_lock),
-                    kwargs={
-                        "index": send_index,
-                        "total": total_target,
-                        "template_id": template_id,
-                        "template_name": template_name,
-                        "selected_variant": selected_variant,
-                    },
-                    daemon=True,
-                )
-                thread.start()
-                threads.append(thread)
+                with inflight_lock:
+                    inflight += 1
+                try:
+                    executor.submit(
+                        _worker,
+                        account,
+                        lead,
+                        message,
+                        account_lock,
+                        index=send_index,
+                        total=total_target,
+                        template_id=template_id,
+                        template_name=template_name,
+                        selected_variant=selected_variant,
+                    )
+                except Exception:
+                    with inflight_lock:
+                        if inflight > 0:
+                            inflight -= 1
+                    account_lock.release()
+                    semaphore.release()
+                    raise
 
                 if STOP_EVENT.is_set():
                     break
@@ -2126,6 +2230,7 @@ def menu_send_rotating(
                     overnight=overnight_mode,
                     request_stop_fn=_request_stop,
                 )
+                _on_event_processed(event)
             except queue.Empty:
                 break
         _render_progress(
@@ -2145,8 +2250,7 @@ def menu_send_rotating(
         elif not any(v > 0 for v in remaining.values()):
             _request_stop("se alcanzó el límite de envíos por cuenta")
 
-        for t in threads:
-            t.join()
+        executor.shutdown(wait=True, cancel_futures=False)
         if listener:
             listener.join(timeout=0.1)
 
@@ -2172,6 +2276,7 @@ def menu_send_rotating(
                 overnight=overnight_mode,
                 request_stop_fn=_request_stop,
             )
+            _on_event_processed(event)
 
         _reset_live_counters()
         _render_progress(

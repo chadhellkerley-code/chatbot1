@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import csv
 import logging
 import random
@@ -1010,18 +1012,325 @@ def _run_reel_flow(alias: str) -> None:
     press_enter()
 
 
+@dataclass
+class ReelsPlaywrightSummary:
+    username: str
+    viewed: int = 0
+    liked: int = 0
+    errors: int = 0
+    messages: List[str] = field(default_factory=list)
+
+
+def _run_async(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("Se requiere contexto sync para usar Playwright en este menu.")
+
+
+def _select_accounts_playwright(alias: str) -> List[dict]:
+    accounts = [acct for acct in list_all() if acct.get("alias") == alias and acct.get("active")]
+    if not accounts:
+        warn("No hay cuentas activas en este alias.")
+        press_enter()
+        return []
+
+    base_profiles_guess = Path(__file__).resolve().parents[1] / "profiles"
+    print("Seleccioná cuentas activas (coma separada, * para todas):")
+    for idx, acct in enumerate(accounts, start=1):
+        username = (acct.get("username") or "").strip().lstrip("@")
+        sess = "[pw]" if (base_profiles_guess / username / "storage_state.json").exists() else "[sin pw]"
+        proxy_flag = " [proxy]" if acct.get("proxy_url") else ""
+        low_flag = " [bajo perfil]" if acct.get("low_profile") else ""
+        print(f" {idx}) @{username} {sess}{proxy_flag}{low_flag}")
+        if low_flag and acct.get("low_profile_reason"):
+            print(f"    ↳ {acct['low_profile_reason']}")
+
+    raw = ask("Selección: ").strip() or "*"
+    chosen: List[dict] = []
+    if raw == "*":
+        chosen = accounts
+    else:
+        selected: set[str] = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if part.isdigit():
+                pos = int(part)
+                if 1 <= pos <= len(accounts):
+                    selected.add(str(accounts[pos - 1].get("username") or "").strip().lstrip("@").lower())
+            else:
+                selected.add(part.lstrip("@").strip().lower())
+        for acct in accounts:
+            username = str(acct.get("username") or "").strip().lstrip("@").lower()
+            if username in selected:
+                chosen.append(acct)
+
+    if not chosen:
+        warn("No se encontraron cuentas con esos datos.")
+        press_enter()
+    return chosen
+
+
+async def _sleep_with_stop_async(seconds: float) -> bool:
+    deadline = time.monotonic() + float(max(0.0, seconds))
+    while True:
+        if STOP_EVENT.is_set():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        await asyncio.sleep(min(0.5, remaining))
+
+
+async def _dismiss_popups_async(page) -> None:
+    candidates = [
+        'button:has-text("Not now")',
+        'button:has-text("Not Now")',
+        'button:has-text("Ahora no")',
+        'button:has-text("Cancel")',
+        'button:has-text("Cancelar")',
+        'button:has-text("Remind me later")',
+        'button:has-text("Más tarde")',
+    ]
+    for sel in candidates:
+        try:
+            btn = page.locator(sel).first
+            if await btn.count() > 0:
+                await btn.click()
+                await asyncio.sleep(random.uniform(0.2, 0.6))
+        except Exception:
+            continue
+
+
+async def _try_like_current_reel(page) -> bool:
+    selectors = (
+        "main button:has(svg[aria-label='Like'])",
+        "main button:has(svg[aria-label='Me gusta'])",
+        "main div[role='button']:has(svg[aria-label='Like'])",
+        "main div[role='button']:has(svg[aria-label='Me gusta'])",
+    )
+    for sel in selectors:
+        try:
+            btn = page.locator(sel).first
+            if await btn.count() == 0:
+                continue
+            await btn.click()
+            await asyncio.sleep(random.uniform(0.2, 0.6))
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _next_reel(page) -> None:
+    with contextlib.suppress(Exception):
+        await page.keyboard.press("ArrowDown")
+        await asyncio.sleep(random.uniform(0.8, 1.6))
+        return
+    with contextlib.suppress(Exception):
+        await page.keyboard.press("PageDown")
+        await asyncio.sleep(random.uniform(0.8, 1.6))
+        return
+    with contextlib.suppress(Exception):
+        await page.mouse.wheel(0, random.randint(900, 1400))
+        await asyncio.sleep(random.uniform(0.8, 1.6))
+
+
+async def _run_reels_for_account(
+    *,
+    page,
+    summary: ReelsPlaywrightSummary,
+    duration_s: int,
+    likes_target: int,
+    view_min_s: int = 25,
+    view_max_s: int = 50,
+) -> None:
+    start = time.monotonic()
+    end = start + max(1, int(duration_s))
+
+    while time.monotonic() < end and not STOP_EVENT.is_set():
+        remaining = end - time.monotonic()
+        if remaining < view_min_s:
+            break
+
+        watch_max = min(view_max_s, int(remaining))
+        watch_s = random.randint(view_min_s, watch_max) if watch_max >= view_min_s else int(remaining)
+        summary.viewed += 1
+
+        await _dismiss_popups_async(page)
+
+        # Like en un momento aleatorio dentro del reel (si falta completar).
+        if likes_target > 0 and summary.liked < likes_target:
+            like_delay = min(random.uniform(3.0, 10.0), max(0.5, watch_s - 1.0))
+            if await _sleep_with_stop_async(like_delay):
+                with contextlib.suppress(Exception):
+                    if await _try_like_current_reel(page):
+                        summary.liked += 1
+
+            remaining_watch = max(0.0, watch_s - like_delay)
+        else:
+            remaining_watch = float(watch_s)
+
+        await _sleep_with_stop_async(remaining_watch)
+        if STOP_EVENT.is_set() or time.monotonic() >= end:
+            break
+
+        # Pequeña pausa y pasar al siguiente reel.
+        await _sleep_with_stop_async(
+            min(random.uniform(0.4, 1.2), max(0.0, end - time.monotonic()))
+        )
+        if STOP_EVENT.is_set() or time.monotonic() >= end:
+            break
+        await _next_reel(page)
+        await _sleep_with_stop_async(
+            min(random.uniform(1.2, 2.4), max(0.0, end - time.monotonic()))
+        )
+
+
+def _run_reels_playwright_flow(alias: str) -> None:
+    enable_quiet_mode()
+    banner()
+    print(style_text("🎯 Interacciones - Ver Reels & Like (Playwright)", color=Fore.CYAN, bold=True))
+    print(full_line())
+
+    chosen_accounts = _select_accounts_playwright(alias)
+    if not chosen_accounts:
+        return
+
+    minutes = ask_int("Tiempo de navegación por cuenta (min): ", min_value=1, default=10)
+    likes_target = ask_int("Cantidad de likes por cuenta: ", min_value=0, default=10)
+    print("Cada reel se verá entre 25s y 50s (random).")
+
+    ensure_logging(quiet=SETTINGS.quiet, log_dir=SETTINGS.log_dir, log_file=SETTINGS.log_file)
+    reset_stop_event()
+    listener = start_q_listener("Presioná Q y Enter para detener la acción.", logger)
+    start_time = time.perf_counter()
+
+    async def _runner():
+        try:
+            from src.auth.onboarding import build_proxy
+            from src.playwright_service import BASE_PROFILES, PlaywrightService, get_page
+        except Exception as exc:
+            raise RuntimeError(
+                f"Playwright no está disponible: {exc}. Instalá: pip install playwright y luego playwright install"
+            ) from exc
+
+        base_profiles = Path(BASE_PROFILES)
+        svc = PlaywrightService(headless=True, base_profiles=base_profiles)
+        await svc.start()
+
+        summaries: List[ReelsPlaywrightSummary] = []
+        try:
+            for acct in chosen_accounts:
+                if STOP_EVENT.is_set():
+                    break
+                username = (acct.get("username") or "").strip().lstrip("@")
+                summary = ReelsPlaywrightSummary(username=username)
+                summaries.append(summary)
+
+                storage_state = base_profiles / username / "storage_state.json"
+                if not storage_state.exists():
+                    summary.errors += 1
+                    summary.messages.append("Falta profiles/<username>/storage_state.json (hacé login Playwright en el menú).")
+                    continue
+
+                proxy_payload = None
+                with contextlib.suppress(Exception):
+                    proxy_payload = build_proxy(
+                        {
+                            "url": acct.get("proxy_url"),
+                            "username": acct.get("proxy_user"),
+                            "password": acct.get("proxy_pass"),
+                        }
+                    )
+
+                ctx = None
+                try:
+                    ctx = await svc.new_context_for_account(
+                        profile_dir=storage_state.parent,
+                        storage_state=str(storage_state),
+                        proxy=proxy_payload,
+                    )
+                    page = await get_page(ctx)
+                    try:
+                        await page.goto(
+                            "https://www.instagram.com/reels/?hl=en",
+                            wait_until="domcontentloaded",
+                            timeout=60_000,
+                        )
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            await page.goto("https://www.instagram.com/reels/")
+
+                    url = ""
+                    with contextlib.suppress(Exception):
+                        url = (page.url or "").lower()
+                    if "accounts/login" in url or "/challenge/" in url or "/checkpoint/" in url:
+                        raise RuntimeError("Sesión Playwright expirada o en checkpoint. Re-logueá la cuenta.")
+
+                    await _run_reels_for_account(
+                        page=page,
+                        summary=summary,
+                        duration_s=minutes * 60,
+                        likes_target=likes_target,
+                    )
+
+                    with contextlib.suppress(Exception):
+                        await svc.save_storage_state(ctx, storage_state)
+                except Exception as exc:
+                    summary.errors += 1
+                    summary.messages.append(_short_message(exc, limit=160))
+                finally:
+                    if ctx is not None:
+                        with contextlib.suppress(Exception):
+                            await ctx.close()
+        finally:
+            with contextlib.suppress(Exception):
+                await svc.close()
+
+        return summaries
+
+    summaries: List[ReelsPlaywrightSummary] = []
+    try:
+        summaries = _run_async(_runner()) or []
+    except Exception as exc:
+        warn(str(exc))
+    finally:
+        request_stop("reels finalizados")
+        listener.join(timeout=0.2)
+
+    elapsed = time.perf_counter() - start_time
+    print(full_line(color=Fore.MAGENTA))
+    print(style_text("=== RESUMEN REELS (PLAYWRIGHT) ===", color=Fore.YELLOW, bold=True))
+    print(style_text(f"Tiempo total: {int(elapsed // 60):02d}:{int(elapsed % 60):02d}", color=Fore.WHITE, bold=True))
+    for summary in summaries:
+        color = Fore.GREEN if summary.errors == 0 else Fore.YELLOW
+        print(
+            style_text(
+                f"@{summary.username}: vistos={summary.viewed} likes={summary.liked} errores={summary.errors}",
+                color=color,
+                bold=True,
+            )
+        )
+        for msg in summary.messages:
+            print(f"  - {msg}")
+    print(full_line(color=Fore.MAGENTA))
+    ok("Proceso finalizado.")
+    press_enter()
+
+
 def run_from_menu(alias: str) -> None:
     while True:
         banner()
-        print(style_text("🎯 Interacciones (Comentar / Ver & Like Reels)", color=Fore.CYAN, bold=True))
+        print(style_text("🎯 Interacciones (Ver & Like Reels)", color=Fore.CYAN, bold=True))
         print(full_line())
-        print("1) Comentar (historias / posts / reels)")
-        print("2) Ver & Like Reels")
-        print("3) Volver")
-        option = ask("Opción: ").strip()
+        print("1) Ver Reels + Like (Playwright, segundo plano)")
+        print("2) Volver")
+        option = ask("Opción: ").strip() or "2"
         if option == "1":
-            _run_comment_flow(alias)
-        elif option == "2":
-            _run_reel_flow(alias)
-        else:
-            break
+            _run_reels_playwright_flow(alias)
+            continue
+        break

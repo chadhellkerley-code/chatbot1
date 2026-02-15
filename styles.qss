@@ -1,0 +1,368 @@
+QMainWindow {
+    background-color: #111827;
+    color: #d7deea;
+    font-family: "Segoe UI";
+    font-size: 13px;
+}
+
+QWidget {
+    color: #d7deea;
+}
+
+QStackedWidget {
+    background-color: #111827;
+}
+
+QStackedWidget > QWidget {
+    background-color: #111827;
+}
+
+QFrame#Sidebar {
+    background-color: #131c2b;
+    border-right: 1px solid #263244;
+}
+
+QScrollArea#SidebarScroll {
+    background-color: #131c2b;
+    border: none;
+}
+
+QWidget#SidebarScrollContent {
+    background-color: #131c2b;
+}
+
+QFrame#SidebarHeader {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QLabel#BrandHeaderMain {
+    color: #dce5f3;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+QLabel#BrandHeaderSub {
+    color: #9aa7b9;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+QLabel#ModeBadge {
+    background-color: #273246;
+    border: 1px solid #364763;
+    border-radius: 6px;
+    color: #bfc9d9;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 8px;
+}
+
+QWidget#SidebarMenuContainer {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QPushButton#SidebarMenuButton {
+    background-color: #1f2937;
+    border: 1px solid #34465f;
+    border-radius: 6px;
+    color: #d4deea;
+    text-align: left;
+    padding: 10px 11px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#SidebarMenuButton:hover {
+    background-color: #2a3443;
+    border-color: #3b4f6b;
+}
+
+QPushButton#SidebarMenuButton:pressed {
+    background-color: #232f40;
+}
+
+QPushButton#SidebarMenuButton[active="true"] {
+    background-color: #2563eb;
+    border-color: #2563eb;
+    color: #f2f6ff;
+}
+
+QFrame#StatusCard {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QLabel#StatusKey {
+    color: #95a4b8;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#StatusValue {
+    color: #dbe4f1;
+    font-size: 11px;
+}
+
+QLabel#PageTitle {
+    color: #e7edf8;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#MutedText {
+    color: #9aa8bc;
+    font-size: 12px;
+}
+
+QFrame#MetricCard {
+    background-color: #1f2937;
+    border: 1px solid #314055;
+    border-radius: 6px;
+}
+
+QFrame#MetricCard:hover {
+    border-color: #3a4e67;
+}
+
+QLabel#MetricLabel {
+    color: #96a5b8;
+    font-size: 12px;
+}
+
+QLabel#MetricValue {
+    color: #f0f5fd;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+QScrollArea#SubmenuScroll {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QWidget#SubmenuScrollContent {
+    background-color: #1f2937;
+}
+
+QPushButton#PrimaryButton {
+    background-color: #2563eb;
+    border: 1px solid #2563eb;
+    border-radius: 6px;
+    color: #f1f6ff;
+    font-weight: 700;
+    padding: 8px 12px;
+}
+
+QPushButton#PrimaryButton:hover {
+    background-color: #1f57d5;
+}
+
+QPushButton#PrimaryButton:pressed {
+    background-color: #1c4ebd;
+}
+
+QPushButton#SecondaryButton {
+    background-color: #273246;
+    border: 1px solid #3a4a63;
+    border-radius: 6px;
+    color: #d0d9e7;
+    padding: 8px 12px;
+}
+
+QPushButton#SecondaryButton:hover {
+    background-color: #2f3c53;
+}
+
+QPushButton#SecondaryButton:pressed {
+    background-color: #243146;
+}
+
+QPushButton#MenuOptionButton {
+    background-color: #263244;
+    border: 1px solid #3b4e69;
+    border-radius: 6px;
+    color: #dde6f4;
+    text-align: left;
+    padding: 14px 16px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QPushButton#MenuOptionButton:hover {
+    background-color: #2f3d53;
+}
+
+QPushButton#MenuOptionButton:pressed {
+    background-color: #253246;
+}
+
+QLineEdit#InputField {
+    background-color: #1f2937;
+    border: 1px solid #34465f;
+    border-radius: 6px;
+    color: #e8edf7;
+    padding: 9px 10px;
+    selection-background-color: #2563eb;
+}
+
+QFrame#LiveInputBar {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QLineEdit#LiveInputField {
+    background-color: #111827;
+    border: 1px solid #34465f;
+    border-radius: 6px;
+    color: #e8edf7;
+    padding: 8px 10px;
+    selection-background-color: #2563eb;
+}
+
+QLineEdit#LiveInputField:disabled {
+    color: #8a97aa;
+    border-color: #2f3d52;
+    background-color: #151e2d;
+}
+
+QFrame#LogPanel {
+    background-color: #121a28;
+    border: 1px solid #2c3a50;
+    border-radius: 6px;
+}
+
+QFrame#ExecCard {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QLabel#ExecTag {
+    background-color: #1f2937;
+    border: 1px solid #34465f;
+    border-radius: 6px;
+    color: #dbe4f1;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QFrame#ExecMetricCard {
+    background-color: #273246;
+    border: 1px solid #3a4a63;
+    border-radius: 6px;
+}
+
+QLabel[class="ExecMetricValue"] {
+    color: #f0f5fd;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QTableWidget#ExecInflightTable {
+    background-color: #111827;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+    color: #d7deea;
+    gridline-color: #2a3443;
+    selection-background-color: #111827;
+}
+
+QTableWidget#ExecInflightTable::item {
+    padding: 4px 6px;
+}
+
+QHeaderView::section {
+    background-color: #1f2937;
+    color: #d7deea;
+    border: 1px solid #2f3d52;
+    padding: 6px;
+    font-weight: 700;
+}
+
+QPlainTextEdit#ExecLogConsole {
+    background-color: #0d1420;
+    border: 1px solid #26354a;
+    border-radius: 6px;
+    color: #cbd5e4;
+    font-family: "Consolas";
+    font-size: 11px;
+    padding: 8px;
+    selection-background-color: #2d5dbb;
+}
+
+QToolButton#ToggleButton {
+    background-color: #263244;
+    border: 1px solid #3a4a63;
+    border-radius: 6px;
+    color: #cfd8e7;
+    padding: 5px 10px;
+}
+
+QToolButton#ToggleButton:hover {
+    background-color: #2e3d53;
+}
+
+QToolButton#ToggleButton:pressed {
+    background-color: #253346;
+}
+
+QPlainTextEdit#LogConsole {
+    background-color: #0d1420;
+    border: 1px solid #26354a;
+    border-radius: 6px;
+    color: #cbd5e4;
+    font-family: "Consolas";
+    font-size: 11px;
+    padding: 8px;
+    selection-background-color: #2d5dbb;
+}
+
+QPlainTextEdit#TerminalConsole {
+    background-color: #0d1420;
+    border: 1px solid #26354a;
+    border-radius: 6px;
+    color: #cbd5e4;
+    font-family: "Consolas";
+    font-size: 12px;
+    padding: 8px;
+    selection-background-color: #2d5dbb;
+}
+
+QScrollBar:vertical {
+    background: #1f2937;
+    width: 8px;
+    margin: 2px 0 2px 0;
+    border: none;
+}
+
+QScrollBar::handle:vertical {
+    background: #374151;
+    min-height: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #3f5571;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+    border: none;
+    background: none;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}

@@ -1,8 +1,11 @@
 """UI helpers for colored console output and live tables."""
 from __future__ import annotations
 
+import builtins
+import contextlib
 import os
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 import threading
@@ -19,6 +22,104 @@ except Exception:  # pragma: no cover - graceful fallback
         BRIGHT = ""
 
     Fore = Style = _Dummy()  # type: ignore
+
+
+_MOJIBAKE_MARKERS = ("Ã", "Â", "â", "ðŸ", "�")
+_ORIGINAL_PRINT = builtins.print
+_ORIGINAL_INPUT = builtins.input
+_CONSOLE_FIXES_INSTALLED = False
+
+
+def _mojibake_score(text: str) -> int:
+    return sum(text.count(token) for token in _MOJIBAKE_MARKERS)
+
+
+def _repair_mojibake(text: str) -> str:
+    if not text:
+        return text
+    score_before = _mojibake_score(text)
+    if score_before == 0:
+        return text
+
+    best = text
+    best_score = score_before
+    for source_encoding in ("latin1", "cp1252"):
+        try:
+            candidate = text.encode(source_encoding).decode("utf-8")
+        except Exception:
+            continue
+        candidate_score = _mojibake_score(candidate)
+        if candidate_score < best_score:
+            best = candidate
+            best_score = candidate_score
+    return best
+
+
+def _configure_stdio_utf8() -> None:
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        is_tty = False
+        with contextlib.suppress(Exception):
+            is_tty = bool(stream.isatty())
+        if not is_tty:
+            continue
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    if os.name != "nt":
+        return
+    stdout_tty = False
+    stdin_tty = False
+    with contextlib.suppress(Exception):
+        stdout_tty = bool(sys.stdout.isatty())
+    with contextlib.suppress(Exception):
+        stdin_tty = bool(sys.stdin.isatty())
+    if not stdout_tty and not stdin_tty:
+        return
+    with contextlib.suppress(Exception):
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        if stdout_tty:
+            kernel32.SetConsoleOutputCP(65001)
+        if stdin_tty:
+            kernel32.SetConsoleCP(65001)
+
+
+def _patched_print(*args, **kwargs):
+    fixed_args = tuple(_repair_mojibake(arg) if isinstance(arg, str) else arg for arg in args)
+    try:
+        return _ORIGINAL_PRINT(*fixed_args, **kwargs)
+    except OSError:
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        text = sep.join(str(item) for item in fixed_args) + end
+        fallback_stream = kwargs.get("file") or getattr(sys, "__stdout__", None)
+        if fallback_stream is not None:
+            with contextlib.suppress(Exception):
+                fallback_stream.write(text)
+                fallback_stream.flush()
+        return None
+
+
+def _patched_input(prompt: str = "") -> str:
+    if isinstance(prompt, str):
+        prompt = _repair_mojibake(prompt)
+    return _ORIGINAL_INPUT(prompt)
+
+
+def install_console_fixes() -> None:
+    global _CONSOLE_FIXES_INSTALLED
+    if _CONSOLE_FIXES_INSTALLED:
+        return
+    _configure_stdio_utf8()
+    builtins.print = _patched_print
+    builtins.input = _patched_input
+    _CONSOLE_FIXES_INSTALLED = True
+
+
+install_console_fixes()
 
 
 def supports_emojis_default() -> bool:

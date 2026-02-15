@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
 import logging
@@ -16,6 +17,7 @@ from queue import Empty, Queue
 from typing import List, Optional, Sequence
 
 from accounts import (
+    _open_playwright_manual_session,
     auto_login_with_saved_password,
     get_account,
     has_valid_session_settings,
@@ -565,119 +567,74 @@ def run_from_menu(alias: str) -> None:
     banner()
     print(style_text("📤 Subir contenidos (Historias / Post / Reels)", color=Fore.CYAN, bold=True))
     print(full_line())
-    usernames = _select_accounts(alias)
-    if not usernames:
-        return
 
-    ready = [user for user in usernames if _ensure_account_ready(user)]
-    if not ready:
-        warn("Ninguna cuenta tiene sesión válida.")
+    accounts = [acct for acct in list_all() if acct.get("alias") == alias and acct.get("active")]
+    if not accounts:
+        warn("No hay cuentas activas en este alias.")
         press_enter()
         return
 
-    print("Tipo de contenido:")
+    base_profiles = None
+    with contextlib.suppress(Exception):
+        from src.playwright_service import BASE_PROFILES as _BASE_PROFILES
+
+        base_profiles = Path(_BASE_PROFILES)
+    if base_profiles is None:
+        base_profiles = Path(__file__).resolve().parents[1] / "profiles"
+
+    print("Seleccioná 1 cuenta activa (número o username). Enter = volver.\n")
+    for idx, acct in enumerate(accounts, start=1):
+        username = (acct.get("username") or "").strip().lstrip("@")
+        sess = "[pw]" if (base_profiles / username / "storage_state.json").exists() else "[sin pw]"
+        proxy_flag = " [proxy]" if acct.get("proxy_url") else ""
+        low_flag = " [bajo perfil]" if acct.get("low_profile") else ""
+        print(f" {idx}) @{username} {sess}{proxy_flag}{low_flag}")
+        if low_flag and acct.get("low_profile_reason"):
+            print(f"    ↳ {acct['low_profile_reason']}")
+
+    raw = ask("\nCuenta: ").strip()
+    if not raw:
+        return
+
+    chosen: Optional[dict] = None
+    if raw.isdigit():
+        pos = int(raw)
+        if 1 <= pos <= len(accounts):
+            chosen = accounts[pos - 1]
+    else:
+        target = raw.lstrip("@").strip().lower()
+        for acct in accounts:
+            if str(acct.get("username") or "").strip().lower() == target:
+                chosen = acct
+                break
+
+    if not chosen:
+        warn("No se encontró la cuenta con esos datos.")
+        press_enter()
+        return
+
+    print("\nTipo de contenido (manual con Playwright):")
     print("1) Historia")
     print("2) Post (feed)")
     print("3) Reel")
+    kind_map = {
+        "1": ("Historia", "https://www.instagram.com/create/story/"),
+        "2": ("Post", "https://www.instagram.com/create/select/"),
+        "3": ("Reel", "https://www.instagram.com/reels/create/"),
+    }
     choice = ask("Opción: ").strip()
-    kind_map = {"1": "story", "2": "post", "3": "reel"}
-    kind = kind_map.get(choice)
-    if not kind:
+    kind_payload = kind_map.get(choice)
+    if not kind_payload:
         warn("Opción inválida.")
         press_enter()
         return
 
-    job = _prompt_publish_job(kind)
-    if not job:
-        press_enter()
-        return
+    kind_label, start_url = kind_payload
+    _open_playwright_manual_session(
+        chosen,
+        start_url=start_url,
+        action_label=f"Subir {kind_label} (manual)",
+    )
 
-    original_names = [path.name for path in job.media_paths]
-    validated_media: List[Path] = []
-    omitted: List[tuple[Path, str]] = []
-    job.media_info = {}
-    for media_path in job.media_paths:
-        result = prepare_media_for_upload(media_path, job.kind, output_dir=PROCESSED_MEDIA_DIR)
-        for notice in result.get("notices", []):
-            warn(notice)
-        if not result.get("ok"):
-            reason = result.get("reason", "normalization_failed")
-            warn(f"{media_path.name}: {reason}")
-            omitted.append((media_path, reason))
-            continue
-        normalized = Path(result["media_path"])
-        job.media_info[str(normalized)] = result
-        validated_media.append(normalized)
-    job.media_paths = validated_media
-    job.omitted_media = omitted
-
-    if job.cover_path:
-        cover_path = job.cover_path
-        result = normalize_image(cover_path, target="reel_cover", output_dir=PROCESSED_MEDIA_DIR)
-        if not result.get("ok"):
-            reason = result.get("reason", "cover_normalization_failed")
-            warn(f"Portada omitida ({cover_path.name}): {reason}")
-            job.omitted_media.append((cover_path, reason))
-            job.cover_path = None
-        else:
-            job.cover_path = Path(result["media_path"])
-
-    if not job.media_paths:
-        warn("No hay archivos válidos para publicar. Revisá los formatos e intentá nuevamente.")
-        press_enter()
-        return
-
-    print(full_line())
-    print(style_text("Resumen de publicación", color=Fore.CYAN, bold=True))
-    print(f"Cuentas seleccionadas: {', '.join('@'+u for u in ready)}")
-    print(f"Archivos: {', '.join(original_names)}")
-    if job.caption:
-        print(f"Caption: {job.caption[:80]}{'…' if len(job.caption) > 80 else ''}")
-    if job.overlay_text:
-        print(f"Texto overlay: {job.overlay_text[:80]}{'…' if len(job.overlay_text) > 80 else ''}")
-    if job.omitted_media:
-        print(style_text("Archivos omitidos:", color=Fore.YELLOW, bold=True))
-        for path, reason in job.omitted_media:
-            print(f" - {path.name}: {reason}")
-    confirm = ask("¿Confirmar publicación? (s/N): ").strip().lower()
-    if confirm != "s":
-        warn("Se canceló la publicación.")
-        press_enter()
-        return
-
-    ensure_logging(quiet=SETTINGS.quiet, log_dir=SETTINGS.log_dir, log_file=SETTINGS.log_file)
-    reset_stop_event()
-    listener = start_q_listener("Presioná Q para cancelar la publicación.", logger)
-    start_time = time.perf_counter()
-
-    queue: Queue = Queue()
-    threads: List[threading.Thread] = []
-
-    try:
-        for idx, username in enumerate(ready):
-            if STOP_EVENT.is_set():
-                break
-            thread = threading.Thread(
-                target=_run_job_for_account,
-                args=(alias, username, job, queue),
-                daemon=True,
-                name=f"publisher-{username}",
-            )
-            thread.start()
-            threads.append(thread)
-            if job.delay_mode == "staggered" and idx < len(ready) - 1:
-                delay = random.randint(job.delay_min, job.delay_max) if job.delay_max else job.delay_min
-                if delay:
-                    sleep_with_stop(delay)
-                    if STOP_EVENT.is_set():
-                        break
-    finally:
-        for thread in threads:
-            thread.join()
-        request_stop("publicación finalizada")
-        listener.join(timeout=0.2)
-
-    summaries = _summaries_from_queue(queue)
-    _print_summary(job, summaries, start_time)
-    ok("Publicación finalizada.")
+    ok("Actividad completada.")
     press_enter()

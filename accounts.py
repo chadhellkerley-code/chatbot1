@@ -1,7 +1,8 @@
-# accounts.py
+﻿# accounts.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import csv
 import getpass
@@ -10,10 +11,11 @@ import json
 import random
 import re
 import time
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,11 +26,11 @@ from urllib.parse import urlparse
 from config import SETTINGS
 from client_factory import get_instagram_client
 from adapters.base import TwoFARequired, TwoFactorCodeRejected
-# Función temporal hasta que se migre correctamente
+# FunciÃ³n temporal hasta que se migre correctamente
 def prompt_two_factor_code(username: str, method: str, attempt: int):
-    """Stub temporal - solicita código 2FA manualmente"""
+    """Stub temporal - solicita cÃ³digo 2FA manualmente"""
     import getpass
-    prompt = f"Ingrese el código recibido por {method} para {username}: "
+    prompt = f"Ingrese el cÃ³digo recibido por {method} para {username}: "
     code = getpass.getpass(prompt) if method.lower() == 'totp' else input(prompt)
     return code.strip().replace("-", "").replace(" ", "") if code else None
 
@@ -61,11 +63,12 @@ from proxy_manager import (
 )
 from session_store import has_session, load_into, remove as remove_session, save_from
 from totp_store import generate_code as generate_totp_code
+from totp_store import get_secret as get_totp_secret
 from totp_store import has_secret as has_totp_secret
 from totp_store import remove_secret as remove_totp_secret
 from totp_store import rename_secret as rename_totp_secret
 from totp_store import save_secret as save_totp_secret
-from utils import ask, banner, em, ok, press_enter, title, warn
+from utils import ask, ask_int, banner, em, ok, press_enter, title, warn
 from paths import runtime_base
 from src.playwright_service import BASE_PROFILES
 
@@ -150,14 +153,9 @@ _PASSWORD_CACHE: Dict[str, str] = _load_password_cache()
 
 logger = logging.getLogger(__name__)
 
-_HEALTH_CACHE_TTL = timedelta(minutes=15)
-_HEALTH_CACHE: Dict[str, tuple[datetime, str]] = {}
-_HEALTH_CACHE_LOCK = Lock()
-_HEALTH_CACHE_FILE = DATA / "account_health.json"
-_HEALTH_REFRESH_PENDING: set[str] = set()
-_HEALTH_REFRESH_EXECUTOR = ThreadPoolExecutor(
-    max_workers=3, thread_name_prefix="health-refresh"
-)
+# Account health is persisted in data/account_health.json (same structure as before),
+# but it is now updated ONLY by Playwright flows (no API-based verification).
+import health_store
 
 
 _SENT_LOG = BASE / "storage" / "sent_log.jsonl"
@@ -174,49 +172,6 @@ _CSV_HEADERS = [
     "proxy username",
     "proxy password",
 ]
-
-
-def _load_health_cache_from_disk() -> None:
-    if not _HEALTH_CACHE_FILE.exists():
-        return
-    try:
-        raw = json.loads(_HEALTH_CACHE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    entries: Dict[str, tuple[datetime, str]] = {}
-    for key, entry in raw.items():
-        if not isinstance(entry, dict):
-            continue
-        ts_raw = entry.get("timestamp")
-        badge = entry.get("badge")
-        if not ts_raw or not badge:
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_raw)
-        except Exception:
-            continue
-        entries[key] = (ts, badge)
-    if not entries:
-        return
-    with _HEALTH_CACHE_LOCK:
-        _HEALTH_CACHE.update(entries)
-
-
-def _persist_health_cache() -> None:
-    try:
-        with _HEALTH_CACHE_LOCK:
-            serializable = {
-                key: {"timestamp": ts.isoformat(), "badge": badge}
-                for key, (ts, badge) in _HEALTH_CACHE.items()
-            }
-        _HEALTH_CACHE_FILE.write_text(
-            json.dumps(serializable, ensure_ascii=False), encoding="utf-8"
-        )
-    except Exception:
-        pass
-
-
-_load_health_cache_from_disk()
 
 
 def _now_utc() -> datetime:
@@ -369,7 +324,7 @@ def _auto_low_profile(record: Dict) -> Tuple[bool, str, int]:
         reasons.append(f"{edit_count} cambios de perfil")
     if has_high_activity:
         window_hours = max(1, _settings_value("low_profile_activity_window_hours", 48))
-        reasons.append(f"{recent_activity} envíos/{window_hours}h")
+        reasons.append(f"{recent_activity} envÃ­os/{window_hours}h")
 
     should_flag = is_new and (has_many_edits or has_high_activity)
     reason_text = "; ".join(reasons) if should_flag else ""
@@ -638,15 +593,15 @@ def _prompt_totp(username: str) -> bool:
             return False
         try:
             save_totp_secret(username, raw)
-            ok("Se guardó el TOTP cifrado para esta cuenta.")
-            # Muestra el código actual para facilitar el primer login manual.
+            ok("Se guardÃ³ el TOTP cifrado para esta cuenta.")
+            # Muestra el cÃ³digo actual para facilitar el primer login manual.
             current = generate_totp_code(username)
             if current:
-                print(f"Código TOTP actual (cambia cada 30s): {current}")
+                print(f"CÃ³digo TOTP actual (cambia cada 30s): {current}")
             return True
         except ValueError as exc:
             warn(f"No se pudo guardar el TOTP: {exc}")
-            retry = ask("¿Reintentar ingreso de TOTP? (s/N): ").strip().lower()
+            retry = ask("Â¿Reintentar ingreso de TOTP? (s/N): ").strip().lower()
             if retry != "s":
                 return False
 
@@ -660,7 +615,7 @@ def _print_onboarding_backend_help() -> None:
         print(f"[ERROR] Backend de onboarding no disponible: {_ONBOARDING_BACKEND_ERROR}")
     else:
         print("[ERROR] Backend de onboarding no cargado.")
-    print("Instalá dependencias: pip install playwright pyotp y luego playwright install")
+    print("InstalÃ¡ dependencias: pip install playwright pyotp y luego playwright install")
     print("Verifica que existan los archivos src/__init__.py y src/auth/__init__.py")
 
 
@@ -716,25 +671,180 @@ def _build_playwright_login_payload(
     return payload
 
 
-def login_accounts_with_playwright(alias: str, accounts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _payload_has_proxy(payload: Dict[str, Any]) -> bool:
+    if payload.get("proxy"):
+        return True
+    proxy_url = str(payload.get("proxy_url") or payload.get("proxy") or "").strip()
+    return bool(proxy_url)
+
+
+def login_accounts_with_playwright(
+    alias: str,
+    accounts: List[Dict[str, Any]],
+    *,
+    concurrency: int = 1,
+) -> List[Dict[str, Any]]:
     try:
         from src.auth.onboarding import login_account_playwright, write_onboarding_results
     except Exception as exc:
         warn(f"No se pudo iniciar login con Playwright: {exc}")
         return []
 
+    try:
+        proxy_concurrency = max(1, int(concurrency or 1))
+    except Exception:
+        proxy_concurrency = 1
+
+    with_proxy = [acct for acct in accounts if _payload_has_proxy(acct)]
+    without_proxy = [acct for acct in accounts if not _payload_has_proxy(acct)]
+
     results: List[Dict[str, Any]] = []
-    for account in accounts:
-        result = login_account_playwright(account, alias)
-        results.append(result)
-        username = (result.get("username") or account.get("username") or "").strip()
+
+    # 1) Sin proxy: siempre 1 a 1 (headful) aunque el usuario pida concurrencia.
+    for account in without_proxy:
+        results.append(login_account_playwright(account, alias, headful=True))
+
+    # 2) Con proxy: aplica concurrencia. Si concurrencia>=2 -> headless (segundo plano).
+    if not with_proxy:
+        pass
+    elif proxy_concurrency < 2 or len(with_proxy) < 2:
+        for account in with_proxy:
+            results.append(login_account_playwright(account, alias, headful=True))
+    else:
+        with ThreadPoolExecutor(max_workers=min(proxy_concurrency, len(with_proxy))) as executor:
+            future_to_account = {
+                executor.submit(login_account_playwright, account, alias, headful=False): account
+                for account in with_proxy
+            }
+            for future in as_completed(list(future_to_account.keys())):
+                account = future_to_account.get(future, {})
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    results.append(
+                        {
+                            "username": (account.get("username") or "").strip(),
+                            "status": "failed",
+                            "message": str(exc),
+                            "profile_path": "",
+                            "row_number": account.get("row_number"),
+                        }
+                    )
+
+    # Normaliza orden si viene desde CSV (usa row_number si está).
+    if results and any(item.get("row_number") is not None for item in results):
+        results.sort(key=lambda item: item.get("row_number") or 0)
+
+    # Actualiza estado/health en storage de cuentas (secuencial para evitar carreras).
+    for result in results:
+        username = (result.get("username") or "").strip()
+        if not username:
+            continue
         if result.get("status") == "ok":
-            if username:
-                mark_connected(username, True)
-                _store_health(username, "[✅ OK]")
+            mark_connected(username, True)
+            _store_health(username, "[âœ… OK]")
         else:
             badge = _badge_from_login_message(result.get("message", ""))
-            if username and badge:
+            if badge:
+                _store_health(username, badge)
+
+    try:
+        write_onboarding_results(results)
+    except Exception:
+        pass
+    return results
+
+
+def relogin_accounts_with_playwright_background(
+    alias: str,
+    accounts: List[Dict[str, Any]],
+    *,
+    concurrency: int = 1,
+) -> List[Dict[str, Any]]:
+    """
+    Fuerza un relogin (sin UI) con Playwright para las cuentas indicadas y
+    persiste storage_state.json en profiles/<username>/storage_state.json.
+
+    Nota: si no hay password guardada para una cuenta se solicitará por consola.
+    """
+
+    try:
+        from src.auth.onboarding import login_account_playwright, write_onboarding_results
+    except Exception as exc:
+        warn(f"No se pudo iniciar relogin con Playwright: {exc}")
+        return []
+
+    def _password_for(account: Dict[str, Any]) -> str:
+        username = (account.get("username") or "").strip().lstrip("@")
+        password = _account_password(account).strip()
+        if password:
+            return password
+        entered = getpass.getpass(f"Password @{username} (Enter = omitir): ")
+        entered = (entered or "").strip()
+        if entered:
+            _store_account_password(username, entered)
+        return entered
+
+    payloads: List[Dict[str, Any]] = []
+    for acct in accounts:
+        username = (acct.get("username") or "").strip().lstrip("@")
+        if not username:
+            continue
+        password = _password_for(acct)
+        if not password:
+            warn(f"@{username}: sin password, se omite relogin.")
+            continue
+        payload = _playwright_account_payload(username, password, acct)
+        payload["alias"] = alias
+        payload["strict_login"] = True
+        payload["force_login"] = True
+        payloads.append(payload)
+
+    if not payloads:
+        return []
+
+    results: List[Dict[str, Any]] = []
+    max_workers = 1
+    try:
+        max_workers = max(1, int(concurrency or 1))
+    except Exception:
+        max_workers = 1
+
+    if max_workers < 2 or len(payloads) < 2:
+        for payload in payloads:
+            results.append(login_account_playwright(payload, alias, headful=False))
+    else:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(payloads))) as executor:
+            future_to_payload = {
+                executor.submit(login_account_playwright, payload, alias, headful=False): payload
+                for payload in payloads
+            }
+            for future in as_completed(list(future_to_payload.keys())):
+                payload = future_to_payload.get(future, {})
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    results.append(
+                        {
+                            "username": (payload.get("username") or "").strip(),
+                            "status": "failed",
+                            "message": str(exc),
+                            "profile_path": "",
+                            "row_number": payload.get("row_number"),
+                        }
+                    )
+
+    for result in results:
+        username = (result.get("username") or "").strip().lstrip("@")
+        if not username:
+            continue
+        if (result.get("status") or "").lower() == "ok":
+            mark_connected(username, True)
+            _store_health(username, "[âœ… OK]")
+        else:
+            mark_connected(username, False)
+            badge = _badge_from_login_message(str(result.get("message") or ""))
+            if badge:
                 _store_health(username, badge)
 
     try:
@@ -781,13 +891,13 @@ def _ingest_totp_secret_from_account(account: Dict) -> None:
         try:
             save_totp_secret(username, candidate)
             logger.debug(
-                "Se almacenó el secreto TOTP definido en '%s' para @%s durante el login.",
+                "Se almacenÃ³ el secreto TOTP definido en '%s' para @%s durante el login.",
                 key,
                 username,
             )
         except ValueError as exc:
             logger.warning(
-                "Se ignoró el secreto TOTP incluido en '%s' para @%s: %s",
+                "Se ignorÃ³ el secreto TOTP incluido en '%s' para @%s: %s",
                 key,
                 username,
                 exc,
@@ -807,7 +917,7 @@ def _two_factor_payload_for_login(account: Dict) -> Optional[_LoginTwoFactorPayl
             if code:
                 return _LoginTwoFactorPayload(code=code, mode="totp", source="totp_store")
             logger.warning(
-                "No se pudo generar el código TOTP automático para @%s. Revisá el secreto almacenado.",
+                "No se pudo generar el cÃ³digo TOTP automÃ¡tico para @%s. RevisÃ¡ el secreto almacenado.",
                 username,
             )
 
@@ -872,7 +982,7 @@ def remove_account(username: str) -> None:
     if key and key in _PASSWORD_CACHE:
         _PASSWORD_CACHE.pop(key, None)
         _save_password_cache(_PASSWORD_CACHE)
-    ok("Eliminada (si existía).")
+    ok("Eliminada (si existÃ­a).")
 
 
 def set_active(username: str, is_active: bool = True) -> None:
@@ -900,7 +1010,7 @@ def _proxy_config_from_inputs(data: Dict) -> ProxyConfig:
 def _prompt_proxy_settings(existing: Optional[Dict] = None) -> Dict:
     defaults = default_proxy_settings()
     current = existing or {}
-    print("\nConfiguración de proxy (opcional)")
+    print("\nConfiguraciÃ³n de proxy (opcional)")
     base_default = current.get("proxy_url") or defaults["url"]
     prompt_default = base_default or "sin proxy"
     raw_url = ask(f"Proxy URL [{prompt_default}]: ").strip()
@@ -938,13 +1048,13 @@ def _prompt_proxy_settings(existing: Optional[Dict] = None) -> Dict:
     if not proxy_url:
         return {"proxy_url": "", "proxy_user": "", "proxy_pass": "", "proxy_sticky_minutes": sticky}
 
-    if ask("¿Probar proxy ahora? (s/N): ").strip().lower() == "s":
+    if ask("Â¿Probar proxy ahora? (s/N): ").strip().lower() == "s":
         try:
             result = test_proxy_connection(_proxy_config_from_inputs(data))
             ok(f"Proxy OK. IP detectada: {result.public_ip} (latencia {result.latency:.2f}s)")
         except Exception as exc:
-            warn(f"Proxy falló: {exc}")
-            retry = ask("¿Reintentar configuración? (s/N): ").strip().lower()
+            warn(f"Proxy fallÃ³: {exc}")
+            retry = ask("Â¿Reintentar configuraciÃ³n? (s/N): ").strip().lower()
             if retry == "s":
                 return _prompt_proxy_settings(existing)
     return data
@@ -961,65 +1071,79 @@ def _test_existing_proxy(account: Dict) -> None:
         warn(f"Error probando proxy: {exc}")
 
 
-def _launch_hashtag_mode(alias: str) -> None:
-    try:
-        from actions import hashtag_mode
-    except Exception as exc:  # pragma: no cover - módulo opcional
-        warn(f"No se pudo iniciar el modo hashtag: {exc}")
-        press_enter()
-        return
+_IG_INBOX_URL = "https://www.instagram.com/direct/inbox/"
 
+
+def _launch_inbox(alias: str) -> None:
     accounts = [acct for acct in _load() if acct.get("alias") == alias]
     active_accounts = [acct for acct in accounts if acct.get("active")]
     if not active_accounts:
-        warn("No hay cuentas activas en este alias para ejecutar el modo hashtag.")
+        warn("No hay cuentas activas en este alias.")
         press_enter()
         return
 
-    print("Seleccioná cuentas activas (coma separada, * para todas):")
-    for idx, acct in enumerate(active_accounts, start=1):
-        sess = _session_label(acct["username"])
-        proxy_flag = _proxy_indicator(acct)
-        low_flag = _low_profile_indicator(acct)
-        totp_flag = _totp_indicator(acct)
-        print(f" {idx}) @{acct['username']} {sess} {proxy_flag}{low_flag}{totp_flag}")
-        if low_flag and acct.get("low_profile_reason"):
-            print(f"    ↳ {acct['low_profile_reason']}")
-    raw = ask("Selección: ").strip()
-    if not raw:
-        warn("Sin selección.")
-        press_enter()
-        return
+    while True:
+        banner()
+        title("Inbox (Playwright)")
+        print()
+        print("Seleccioná 1 cuenta activa (número o username). Enter = volver.\n")
+        for idx, acct in enumerate(active_accounts, start=1):
+            sess = _session_label(acct["username"])
+            proxy_flag = _proxy_indicator(acct)
+            low_flag = _low_profile_indicator(acct)
+            totp_flag = _totp_indicator(acct)
+            print(f" {idx}) @{acct['username']} {sess} {proxy_flag}{low_flag}{totp_flag}")
+            if low_flag and acct.get("low_profile_reason"):
+                print(f"    ↳ {acct['low_profile_reason']}")
 
-    if raw == "*":
-        chosen = [acct["username"] for acct in active_accounts]
-    else:
-        selected: set[str] = set()
-        for part in raw.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if part.isdigit():
-                idx = int(part)
-                if 1 <= idx <= len(active_accounts):
-                    selected.add(active_accounts[idx - 1]["username"])
-            else:
-                selected.add(part.lstrip("@"))
-        chosen = [acct["username"] for acct in active_accounts if acct["username"] in selected]
+        raw = ask("\nCuenta: ").strip()
+        if not raw:
+            return
 
-    if not chosen:
-        warn("No se encontraron cuentas con esos datos.")
-        press_enter()
-        return
+        chosen: Optional[Dict] = None
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(active_accounts):
+                chosen = active_accounts[idx - 1]
+        else:
+            target = raw.lstrip("@").strip().lower()
+            for acct in active_accounts:
+                if str(acct.get("username") or "").strip().lower() == target:
+                    chosen = acct
+                    break
 
-    hashtag_mode.run_from_menu(chosen)
+        if not chosen:
+            warn("No se encontró la cuenta con esos datos.")
+            press_enter()
+            continue
+
+        minutes_raw = ask("Tiempo en minutos (0 = hasta cerrar el navegador): ").strip() or "0"
+        try:
+            minutes = int(float(minutes_raw))
+        except Exception:
+            minutes = 0
+        minutes = max(0, minutes)
+        max_seconds = (minutes * 60) if minutes else None
+
+        _open_playwright_manual_session(
+            chosen,
+            start_url=_IG_INBOX_URL,
+            action_label="Entrar al inbox",
+            max_seconds=max_seconds,
+        )
+
+        print("\n1) Abrir inbox de otra cuenta")
+        print("2) Volver")
+        again = ask("Opción: ").strip() or "2"
+        if again != "1":
+            return
 
 
 def _launch_content_publisher(alias: str) -> None:
     try:
         from actions import content_publisher
-    except Exception as exc:  # pragma: no cover - módulo opcional
-        warn(f"No se pudo iniciar el módulo de publicaciones: {exc}")
+    except Exception as exc:  # pragma: no cover - mÃ³dulo opcional
+        warn(f"No se pudo iniciar el mÃ³dulo de publicaciones: {exc}")
         press_enter()
         return
 
@@ -1029,8 +1153,8 @@ def _launch_content_publisher(alias: str) -> None:
 def _launch_interactions(alias: str) -> None:
     try:
         from actions import interactions
-    except Exception as exc:  # pragma: no cover - módulo opcional
-        warn(f"No se pudo iniciar el módulo de interacciones: {exc}")
+    except Exception as exc:  # pragma: no cover - mÃ³dulo opcional
+        warn(f"No se pudo iniciar el mÃ³dulo de interacciones: {exc}")
         press_enter()
         return
 
@@ -1040,14 +1164,14 @@ def _launch_interactions(alias: str) -> None:
 def _login_and_save_session(
     account: Dict, password: str, *, respect_backoff: bool = True
 ) -> bool:
-    """Login con el cliente configurado y guarda sesión en storage/sessions."""
+    """Login con el cliente configurado y guarda sesiÃ³n en storage/sessions."""
 
     username = account["username"]
     if respect_backoff:
         remaining = _login_backoff_remaining(username)
         if remaining > 0:
             logger.debug(
-                "Omitiendo login automático para @%s (reintentar en %.0fs)",
+                "Omitiendo login automÃ¡tico para @%s (reintentar en %.0fs)",
                 username,
                 remaining,
             )
@@ -1072,11 +1196,11 @@ def _login_and_save_session(
 
     try:
         load_into(adapter, username)
-        logger.debug("Se cargó la sesión previa para @%s", username)
+        logger.debug("Se cargÃ³ la sesiÃ³n previa para @%s", username)
     except FileNotFoundError:
         pass
     except Exception as exc:
-        logger.debug("No se pudo cargar la sesión previa de @%s: %s", username, exc)
+        logger.debug("No se pudo cargar la sesiÃ³n previa de @%s: %s", username, exc)
 
     binding = None
     try:
@@ -1094,7 +1218,7 @@ def _login_and_save_session(
     if payload and payload.mode == "totp" and not verification_code:
         verification_code = generate_totp_code(username) or None
         if verification_code:
-            logger.debug("Aplicando código TOTP automático para @%s", username)
+            logger.debug("Aplicando cÃ³digo TOTP automÃ¡tico para @%s", username)
 
     try:
         adapter.login(username, password, verification_code=verification_code)
@@ -1102,18 +1226,18 @@ def _login_and_save_session(
         mark_connected(username, True)
         _clear_login_failure(username)
         account["has_totp"] = has_totp_secret(username)
-        ok(f"Sesión guardada para {username}.")
+        ok(f"SesiÃ³n guardada para {username}.")
         return True
     except TwoFARequired as exc:
         return _handle_two_factor_challenge(account, adapter, exc)
     except TwoFactorCodeRejected:
-        warn(f"Instagram rechazó el código 2FA proporcionado para @{username}.")
+        warn(f"Instagram rechazÃ³ el cÃ³digo 2FA proporcionado para @{username}.")
     except Exception as exc:
         if should_retry_proxy(exc):
             record_proxy_failure(username, exc)
             warn(f"Problema con el proxy de @{username}: {exc}")
         else:
-            warn(f"No se pudo iniciar sesión para {username}: {exc}")
+            warn(f"No se pudo iniciar sesiÃ³n para {username}: {exc}")
         mark_connected(username, False)
         _record_login_failure(username)
         return False
@@ -1134,7 +1258,7 @@ def _handle_two_factor_challenge(
 
     if method not in {"sms", "whatsapp", "email"}:
         warn(
-            "Instagram solicitó un desafío 2FA para @{username} que requiere intervención manual desde la app.".format(
+            "Instagram solicitÃ³ un desafÃ­o 2FA para @{username} que requiere intervenciÃ³n manual desde la app.".format(
                 username=username
             )
         )
@@ -1148,12 +1272,12 @@ def _handle_two_factor_challenge(
             method = "whatsapp"
         except Exception as err:
             logger.warning(
-                "No se pudo solicitar el código vía WhatsApp para @%s: %s",
+                "No se pudo solicitar el cÃ³digo vÃ­a WhatsApp para @%s: %s",
                 username,
                 err,
             )
     logger.info(
-        "Esperando código 2FA para @%s vía %s", username, method
+        "Esperando cÃ³digo 2FA para @%s vÃ­a %s", username, method
     )
 
     attempts = 0
@@ -1163,7 +1287,7 @@ def _handle_two_factor_challenge(
         code = prompt_two_factor_code(username, method, attempts)
         if not code:
             logger.info(
-                "No se ingresó código 2FA para @%s (intento %d)", username, attempts
+                "No se ingresÃ³ cÃ³digo 2FA para @%s (intento %d)", username, attempts
             )
         else:
             try:
@@ -1172,11 +1296,11 @@ def _handle_two_factor_challenge(
                 mark_connected(username, True)
                 _clear_login_failure(username)
                 account["has_totp"] = has_totp_secret(username)
-                ok(f"Sesión guardada para {username} tras verificación 2FA.")
+                ok(f"SesiÃ³n guardada para {username} tras verificaciÃ³n 2FA.")
                 return True
             except TwoFactorCodeRejected:
                 warn(
-                    f"Instagram rechazó el código ingresado para @{username}. Intentá nuevamente."
+                    f"Instagram rechazÃ³ el cÃ³digo ingresado para @{username}. IntentÃ¡ nuevamente."
                 )
         if attempts < 3:
             logger.info(
@@ -1188,7 +1312,7 @@ def _handle_two_factor_challenge(
                 adapter.resend_2fa_code(method)
 
     warn(
-        f"No se pudo completar el login 2FA para @{username}. Volvé a intentarlo más tarde."
+        f"No se pudo completar el login 2FA para @{username}. VolvÃ© a intentarlo mÃ¡s tarde."
     )
     mark_connected(username, False)
     _record_login_failure(username)
@@ -1232,6 +1356,7 @@ def _session_active(
     *,
     account: Optional[Dict] = None,
     reason: str = "session-check",
+    strict: bool = False,
 ) -> bool:
     if not username or not has_session(username):
         return False
@@ -1261,22 +1386,40 @@ def _session_active(
         if binding and should_retry_proxy(exc):
             record_proxy_failure(username, exc)
         mark_connected(username, False)
-        logger.debug("Error cargando sesión para @%s: %s", username, exc)
+        logger.debug("Error cargando sesiÃ³n para @%s: %s", username, exc)
         return False
 
     if has_valid_session_settings(cl):
-        mark_connected(username, True)
-        return True
+        if not strict:
+            mark_connected(username, True)
+            return True
+
+        # Validacion estricta: la sesion debe responder contra IG,
+        # no solo existir como token/cookie local.
+        try:
+            info = cl.account_info()
+            if info and getattr(info, "username", None):
+                mark_connected(username, True)
+                return True
+        except Exception as exc:
+            if binding and should_retry_proxy(exc):
+                record_proxy_failure(username, exc)
+            logger.debug("Sesion no valida para @%s en chequeo estricto: %s", username, exc)
+            mark_connected(username, False)
+            return False
+
+        mark_connected(username, False)
+        return False
 
     mark_connected(username, False)
-    logger.debug("La sesión cargada para @%s no contiene credenciales activas.", username)
+    logger.debug("La sesiÃ³n cargada para @%s no contiene credenciales activas.", username)
     return False
 
 
 def auto_login_with_saved_password(
     username: str, *, account: Optional[Dict] = None
 ) -> bool:
-    """Intenta iniciar sesión reutilizando la contraseña almacenada."""
+    """Intenta iniciar sesiÃ³n reutilizando la contraseÃ±a almacenada."""
 
     account = account or get_account(username)
     if not account:
@@ -1312,13 +1455,13 @@ def prompt_login(username: str, *, interactive: bool = True) -> bool:
     while True:
         if attempted_auto and stored_password:
             changed = (
-                ask("¿Cambiaste la contraseña de esta cuenta? (s/N): ")
+                ask("Â¿Cambiaste la contraseÃ±a de esta cuenta? (s/N): ")
                 .strip()
                 .lower()
             )
             if changed != "s":
                 warn(
-                    "Instagram rechazó la sesión guardada. Posiblemente haya un challenge o chequeo de seguridad pendiente."
+                    "Instagram rechazÃ³ la sesiÃ³n guardada. Posiblemente haya un challenge o chequeo de seguridad pendiente."
                 )
                 return False
             password = getpass.getpass(
@@ -1330,7 +1473,7 @@ def prompt_login(username: str, *, interactive: bool = True) -> bool:
             )
 
         if not password:
-            warn("Se canceló el inicio de sesión.")
+            warn("Se cancelÃ³ el inicio de sesiÃ³n.")
             return False
 
         success = _login_and_save_session(
@@ -1344,7 +1487,7 @@ def prompt_login(username: str, *, interactive: bool = True) -> bool:
         attempted_auto = False
         stored_password = ""
         if interactive and (
-            ask("¿Intentar ingresar nuevamente? (s/N): ")
+            ask("Â¿Intentar ingresar nuevamente? (s/N): ")
             .strip()
             .lower()
             == "s"
@@ -1354,15 +1497,15 @@ def prompt_login(username: str, *, interactive: bool = True) -> bool:
 
 
 def _low_profile_indicator(account: Dict) -> str:
-    return f" {em('🌱 bajo perfil')}" if account.get("low_profile") else ""
+    return f" {em('ðŸŒ± bajo perfil')}" if account.get("low_profile") else ""
 
 
 def _proxy_indicator(account: Dict) -> str:
-    return f" {em('🛡️')}" if account.get("proxy_url") else ""
+    return f" {em('ðŸ›¡ï¸')}" if account.get("proxy_url") else ""
 
 
 def _totp_indicator(account: Dict) -> str:
-    return f" {em('🔐')}" if account.get("has_totp") else ""
+    return f" {em('ðŸ”')}" if account.get("has_totp") else ""
 
 
 def _has_playwright_session(username: str) -> bool:
@@ -1443,8 +1586,8 @@ def _playwright_session_active(
 
 def _session_label(username: str) -> str:
     if has_session(username) or _has_playwright_session(username):
-        return "[sesión]"
-    return "[sin sesión]"
+        return "[sesiÃ³n]"
+    return "[sin sesiÃ³n]"
 
 
 def connected_status(
@@ -1452,6 +1595,8 @@ def connected_status(
     *,
     strict: bool = False,
     reason: str = "connection-status",
+    fast: bool = False,
+    persist: bool = True,
 ) -> bool:
     username = str(account.get("username") or "").strip().lstrip("@")
     if not username:
@@ -1459,72 +1604,52 @@ def connected_status(
 
     has_api_session = has_session(username)
     has_playwright_file = _has_playwright_session(username)
-    has_playwright_cookie = _playwright_cookie_session_active(username) if has_playwright_file else False
-
-    current = bool(account.get("connected"))
-    quick_connected = has_api_session or has_playwright_cookie
-    strict_playwright = strict and (current != quick_connected)
 
     connected = False
-    if has_api_session:
-        connected = _session_active(username, account=account, reason=reason)
-        account["connected"] = connected
-    if not connected and has_playwright_file:
-        connected = _playwright_session_active(
-            username,
-            account=account,
-            strict=strict_playwright,
-        )
+    if fast and not strict:
+        # Ruta ultra-rÃ¡pida para menÃºs: sÃ³lo seÃ±ales locales de sesiÃ³n.
+        connected = bool(has_api_session or has_playwright_file)
+    else:
+        if has_api_session:
+            connected = _session_active(username, account=account, reason=reason, strict=strict)
+            account["connected"] = connected
+        if not connected and has_playwright_file:
+            connected = _playwright_session_active(
+                username,
+                account=account,
+                strict=strict,
+            )
 
     current = bool(account.get("connected"))
     if current != connected:
-        mark_connected(username, connected)
+        if persist:
+            mark_connected(username, connected)
         account["connected"] = connected
 
     return connected
 
 
-def _health_cache_key(username: str) -> str:
-    return username.strip().lstrip("@").lower()
-
-
 def _invalidate_health(username: str) -> None:
-    key = _health_cache_key(username)
-    if key:
-        with _HEALTH_CACHE_LOCK:
-            if key in _HEALTH_CACHE:
-                _HEALTH_CACHE.pop(key, None)
-        _persist_health_cache()
+    health_store.invalidate(username)
 
 
 def _health_cached(username: str) -> tuple[str | None, bool]:
-    key = _health_cache_key(username)
-    if not key:
-        return None, True
-    with _HEALTH_CACHE_LOCK:
-        cached = _HEALTH_CACHE.get(key)
-    if not cached:
-        return None, True
-    timestamp, badge = cached
-    expired = datetime.utcnow() - timestamp >= _HEALTH_CACHE_TTL
-    return badge, expired
+    return health_store.get_badge(username)
 
 
 def _store_health(username: str, badge: str) -> str:
-    key = _health_cache_key(username)
-    if key:
-        with _HEALTH_CACHE_LOCK:
-            _HEALTH_CACHE[key] = (datetime.utcnow(), badge)
-        _persist_health_cache()
-    return badge
+    return health_store.set_badge(username, badge)
 
 
 def _badge_for_display(account: Dict) -> tuple[str, bool]:
     username = account.get("username", "")
     cached_badge, expired = _health_cached(username)
     if cached_badge:
-        return cached_badge, expired
-    return "[🟡 En riesgo: unknown]", True
+        # No disparamos refresh "activo": la salud se actualiza implícitamente
+        # durante operaciones reales con Playwright (login/inbox/responder/DMs/filtros).
+        return cached_badge, False
+    # Sin chequeos Playwright previos para esta cuenta.
+    return "[SIN CHEQUEO]", False
 
 
 def _life_status_badge(account: Dict, badge: str) -> str:
@@ -1537,13 +1662,32 @@ def _life_status_badge(account: Dict, badge: str) -> str:
             "suspended",
             "baneada",
             "bloqueada",
-            "action_block",
-            "checkpoint",
-            "challenge",
         )
     ):
         return "[BLOQUEADA]"
-    return "[VIVA]"
+    if "ok" in lowered:
+        return "[VIVA]"
+    if "sin chequeo" in lowered or "sin datos" in lowered:
+        return "[DESCONOCIDA]"
+    if any(
+        keyword in lowered
+        for keyword in (
+            "checkpoint",
+            "challenge",
+            "captcha",
+        )
+    ):
+        # Nuevo criterio: estos estados implican bloqueo real en UI (Playwright).
+        return "[BLOQUEADA]"
+    if any(keyword in lowered for keyword in ("action_block", "rate_limit", "en riesgo", "risk")):
+        return "[EN RIESGO]"
+    if "sesiÃ³n expirada" in lowered or "sesion expirada" in lowered:
+        return "[SIN SESION]"
+    if "verificando" in lowered:
+        return "[VERIFICANDO]"
+    if "unknown" in lowered or "desconoc" in lowered:
+        return "[DESCONOCIDA]"
+    return "[DESCONOCIDA]"
 
 
 def _badge_from_login_message(message: str) -> str | None:
@@ -1561,13 +1705,13 @@ def _badge_from_login_message(message: str) -> str | None:
             "banead",
         )
     ):
-        return "[🔴 Desactivada]"
+        return "[ðŸ”´ Desactivada]"
     if "checkpoint" in lowered:
-        return "[🟡 En riesgo: checkpoint]"
+        return "[ðŸŸ¡ En riesgo: checkpoint]"
     if "challenge" in lowered:
-        return "[🟡 En riesgo: challenge]"
+        return "[ðŸŸ¡ En riesgo: challenge]"
     if "action block" in lowered or "action_block" in lowered:
-        return "[🟡 En riesgo: action_block]"
+        return "[ðŸŸ¡ En riesgo: action_block]"
     return None
 
 
@@ -1580,16 +1724,16 @@ def _account_status_from_badge(account: Dict, badge: str) -> str:
         return "baneada"
     if any(keyword in lowered for keyword in ("action_block", "challenge", "checkpoint")):
         return "bloqueada"
-    if "sesión expirada" in lowered or "sesion expirada" in lowered:
-        return "no se puede iniciar sesión"
+    if "sesiÃ³n expirada" in lowered or "sesion expirada" in lowered:
+        return "no se puede iniciar sesiÃ³n"
     if not account.get("connected"):
-        return "no se puede iniciar sesión"
+        return "no se puede iniciar sesiÃ³n"
     return "activa"
 
 
 def _proxy_status_from_badge(account: Dict, badge: str) -> str:
     lowered = (badge or "").lower()
-    if "proxy" in lowered and any(term in lowered for term in ("caído", "caido", "bloqueado")):
+    if "proxy" in lowered and any(term in lowered for term in ("caÃ­do", "caido", "bloqueado")):
         return "bloqueado"
     return "activo"
 
@@ -1623,12 +1767,79 @@ def _alias_slug(alias: str) -> str:
     return candidate or "default"
 
 
-def _export_path(alias: str) -> Path:
+def _export_paths(alias: str) -> tuple[Path, Path]:
     base_dir = Path.home() / "Desktop" / "archivos CSV"
     base_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{_alias_slug(alias)}_accounts_{timestamp}.csv"
-    return base_dir / filename
+    slug = _alias_slug(alias)
+    csv_path = base_dir / f"{slug}_accounts_{timestamp}.csv"
+    totp_backup_path = base_dir / f"{slug}_totp_backup_{timestamp}.zip"
+    return csv_path, totp_backup_path
+
+
+def _totp_store_dir() -> Path:
+    # Reusa el mismo BASE/runtime_base que totp_store.py para apuntar al mismo storage.
+    return BASE / "storage" / "totp"
+
+
+def _totp_record_path(username: str) -> Path:
+    safe = re.sub(r"[^a-z0-9_-]", "_", (username or "").strip().lstrip("@").lower())
+    return _totp_store_dir() / f"{safe}.json"
+
+
+def _export_totp_backup_zip(usernames: List[str], destination: Path) -> int:
+    """
+    Exporta un backup cifrado de los secretos TOTP (NO en texto plano).
+    Se copian los archivos JSON de storage/totp para los usernames indicados.
+    Nota: no incluye `.master_key` por seguridad.
+    """
+
+    store_dir = _totp_store_dir()
+    if not store_dir.exists():
+        return 0
+
+    normalized = []
+    seen = set()
+    for u in usernames:
+        cleaned = (u or "").strip().lstrip("@")
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(cleaned)
+
+    if not normalized:
+        return 0
+
+    written = 0
+    try:
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for username in normalized:
+                path = _totp_record_path(username)
+                if not path.exists():
+                    continue
+                arcname = str(Path("storage") / "totp" / path.name)
+                zf.write(path, arcname=arcname)
+                written += 1
+    except Exception as exc:
+        warn(f"No se pudo generar backup TOTP: {exc}")
+        try:
+            if destination.exists():
+                destination.unlink()
+        except Exception:
+            pass
+        return 0
+
+    if written == 0:
+        try:
+            if destination.exists():
+                destination.unlink()
+        except Exception:
+            pass
+
+    return written
 
 
 def _account_password(account: Dict) -> str:
@@ -1658,18 +1869,27 @@ def _store_account_password(username: str, password: str) -> None:
 
 def _export_accounts_csv(alias: str) -> None:
     accounts = [acct for acct in _load() if acct.get("alias") == alias]
-    destination = _export_path(alias)
+    destination, totp_backup_path = _export_paths(alias)
+    include_totp_secret = (
+        ask("¿Incluir TOTP secret (texto plano) en el CSV? (s/N): ").strip().lower() == "s"
+    )
+    if include_totp_secret:
+        warn(
+            "ATENCIÓN: el TOTP secret permite generar códigos 2FA. Tratá este CSV como altamente sensible."
+        )
     headers = [
         "Username",
-        "Contraseña",
-        "Código 2FA",
+        "ContraseÃ±a",
+        "CÃ³digo 2FA",
         "Proxy IP",
         "Proxy Puerto",
         "Proxy Usuario",
-        "Proxy Contraseña",
+        "Proxy ContraseÃ±a",
         "Estado de la cuenta",
         "Estado del proxy",
     ]
+    if include_totp_secret:
+        headers.append("TOTP Secret")
 
     with destination.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -1680,21 +1900,35 @@ def _export_accounts_csv(alias: str) -> None:
             account_status = _account_status_from_badge(account, badge)
             proxy_status = _proxy_status_from_badge(account, badge)
             proxy_ip, proxy_port, proxy_user, proxy_pass = _proxy_components(account)
-            writer.writerow(
-                [
-                    username,
-                    _account_password(account),
-                    _current_totp_code(username),
-                    proxy_ip,
-                    proxy_port,
-                    proxy_user,
-                    proxy_pass,
-                    account_status,
-                    proxy_status,
-                ]
-            )
+            row = [
+                username,
+                _account_password(account),
+                _current_totp_code(username),
+                proxy_ip,
+                proxy_port,
+                proxy_user,
+                proxy_pass,
+                account_status,
+                proxy_status,
+            ]
+            if include_totp_secret:
+                try:
+                    row.append(get_totp_secret(username) or "")
+                except Exception:
+                    row.append("")
+            writer.writerow(row)
 
     ok(f"Archivo CSV generado en: {destination}")
+    totp_written = _export_totp_backup_zip(
+        [(acct.get("username") or "").strip() for acct in accounts],
+        totp_backup_path,
+    )
+    if totp_written:
+        ok(
+            f"Backup TOTP cifrado generado en: {totp_backup_path} "
+            f"(registros incluidos: {totp_written})."
+        )
+        print("Nota: el backup NO incluye la llave `.master_key` por seguridad.")
     press_enter()
 
 
@@ -1717,7 +1951,7 @@ def _prompt_destination_alias(current_alias: str) -> Optional[str]:
 
         normalized = destination.lower()
         if normalized == normalized_current:
-            warn("El alias destino es el mismo que el origen. Seleccioná otro alias.")
+            warn("El alias destino es el mismo que el origen. SeleccionÃ¡ otro alias.")
             continue
 
         if normalized in alias_lookup:
@@ -1725,7 +1959,7 @@ def _prompt_destination_alias(current_alias: str) -> Optional[str]:
 
         create = (
             ask(
-                f"El alias '{destination}' no existe. ¿Crear automáticamente y continuar? (s/N): "
+                f"El alias '{destination}' no existe. Â¿Crear automÃ¡ticamente y continuar? (s/N): "
             )
             .strip()
             .lower()
@@ -1742,13 +1976,13 @@ def _move_accounts_to_alias(alias: str) -> None:
 
     destination = _prompt_destination_alias(alias)
     if not destination:
-        warn("Operación cancelada.")
+        warn("OperaciÃ³n cancelada.")
         press_enter()
         return
 
     selected = {username.lower() for username in usernames if username}
     if not selected:
-        warn("No se seleccionaron cuentas válidas.")
+        warn("No se seleccionaron cuentas vÃ¡lidas.")
         press_enter()
         return
 
@@ -1780,38 +2014,10 @@ def _move_accounts_to_alias(alias: str) -> None:
     press_enter()
 
 
-def _schedule_health_refresh(accounts_to_refresh: List[Dict]) -> None:
-    if SETTINGS.client_distribution:
-        return
-    for account in accounts_to_refresh:
-        username = account.get("username", "")
-        key = _health_cache_key(username)
-        if not key:
-            continue
-        with _HEALTH_CACHE_LOCK:
-            if key in _HEALTH_REFRESH_PENDING:
-                continue
-            _HEALTH_REFRESH_PENDING.add(key)
-
-        def _task(acc: Dict, cache_key: str, uname: str):
-            try:
-                badge = _compute_health_badge(acc)
-                _store_health(uname, badge)
-            finally:
-                with _HEALTH_CACHE_LOCK:
-                    _HEALTH_REFRESH_PENDING.discard(cache_key)
-
-        try:
-            _HEALTH_REFRESH_EXECUTOR.submit(_task, dict(account), key, username)
-        except Exception:
-            with _HEALTH_CACHE_LOCK:
-                _HEALTH_REFRESH_PENDING.discard(key)
-
-
 def _import_accounts_from_csv(alias: str) -> None:
     path_input = ask("Ruta del archivo CSV: ").strip()
     if not path_input:
-        warn("No se indicÃ³ la ruta del archivo.")
+        warn("No se indicÃƒÂ³ la ruta del archivo.")
         press_enter()
         return
 
@@ -1825,7 +2031,7 @@ def _import_accounts_from_csv(alias: str) -> None:
     try:
         parsed_rows = parse_accounts_csv(path_input)
     except FileNotFoundError:
-        warn("El archivo CSV indicado no existe o no es un archivo vÃ¡lido.")
+        warn("El archivo CSV indicado no existe o no es un archivo vÃƒÂ¡lido.")
         press_enter()
         return
     except Exception as exc:
@@ -1834,9 +2040,33 @@ def _import_accounts_from_csv(alias: str) -> None:
         return
 
     if not parsed_rows:
-        warn("El archivo CSV no contiene registros vÃ¡lidos.")
+        warn("El archivo CSV no contiene registros vÃƒÂ¡lidos.")
         press_enter()
         return
+
+    proxy_rows = [row for row in parsed_rows if (row.get("proxy_url") or "").strip()]
+    no_proxy_rows = [row for row in parsed_rows if not (row.get("proxy_url") or "").strip()]
+    print(
+        "\nDetectadas: {with_proxy} con proxy | {without_proxy} sin proxy".format(
+            with_proxy=len(proxy_rows),
+            without_proxy=len(no_proxy_rows),
+        )
+    )
+
+    default_concurrency = max(1, min(int(SETTINGS.max_concurrency or 1), max(1, len(proxy_rows) or 1)))
+    requested_concurrency = ask_int(
+        f"Concurrencia para login con proxy? [{default_concurrency}]: ",
+        min_value=1,
+        default=default_concurrency,
+    )
+    if not proxy_rows and requested_concurrency > 1:
+        warn("El CSV no trae proxys: el login se harÃ¡ 1 a 1 (concurrencia ignorada).")
+    elif proxy_rows and requested_concurrency >= 2:
+        ok(
+            f"Logins con proxy en segundo plano (headless). Concurrencia={requested_concurrency}."
+        )
+    elif proxy_rows:
+        ok("Logins con proxy en modo visible (concurrencia=1).")
 
     added = 0
     errors: List[tuple[Optional[int], str]] = []
@@ -1875,7 +2105,7 @@ def _import_accounts_from_csv(alias: str) -> None:
                 save_totp_secret(username, totp_value)
             except ValueError as exc:
                 remove_account(username)
-                errors.append((row_number, f"2FA invÃ¡lido: {exc}"))
+                errors.append((row_number, f"2FA invÃƒÂ¡lido: {exc}"))
                 continue
 
         _store_account_password(username, password)
@@ -1891,13 +2121,17 @@ def _import_accounts_from_csv(alias: str) -> None:
         added += 1
 
     if accounts_to_login:
-        results = login_accounts_with_playwright(alias, accounts_to_login)
+        results = login_accounts_with_playwright(
+            alias,
+            accounts_to_login,
+            concurrency=requested_concurrency,
+        )
         for result in results:
             status = (result.get("status") or "failed").lower()
             status_counter[status] += 1
 
     total = len(parsed_rows)
-    print("\nResumen de importaciÃ³n:")
+    print("\nResumen de importaciÃƒÂ³n:")
     print(f"Total de filas procesadas: {total}")
     print(f"Cuentas agregadas al alias: {added}")
     print("Resultados de login guardados en data/onboarding_results.csv")
@@ -1923,7 +2157,7 @@ def _select_usernames_for_modifications(alias: str) -> List[str]:
         press_enter()
         return []
 
-    print("Seleccioná cuentas por número o username (coma separada, * para todas):")
+    print("SeleccionÃ¡ cuentas por nÃºmero o username (coma separada, * para todas):")
     alias_map: Dict[str, str] = {}
     for idx, acct in enumerate(group, start=1):
         username = (acct.get("username") or "").strip()
@@ -1936,11 +2170,11 @@ def _select_usernames_for_modifications(alias: str) -> List[str]:
         totp_flag = _totp_indicator(acct)
         print(f" {idx}) @{username} {sess} {proxy_flag}{low_flag}{totp_flag}")
         if low_flag and acct.get("low_profile_reason"):
-            print(f"    ↳ {acct['low_profile_reason']}")
+            print(f"    â†³ {acct['low_profile_reason']}")
 
-    raw = ask("Selección: ").strip()
+    raw = ask("SelecciÃ³n: ").strip()
     if not raw:
-        warn("Sin selección.")
+        warn("Sin selecciÃ³n.")
         press_enter()
         return []
 
@@ -2016,7 +2250,7 @@ def _ask_delay_seconds(default: float = 5.0) -> float:
     try:
         value = float(prompt.replace(",", "."))
     except ValueError:
-        warn("Valor inválido, se utilizará el delay por defecto.")
+        warn("Valor invÃ¡lido, se utilizarÃ¡ el delay por defecto.")
         return max(1.0, default)
     return max(1.0, value)
 
@@ -2043,19 +2277,19 @@ def _client_for_account_action(account: Dict, *, reason: str):
         load_into(cl, username)
     except FileNotFoundError:
         warn(
-            f"No hay sesión guardada para @{username}. Iniciá sesión antes de modificar."
+            f"No hay sesiÃ³n guardada para @{username}. IniciÃ¡ sesiÃ³n antes de modificar."
         )
         return None
     except Exception as exc:
         if binding and should_retry_proxy(exc):
             record_proxy_failure(username, exc)
-        warn(f"No se pudo cargar la sesión de @{username}: {exc}")
+        warn(f"No se pudo cargar la sesiÃ³n de @{username}: {exc}")
         return None
 
     if not has_valid_session_settings(cl):
         mark_connected(username, False)
         warn(
-            f"La sesión guardada para @{username} no contiene credenciales activas. Iniciá sesión nuevamente."
+            f"La sesiÃ³n guardada para @{username} no contiene credenciales activas. IniciÃ¡ sesiÃ³n nuevamente."
         )
         return None
 
@@ -2063,11 +2297,136 @@ def _client_for_account_action(account: Dict, *, reason: str):
     return cl
 
 
+def _rename_password_cache(old_username: str, new_username: str) -> None:
+    old_key = _password_key(old_username)
+    new_key = _password_key(new_username)
+    if not old_key or not new_key or old_key == new_key:
+        return
+    password = _PASSWORD_CACHE.pop(old_key, None)
+    if not password:
+        return
+    if new_key not in _PASSWORD_CACHE:
+        _PASSWORD_CACHE[new_key] = password
+    _save_password_cache(_PASSWORD_CACHE)
+
+
+def _rename_api_sessions(old_username: str, new_username: str) -> None:
+    old_clean = (old_username or "").strip().lstrip("@")
+    new_clean = (new_username or "").strip().lstrip("@")
+    if not old_clean or not new_clean or old_clean.lower() == new_clean.lower():
+        return
+
+    try:
+        import session_store
+    except Exception:
+        return
+
+    candidates: List[Path] = []
+    try:
+        candidates = list(session_store.session_candidates(old_clean))
+    except Exception:
+        candidates = []
+
+    for src in candidates:
+        try:
+            if not src.exists() or not src.is_file():
+                continue
+        except Exception:
+            continue
+
+        src_name = src.name.lower()
+        dest_name = f"{new_clean}.json"
+        if src_name.startswith("session_") and src_name.endswith(".json"):
+            dest_name = f"session_{new_clean}.json"
+
+        dest = src.with_name(dest_name)
+        try:
+            if dest.exists():
+                continue
+        except Exception:
+            continue
+
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            src.replace(dest)
+        except Exception as exc:  # pragma: no cover - operaciones de disco
+            logger.warning(
+                "No se pudo renombrar la sesion API %s -> %s: %s",
+                src,
+                dest,
+                exc,
+            )
+
+        # Limpia lock viejo si existe
+        lock_path = src.with_suffix(src.suffix + ".lock")
+        with contextlib.suppress(Exception):
+            if lock_path.exists():
+                lock_path.unlink()
+
+
+def _rename_playwright_profile(old_username: str, new_username: str) -> None:
+    old_clean = (old_username or "").strip().lstrip("@")
+    new_clean = (new_username or "").strip().lstrip("@")
+    if not old_clean or not new_clean or old_clean.lower() == new_clean.lower():
+        return
+
+    try:
+        base = Path(BASE_PROFILES)
+    except Exception:
+        return
+
+    old_dir = base / old_clean
+    new_dir = base / new_clean
+
+    try:
+        if not old_dir.exists() or not old_dir.is_dir():
+            return
+    except Exception:
+        return
+
+    try:
+        if new_dir.exists():
+            # Mejor esfuerzo: si existe el destino, al menos mover storage_state.json si falta.
+            old_state = old_dir / "storage_state.json"
+            new_state = new_dir / "storage_state.json"
+            if old_state.exists():
+                should_move = False
+                if not new_state.exists():
+                    should_move = True
+                else:
+                    with contextlib.suppress(Exception):
+                        should_move = new_state.stat().st_size <= 0
+                if should_move:
+                    new_dir.mkdir(parents=True, exist_ok=True)
+                    old_state.replace(new_state)
+            return
+    except Exception:
+        return
+
+    try:
+        old_dir.replace(new_dir)
+    except Exception as exc:  # pragma: no cover - operaciones de disco
+        logger.warning(
+            "No se pudo renombrar el perfil de Playwright %s -> %s: %s",
+            old_dir,
+            new_dir,
+            exc,
+        )
+
+
 def _rename_account_record(old_username: str, new_username: str) -> str:
     old_clean = (old_username or "").strip().lstrip("@")
     new_clean = (new_username or "").strip().lstrip("@")
     if not new_clean:
         return old_clean
+
+    # Evita pisar una cuenta distinta con el mismo username.
+    existing = get_account(new_clean)
+    if existing:
+        existing_username = (existing.get("username") or "").strip().lstrip("@")
+        if existing_username and existing_username.lower() != old_clean.lower():
+            warn(f"Ya existe una cuenta con username @{existing_username}.")
+            return old_clean
 
     items = _load()
     old_norm = old_clean.lower()
@@ -2096,6 +2455,19 @@ def _rename_account_record(old_username: str, new_username: str) -> str:
             "No se pudo trasladar el TOTP de @%s a @%s: %s", old_clean, new_clean, exc
         )
 
+    try:
+        _rename_password_cache(old_clean, new_clean)
+    except Exception:
+        pass
+    try:
+        _rename_api_sessions(old_clean, new_clean)
+    except Exception:
+        pass
+    try:
+        _rename_playwright_profile(old_clean, new_clean)
+    except Exception:
+        pass
+
     return new_clean
 
 
@@ -2115,12 +2487,12 @@ def _apply_username_change(account: Dict, desired_username: str, delay: float) -
     try:
         result = client.account_edit(username=desired_clean)
         actual_username = getattr(result, "username", None) or desired_clean
-        ok(f"@{username} → @{actual_username}")
+        ok(f"@{username} â†’ @{actual_username}")
         try:
             save_from(client, actual_username)
         except Exception as exc:
             logger.warning(
-                "No se pudo guardar la sesión actualizada de @%s: %s",
+                "No se pudo guardar la sesiÃ³n actualizada de @%s: %s",
                 actual_username,
                 exc,
             )
@@ -2140,42 +2512,220 @@ def _apply_username_change(account: Dict, desired_username: str, delay: float) -
         time.sleep(delay)
 
 
+_IG_EDIT_PROFILE_URL = "https://www.instagram.com/accounts/edit/"
+
+
+def _ig_profile_url(username: str) -> str:
+    handle = (username or "").strip().lstrip("@")
+    return f"https://www.instagram.com/{handle}/" if handle else "https://www.instagram.com/"
+
+
+def _fallback_playwright_proxy(account: Optional[Dict]) -> Optional[Dict[str, str]]:
+    if not account:
+        return None
+    raw = str(account.get("proxy_url") or "").strip()
+    if not raw:
+        return None
+    server = raw if "://" in raw else f"http://{raw}"
+    payload: Dict[str, str] = {"server": server}
+    user = str(account.get("proxy_user") or "").strip()
+    password = str(account.get("proxy_pass") or "").strip()
+    if user:
+        payload["username"] = user
+    if password:
+        payload["password"] = password
+    return payload
+
+
+def _run_async(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("Se requiere contexto sync para usar Playwright en este menu.")
+
+
+def _open_playwright_manual_session(
+    account: Dict,
+    *,
+    start_url: str,
+    action_label: str,
+    max_seconds: Optional[int] = None,
+) -> None:
+    """
+    Abre un navegador Playwright headful para que el usuario haga cambios MANUALES.
+    Reutiliza storage_state.json si existe y lo re-guardara al cerrar la ventana.
+
+    No hay timeout por defecto: el flujo vuelve recien cuando el usuario cierra el navegador.
+    Si max_seconds > 0, se cerrará automáticamente al cumplirse ese tiempo.
+    """
+
+    username = str(account.get("username") or "").strip().lstrip("@")
+    if not username:
+        warn("Cuenta invalida (sin username).")
+        return
+
+    proxy_payload = None
+    with contextlib.suppress(Exception):
+        proxy_payload = _playwright_proxy_payload(account)
+    if not proxy_payload:
+        proxy_payload = _fallback_playwright_proxy(account)
+
+    async def _runner() -> None:
+        try:
+            from src.playwright_service import PlaywrightService, get_page, shutdown
+        except Exception as exc:
+            raise RuntimeError(
+                f"No se pudo importar PlaywrightService: {exc}. Instala: pip install playwright y luego playwright install"
+            ) from exc
+
+        profile_root = Path(BASE_PROFILES)
+        storage_state = profile_root / username / "storage_state.json"
+        profile_dir = storage_state.parent
+
+        svc = PlaywrightService(headless=False, base_profiles=profile_root)
+        await svc.start()
+
+        ctx = None
+        try:
+            try:
+                ctx = await svc.new_context_for_account(
+                    profile_dir=profile_dir,
+                    storage_state=str(storage_state) if storage_state.exists() else None,
+                    proxy=proxy_payload,
+                )
+            except Exception:
+                # Si el storage_state esta corrupto, abrimos sin el para permitir login manual.
+                ctx = await svc.new_context_for_account(
+                    profile_dir=profile_dir,
+                    storage_state=None,
+                    proxy=proxy_payload,
+                )
+
+            page = await get_page(ctx)
+            if start_url:
+                try:
+                    await page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await page.goto(start_url)
+
+            # Playwright-only health check (only when entering inbox/direct flows).
+            do_health_check = "/direct/" in (start_url or "").lower()
+            health_checker = None
+            if do_health_check:
+                try:
+                    from src.health_playwright import detect_account_health_async as _detect_health
+
+                    health_checker = _detect_health
+                except Exception:
+                    health_checker = None
+
+            last_health_status: Optional[str] = None
+
+            async def _probe_health() -> None:
+                nonlocal last_health_status
+                if not do_health_check or health_checker is None:
+                    return
+                try:
+                    status, reason = await health_checker(page)
+                except Exception:
+                    return
+                if status == last_health_status:
+                    return
+                last_health_status = status
+                with contextlib.suppress(Exception):
+                    health_store.update_from_playwright_status(username, status, reason=reason)
+
+            print(f"\n[PLAYWRIGHT] @{username} -> {action_label}", flush=True)
+            if max_seconds and max_seconds > 0:
+                mins = max(1, int((max_seconds + 59) // 60))
+                print(
+                    f"Se cerrará automáticamente en ~{mins} min (o cerrá el navegador antes para continuar).",
+                    flush=True,
+                )
+            else:
+                print("Usá el navegador manualmente y cerralo para continuar.", flush=True)
+
+            await _probe_health()
+
+            next_health_probe = time.monotonic() + 5.0
+            deadline = (time.monotonic() + float(max_seconds)) if (max_seconds and max_seconds > 0) else None
+            while True:
+                try:
+                    pages = list(ctx.pages) if ctx else []
+                except Exception:
+                    pages = []
+                if not pages:
+                    break
+                if do_health_check and last_health_status != "alive" and time.monotonic() >= next_health_probe:
+                    await _probe_health()
+                    next_health_probe = time.monotonic() + 5.0
+                if deadline is not None and time.monotonic() >= deadline:
+                    print("\n[PLAYWRIGHT] Tiempo cumplido. Cerrando navegador...", flush=True)
+                    break
+                await asyncio.sleep(0.5)
+
+            with contextlib.suppress(Exception):
+                await _probe_health()
+
+            # Persiste la sesion (si el usuario inicio sesion o se refrescaron cookies).
+            with contextlib.suppress(Exception):
+                await svc.save_storage_state(ctx, storage_state)
+        finally:
+            with contextlib.suppress(Exception):
+                await shutdown(svc, ctx)
+
+    try:
+        _run_async(_runner())
+    except Exception as exc:
+        warn(f"No se pudo abrir el navegador para @{username}: {exc}")
+
+
 def _change_usernames_flow(alias: str, selected: List[str]) -> List[str]:
     resolved = _resolve_accounts_for_modifications(alias, selected)
     if not any(resolved):
-        warn("No hay cuentas válidas seleccionadas.")
+        warn("No hay cuentas vÃ¡lidas seleccionadas.")
         press_enter()
         return selected
 
-    inputs: List[str] = []
-    for acct in resolved:
-        if acct:
-            value = ask(f"Nuevo username para @{acct['username']} (vacío para omitir): ")
-            inputs.append(value)
-        else:
-            inputs.append("")
-
-    if not any(inp.strip() for inp, acct in zip(inputs, resolved) if acct):
-        warn("No se ingresaron nuevos usernames.")
-        press_enter()
-        return selected
-
-    delay = _ask_delay_seconds()
-    total_targets = 0
+    total = 0
     successes = 0
     for idx, acct in enumerate(resolved):
         if not acct:
             continue
-        desired = inputs[idx].strip()
+        total += 1
+        current = (acct.get("username") or "").strip().lstrip("@")
+        _open_playwright_manual_session(
+            acct,
+            start_url=_IG_EDIT_PROFILE_URL,
+            action_label="Cambiar username",
+        )
+        desired = ask(f"Nuevo username para @{current} (Enter = sin cambios): ").strip().lstrip("@")
         if not desired:
             continue
-        total_targets += 1
-        updated = _apply_username_change(acct, desired, delay)
-        if updated:
-            successes += 1
-            selected[idx] = updated
 
-    print(f"Usernames actualizados: {successes}/{total_targets}")
+        existing = get_account(desired)
+        if existing and (existing.get("username") or "").strip().lstrip("@").lower() != current.lower():
+            warn(f"Ya existe una cuenta con @{desired}. Se omite este cambio.")
+            continue
+
+        updated = _rename_account_record(current, desired)
+        normalized_current = current.strip().lstrip("@")
+        normalized_updated = (updated or "").strip().lstrip("@")
+        if not normalized_updated:
+            continue
+
+        # Solo cuenta como cambio si efectivamente quedo distinto (o cambio de mayusculas/minusculas).
+        if (
+            normalized_updated.lower() != normalized_current.lower()
+            or normalized_updated != normalized_current
+        ):
+            successes += 1
+            selected[idx] = normalized_updated
+            _record_profile_edit(normalized_updated, "username")
+
+    print(f"Usernames actualizados (manual): {successes}/{total}")
     press_enter()
     return selected
 
@@ -2206,36 +2756,30 @@ def _apply_full_name_change(account: Dict, full_name: str, delay: float) -> bool
 def _change_full_name_flow(alias: str, selected: List[str]) -> None:
     resolved = _resolve_accounts_for_modifications(alias, selected)
     if not any(resolved):
-        warn("No hay cuentas válidas seleccionadas.")
+        warn("No hay cuentas vÃ¡lidas seleccionadas.")
         press_enter()
         return
-
-    values: List[str] = []
-    for acct in resolved:
-        if acct:
-            values.append(ask(f"Nombre completo para @{acct['username']} (vacío para mantener): "))
-        else:
-            values.append("")
-
-    if not any(val.strip() for val, acct in zip(values, resolved) if acct):
-        warn("No se ingresaron nombres para actualizar.")
-        press_enter()
-        return
-
-    delay = _ask_delay_seconds()
     total = 0
     successes = 0
-    for acct, value in zip(resolved, values):
+    for acct in resolved:
         if not acct:
             continue
-        value = value.strip()
-        if not value:
-            continue
         total += 1
-        if _apply_full_name_change(acct, value, delay):
-            successes += 1
+        username = (acct.get("username") or "").strip().lstrip("@")
+        _open_playwright_manual_session(
+            acct,
+            start_url=_IG_EDIT_PROFILE_URL,
+            action_label="Cambiar full name",
+        )
+        new_value = ask(
+            f"Nuevo full name para @{username} (Enter = sin cambios): "
+        ).strip()
+        if not new_value:
+            continue
+        successes += 1
+        _record_profile_edit(username, "full_name")
 
-    print(f"Nombres completos actualizados: {successes}/{total}")
+    print(f"Nombres completos actualizados (manual): {successes}/{total}")
     press_enter()
 
 
@@ -2266,34 +2810,36 @@ def _apply_bio_change(account: Dict, biography: str, delay: float) -> bool:
 def _change_bio_flow(alias: str, selected: List[str]) -> None:
     resolved = _resolve_accounts_for_modifications(alias, selected)
     if not any(resolved):
-        warn("No hay cuentas válidas seleccionadas.")
+        warn("No hay cuentas vÃ¡lidas seleccionadas.")
         press_enter()
         return
-
-    bios: List[str] = []
-    for acct in resolved:
-        if acct:
-            bios.append(ask(f"Bio para @{acct['username']} (vacío = eliminar): "))
-        else:
-            bios.append("")
-
-    if not any(acct for acct in resolved):
-        warn("No se encontraron cuentas para actualizar.")
-        press_enter()
-        return
-
-    delay = _ask_delay_seconds()
     total = 0
     successes = 0
-    for acct, bio in zip(resolved, bios):
+    for acct in resolved:
         if not acct:
             continue
-        biography = bio or ""
         total += 1
-        if _apply_bio_change(acct, biography, delay):
-            successes += 1
+        username = (acct.get("username") or "").strip().lstrip("@")
+        _open_playwright_manual_session(
+            acct,
+            start_url=_IG_EDIT_PROFILE_URL,
+            action_label="Cambiar bio",
+        )
 
-    print(f"Bios actualizadas/eliminadas: {successes}/{total}")
+        changed = (
+            ask(f"Confirmas que cambiaste la bio de @{username}? (s/N): ").strip().lower()
+        )
+        if changed != "s":
+            continue
+
+        # No persistimos la bio localmente; solo registramos el cambio.
+        _ = ask(
+            f"Nueva bio para @{username} (Enter = dejar en blanco/eliminar): "
+        )
+        successes += 1
+        _record_profile_edit(username, "bio")
+
+    print(f"Bios actualizadas/eliminadas (manual): {successes}/{total}")
     press_enter()
 
 
@@ -2348,79 +2894,33 @@ def _apply_profile_picture_removal(account: Dict, delay: float) -> bool:
 def _profile_photo_flow(alias: str, selected: List[str]) -> None:
     resolved = _resolve_accounts_for_modifications(alias, selected)
     if not any(resolved):
-        warn("No hay cuentas válidas seleccionadas.")
+        warn("No hay cuentas vÃ¡lidas seleccionadas.")
         press_enter()
         return
+    total = 0
+    changes = 0
+    for acct in resolved:
+        if not acct:
+            continue
+        total += 1
+        username = (acct.get("username") or "").strip().lstrip("@")
+        _open_playwright_manual_session(
+            acct,
+            start_url=_IG_EDIT_PROFILE_URL,
+            action_label="Cambiar/eliminar foto de perfil",
+        )
 
-    while True:
-        print("\n1) Subir una imagen para todas las cuentas")
-        print("2) Subir imágenes individuales")
-        print("3) Eliminar la foto actual")
-        print("4) Volver")
-        choice = ask("Opción: ").strip() or "4"
+        print("\nQue hiciste con la foto de perfil?")
+        print("1) Subi/cambie la foto")
+        print("2) Elimine la foto")
+        print("3) No hice cambios")
+        choice = ask("Opcion: ").strip() or "3"
+        if choice in {"1", "2"}:
+            changes += 1
+            _record_profile_edit(username, "profile_picture")
 
-        if choice == "1":
-            path_input = ask("Ruta de la imagen: ").strip()
-            if not path_input:
-                warn("No se indicó la ruta del archivo.")
-                press_enter()
-                continue
-            path = Path(path_input).expanduser()
-            if not path.exists() or not path.is_file():
-                warn("La imagen indicada no existe o no es un archivo válido.")
-                press_enter()
-                continue
-            delay = _ask_delay_seconds()
-            total = 0
-            successes = 0
-            for acct in resolved:
-                if not acct:
-                    continue
-                total += 1
-                if _apply_profile_picture(acct, path, delay):
-                    successes += 1
-            print(f"Fotos actualizadas: {successes}/{total}")
-            press_enter()
-        elif choice == "2":
-            delay = _ask_delay_seconds()
-            total = 0
-            successes = 0
-            for acct in resolved:
-                if not acct:
-                    continue
-                raw = ask(
-                    f"Ruta de imagen para @{acct['username']} (vacío para omitir): "
-                ).strip()
-                if not raw:
-                    continue
-                path = Path(raw).expanduser()
-                if not path.exists() or not path.is_file():
-                    warn(
-                        f"Archivo inválido para @{acct['username']}. Se omitirá esta cuenta."
-                    )
-                    continue
-                total += 1
-                if _apply_profile_picture(acct, path, delay):
-                    successes += 1
-            print(f"Fotos actualizadas: {successes}/{total}")
-            press_enter()
-        elif choice == "3":
-            delay = _ask_delay_seconds()
-            total = 0
-            successes = 0
-            for acct in resolved:
-                if not acct:
-                    continue
-                total += 1
-                if _apply_profile_picture_removal(acct, delay):
-                    successes += 1
-            print(f"Fotos eliminadas: {successes}/{total}")
-            press_enter()
-        elif choice == "4":
-            break
-        else:
-            warn("Opción inválida.")
-            press_enter()
+    print(f"Fotos de perfil actualizadas/eliminadas (manual): {changes}/{total}")
+    press_enter()
 
 
 def _apply_highlight_cleanup(account: Dict, delay: float) -> bool:
@@ -2460,21 +2960,32 @@ def _apply_highlight_cleanup(account: Dict, delay: float) -> bool:
 def _delete_highlights_flow(alias: str, selected: List[str]) -> None:
     resolved = _resolve_accounts_for_modifications(alias, selected)
     if not any(resolved):
-        warn("No hay cuentas válidas seleccionadas.")
+        warn("No hay cuentas vÃ¡lidas seleccionadas.")
         press_enter()
         return
-
-    delay = _ask_delay_seconds()
     total = 0
     successes = 0
     for acct in resolved:
         if not acct:
             continue
         total += 1
-        if _apply_highlight_cleanup(acct, delay):
+        username = (acct.get("username") or "").strip().lstrip("@")
+        _open_playwright_manual_session(
+            acct,
+            start_url=_ig_profile_url(username),
+            action_label="Eliminar historias destacadas",
+        )
+        changed = (
+            ask(
+                f"Confirmas que eliminaste historias destacadas de @{username}? (s/N): "
+            )
+            .strip()
+            .lower()
+        )
+        if changed == "s":
             successes += 1
 
-    print(f"Cuentas con historias destacadas eliminadas: {successes}/{total}")
+    print(f"Cuentas con historias destacadas eliminadas (manual): {successes}/{total}")
     press_enter()
 
 
@@ -2501,12 +3012,12 @@ def _apply_posts_cleanup(account: Dict, delay: float) -> bool:
                     record_proxy_failure(username, exc)
                 failures += 1
                 logger.warning(
-                    "Error eliminando publicación de @%s: %s", username, exc
+                    "Error eliminando publicaciÃ³n de @%s: %s", username, exc
                 )
         ok(f"Publicaciones eliminadas para @{username}: {deleted}")
         if failures:
             warn(
-                f"@{username}: {failures} publicaciones no pudieron eliminarse automáticamente."
+                f"@{username}: {failures} publicaciones no pudieron eliminarse automÃ¡ticamente."
             )
         mark_connected(username, True)
         return True
@@ -2523,21 +3034,30 @@ def _apply_posts_cleanup(account: Dict, delay: float) -> bool:
 def _delete_posts_flow(alias: str, selected: List[str]) -> None:
     resolved = _resolve_accounts_for_modifications(alias, selected)
     if not any(resolved):
-        warn("No hay cuentas válidas seleccionadas.")
+        warn("No hay cuentas vÃ¡lidas seleccionadas.")
         press_enter()
         return
-
-    delay = _ask_delay_seconds()
     total = 0
     successes = 0
     for acct in resolved:
         if not acct:
             continue
         total += 1
-        if _apply_posts_cleanup(acct, delay):
+        username = (acct.get("username") or "").strip().lstrip("@")
+        _open_playwright_manual_session(
+            acct,
+            start_url=_ig_profile_url(username),
+            action_label="Eliminar publicaciones",
+        )
+        changed = (
+            ask(f"Confirmas que eliminaste publicaciones de @{username}? (s/N): ")
+            .strip()
+            .lower()
+        )
+        if changed == "s":
             successes += 1
 
-    print(f"Cuentas con publicaciones eliminadas: {successes}/{total}")
+    print(f"Cuentas con publicaciones eliminadas (manual): {successes}/{total}")
     press_enter()
 
 
@@ -2545,7 +3065,7 @@ def _modification_menu(alias: str) -> None:
     selected: List[str] = []
     while True:
         banner()
-        title(f"Modificación de cuentas de Instagram - Alias: {alias}")
+        title(f"ModificaciÃ³n de cuentas de Instagram - Alias: {alias}")
         if selected:
             print("Cuentas seleccionadas: " + ", ".join(f"@{name}" for name in selected))
         else:
@@ -2554,142 +3074,65 @@ def _modification_menu(alias: str) -> None:
         print("\n1) Seleccionar cuentas a modificar")
         print("2) Cambiar usernames")
         print("3) Cambiar nombres completos (Full name)")
-        print("4) Cambiar o eliminar biografía (bio)")
+        print("4) Cambiar o eliminar biografÃ­a (bio)")
         print("5) Cambiar o eliminar foto de perfil")
         print("6) Eliminar historias destacadas")
         print("7) Eliminar publicaciones existentes")
         print("8) Volver\n")
 
-        choice = ask("Opción: ").strip() or "8"
+        choice = ask("OpciÃ³n: ").strip() or "8"
 
         if choice == "1":
             selected = _select_usernames_for_modifications(alias)
         elif choice == "2":
             if not selected:
-                warn("Seleccioná cuentas primero.")
+                warn("SeleccionÃ¡ cuentas primero.")
                 press_enter()
                 continue
             selected = _change_usernames_flow(alias, selected)
         elif choice == "3":
             if not selected:
-                warn("Seleccioná cuentas primero.")
+                warn("SeleccionÃ¡ cuentas primero.")
                 press_enter()
                 continue
             _change_full_name_flow(alias, selected)
         elif choice == "4":
             if not selected:
-                warn("Seleccioná cuentas primero.")
+                warn("SeleccionÃ¡ cuentas primero.")
                 press_enter()
                 continue
             _change_bio_flow(alias, selected)
         elif choice == "5":
             if not selected:
-                warn("Seleccioná cuentas primero.")
+                warn("SeleccionÃ¡ cuentas primero.")
                 press_enter()
                 continue
             _profile_photo_flow(alias, selected)
         elif choice == "6":
             if not selected:
-                warn("Seleccioná cuentas primero.")
+                warn("SeleccionÃ¡ cuentas primero.")
                 press_enter()
                 continue
             _delete_highlights_flow(alias, selected)
         elif choice == "7":
             if not selected:
-                warn("Seleccioná cuentas primero.")
+                warn("SeleccionÃ¡ cuentas primero.")
                 press_enter()
                 continue
             _delete_posts_flow(alias, selected)
         elif choice == "8":
             break
         else:
-            warn("Opción inválida.")
+            warn("OpciÃ³n invÃ¡lida.")
             press_enter()
-
-
-def _format_health_error(exc: Exception) -> str:
-    msg = str(exc).lower()
-
-    if any(word in msg for word in ("proxy", "timed out", "dns", "connection")):
-        if any(keyword in msg for keyword in ("refused", "timeout", "timedout", "unreachable", "name or service")):
-            return "[🌐 Proxy caído]"
-
-    if any(word in msg for word in ("login required", "sessionid", "401", "sesion expirada")):
-        return "[⚠️ Sesión expirada]"
-
-    if "challenge" in msg:
-        return "[🟡 En riesgo: challenge]"
-
-    if "checkpoint" in msg:
-        return "[🟡 En riesgo: checkpoint]"
-
-    if any(keyword in msg for keyword in ("few minutes", "rate limit", "try again later", "esperar", "limite")):
-        return "[🟡 En riesgo: rate_limit]"
-
-    if any(keyword in msg for keyword in ("feedback", "action block", "sentry")):
-        return "[🟡 En riesgo: action_block]"
-
-    if "disabled" in msg or "desactiv" in msg or "not found" in msg:
-        return "[🔴 Desactivada]"
-
-    return "[🟡 En riesgo: unknown]"
-
-
-def _compute_health_badge(account: Dict) -> str:
-    username = account.get("username", "").strip().lstrip("@")
-    if not username:
-        return "[🟡 En riesgo: unknown]"
-
-    if not has_session(username):
-        return "[⚠️ Sesión expirada]"
-
-    try:
-        cl = get_instagram_client(account=account)
-    except Exception as exc:
-        return _format_health_error(exc)
-
-    try:
-        apply_proxy_to_client(cl, username, account, reason="healthcheck")
-    except Exception as exc:
-        return _format_health_error(exc)
-
-    try:
-        load_into(cl, username)
-    except FileNotFoundError:
-        return "[⚠️ Sesión expirada]"
-    except Exception as exc:
-        return _format_health_error(exc)
-
-    info = None
-    try:
-        info = cl.account_info()
-    except Exception as exc:
-        badge = _format_health_error(exc)
-        if "unknown" not in badge:
-            return badge
-        try:
-            if getattr(cl, "user_id", None):
-                info = cl.user_info(cl.user_id)
-        except Exception as inner_exc:
-            return _format_health_error(inner_exc)
-
-    if info and getattr(info, "username", None):
-        return "[✅ OK]"
-
-    return "[🟡 En riesgo: unknown]"
-
-
-def _health_badge(account: Dict) -> str:
-    badge = _compute_health_badge(account)
-    return _store_health(account.get("username", ""), badge)
 
 
 def menu_accounts():
     while True:
         banner()
         print("1) Seleccionar alias o crear uno nuevo")
-        print("2) Volver atrás (ENTER para volver)\n")
-        choice = ask("Opción: ").strip()
+        print("2) Volver atrÃ¡s (ENTER para volver)\n")
+        choice = ask("OpciÃ³n: ").strip()
         if not choice or choice == "2":
             return
         if choice != "1":
@@ -2702,45 +3145,42 @@ def menu_accounts():
         print(f"\nCuentas del alias: {alias}")
         group = [it for it in items if it.get("alias") == alias]
         if not group:
-            print("(no hay cuentas aún)")
+            print("(no hay cuentas aÃºn)")
         else:
-            pending_refresh: List[Dict] = []
             for it in group:
-                flag = em("🟢") if it.get("active") else em("⚪")
+                flag = em("ðŸŸ¢") if it.get("active") else em("âšª")
                 is_connected = connected_status(
                     it,
-                    strict=True,
+                    strict=False,
                     reason="menu-display-status",
+                    fast=True,
+                    persist=False,
                 )
                 conn = "[conectada]" if is_connected else "[no conectada]"
                 sess = _session_label(it["username"])
                 proxy_flag = _proxy_indicator(it)
                 totp_flag = _totp_indicator(it)
-                badge, needs_refresh = _badge_for_display(it)
+                badge, _needs_refresh = _badge_for_display(it)
                 life_badge = _life_status_badge(it, badge)
-                if needs_refresh:
-                    pending_refresh.append(it)
                 print(
-                    f" - @{it['username']} {conn} {sess} {flag} {proxy_flag}{totp_flag} • {life_badge}"
+                    f" - @{it['username']} {conn} {sess} {flag} {proxy_flag}{totp_flag} â€¢ {life_badge}"
                 )
-            if pending_refresh:
-                _schedule_health_refresh(pending_refresh)
 
         print("\n1) Agregar cuenta")
         print("2) Agregar cuentas mediante archivo CSV")
         print("3) Eliminar cuenta")
         print("4) Activar/Desactivar / Proxy")
-        print("5) Iniciar sesión y guardar sesiónid (auto en TODAS del alias)")
-        print("6) Iniciar sesión y guardar sesión ID (seleccionar cuenta)")
-        print("7) Modo de exploración automática por hashtag (nuevo)")
+        print("5) Iniciar sesiÃ³n y guardar sesiÃ³nid (auto en TODAS del alias)")
+        print("6) Iniciar sesiÃ³n y guardar sesiÃ³n ID (seleccionar cuenta)")
+        print("7) Entrar al inbox")
         print("8) Subir contenidos (Historias / Post / Reels)")
-        print("9) Interacciones (Comentar / Ver & Like Reels)")
-        print("10) Modificación de cuentas de Instagram")
+        print("9) Interacciones (Ver & Like Reels)")
+        print("10) ModificaciÃ³n de cuentas de Instagram")
         print("11) Exportar cuentas a CSV")
         print("12) Mover cuentas a otro alias")
         print("13) Volver\n")
 
-        op = ask("Opción: ").strip()
+        op = ask("OpciÃ³n: ").strip()
         if op == "1":
             if not _onboarding_backend_ready():
                 _print_onboarding_backend_help()
@@ -2785,7 +3225,7 @@ def menu_accounts():
                     remove_totp_secret(u)
                 password = getpass.getpass(f"Password @{u}: ")
                 if not password:
-                    warn("No se ingresó password; la cuenta quedó sin sesión.")
+                    warn("No se ingresÃ³ password; la cuenta quedÃ³ sin sesiÃ³n.")
                 else:
                     payload = _build_playwright_login_payload(
                         u,
@@ -2812,20 +3252,20 @@ def menu_accounts():
                 warn("No hay cuentas para eliminar en este alias.")
                 press_enter()
                 continue
-            print("\n¿Querés eliminar una cuenta, varias o todas las del alias?")
+            print("\nÂ¿QuerÃ©s eliminar una cuenta, varias o todas las del alias?")
             print("1) Una")
-            print("2) Varias (selección múltiple)")
+            print("2) Varias (selecciÃ³n mÃºltiple)")
             print("3) Todas las del alias")
-            mode = ask("Opción: ").strip() or "1"
+            mode = ask("OpciÃ³n: ").strip() or "1"
             if mode == "1":
                 u = ask("Username a eliminar: ").strip().lstrip("@")
                 if not u:
-                    warn("No se ingresó username.")
+                    warn("No se ingresÃ³ username.")
                 else:
                     remove_account(u)
                 press_enter()
             elif mode == "2":
-                print("Seleccioná cuentas por número o username (coma separada):")
+                print("SeleccionÃ¡ cuentas por nÃºmero o username (coma separada):")
                 for idx, acct in enumerate(group, start=1):
                     low_flag = _low_profile_indicator(acct)
                     label = f" {idx}) @{acct['username']}"
@@ -2833,10 +3273,10 @@ def menu_accounts():
                         label += f" {low_flag}"
                     print(label)
                     if low_flag and acct.get("low_profile_reason"):
-                        print(f"    ↳ {acct['low_profile_reason']}")
-                raw = ask("Selección: ").strip()
+                        print(f"    â†³ {acct['low_profile_reason']}")
+                raw = ask("SelecciÃ³n: ").strip()
                 if not raw:
-                    warn("Sin selección.")
+                    warn("Sin selecciÃ³n.")
                     press_enter()
                     continue
                 chosen = set()
@@ -2860,16 +3300,16 @@ def menu_accounts():
                 press_enter()
             elif mode == "3":
                 confirm = ask(
-                    "¿Confirmás eliminar TODAS las cuentas de este alias? (s/N): "
+                    "Â¿ConfirmÃ¡s eliminar TODAS las cuentas de este alias? (s/N): "
                 ).strip().lower()
                 if confirm == "s":
                     for acct in group:
                         remove_account(acct["username"])
                 else:
-                    warn("Operación cancelada.")
+                    warn("OperaciÃ³n cancelada.")
                 press_enter()
             else:
-                warn("Opción inválida.")
+                warn("OpciÃ³n invÃ¡lida.")
                 press_enter()
         elif op == "4":
             u = ask("Username: ").strip().lstrip("@")
@@ -2884,7 +3324,7 @@ def menu_accounts():
             print("4) Configurar/Reemplazar TOTP")
             print("5) Eliminar TOTP")
             print("6) Volver")
-            choice = ask("Opción: ").strip() or "6"
+            choice = ask("OpciÃ³n: ").strip() or "6"
             if choice == "1":
                 val = ask("1=activar, 0=desactivar: ").strip()
                 set_active(u, val == "1")
@@ -2901,37 +3341,40 @@ def menu_accounts():
             elif choice == "4":
                 configured = _prompt_totp(u)
                 if not configured:
-                    warn("No se configuró TOTP.")
+                    warn("No se configurÃ³ TOTP.")
                 press_enter()
                 account = get_account(u) or account
             elif choice == "5":
                 if has_totp_secret(u):
                     remove_totp_secret(u)
-                    ok("Se eliminó el TOTP almacenado.")
+                    ok("Se eliminÃ³ el TOTP almacenado.")
                 else:
-                    warn("La cuenta no tenía TOTP guardado.")
+                    warn("La cuenta no tenÃ­a TOTP guardado.")
                 press_enter()
                 account = get_account(u) or account
             else:
                 continue
         elif op == "5":
-            print(
-                "Se reutilizará la contraseña guardada cuando esté disponible; "
-                "se solicitará solo si es necesario."
-            )
-            for it in [x for x in _load() if x.get("alias") == alias]:
-                username = it["username"]
-                if auto_login_with_saved_password(username, account=it) and has_session(username):
-                    continue
-                prompt_login(username, interactive=False)
+            group = [x for x in _load() if x.get("alias") == alias]
+            if not group:
+                warn("No hay cuentas para iniciar sesiÃ³n.")
+                press_enter()
+                continue
+            print("Relogin automÃ¡tico con Playwright (segundo plano) para TODAS las cuentas del alias.")
+            print("Se guardarÃ¡ la sesiÃ³n en profiles/<username>/storage_state.json.")
+            results = relogin_accounts_with_playwright_background(alias, group, concurrency=1)
+            ok_count = sum(1 for r in results if str(r.get("status") or "").lower() == "ok")
+            fail_count = sum(1 for r in results if str(r.get("status") or "").lower() != "ok")
+            skipped = max(0, len(group) - len(results))
+            print(f"Relogin Playwright: ok={ok_count} failed={fail_count} omitidas={skipped}")
             press_enter()
         elif op == "6":
             group = [x for x in _load() if x.get("alias") == alias]
             if not group:
-                warn("No hay cuentas para iniciar sesión.")
+                warn("No hay cuentas para iniciar sesiÃ³n.")
                 press_enter()
                 continue
-            print("Seleccioná cuentas por número o username (coma separada, * para todas):")
+            print("SeleccionÃ¡ cuentas por nÃºmero o username (coma separada, * para todas):")
             for idx, acct in enumerate(group, start=1):
                 sess = _session_label(acct["username"])
 
@@ -2940,10 +3383,10 @@ def menu_accounts():
                 totp_flag = _totp_indicator(acct)
                 print(f" {idx}) @{acct['username']} {sess} {proxy_flag}{low_flag}{totp_flag}")
                 if low_flag and acct.get("low_profile_reason"):
-                    print(f"    ↳ {acct['low_profile_reason']}")
-            raw = ask("Selección: ").strip()
+                    print(f"    â†³ {acct['low_profile_reason']}")
+            raw = ask("SelecciÃ³n: ").strip()
             if not raw:
-                warn("Sin selección.")
+                warn("Sin selecciÃ³n.")
                 press_enter()
                 continue
             targets: List[Dict] = []
@@ -2966,14 +3409,16 @@ def menu_accounts():
                 warn("No se encontraron cuentas con esos datos.")
                 press_enter()
                 continue
-            for acct in targets:
-                username = acct["username"]
-                if auto_login_with_saved_password(username, account=acct) and has_session(username):
-                    continue
-                prompt_login(username, interactive=False)
+            print("Relogin automÃ¡tico con Playwright (segundo plano) para cuentas seleccionadas.")
+            print("Se guardarÃ¡ la sesiÃ³n en profiles/<username>/storage_state.json.")
+            results = relogin_accounts_with_playwright_background(alias, targets, concurrency=1)
+            ok_count = sum(1 for r in results if str(r.get("status") or "").lower() == "ok")
+            fail_count = sum(1 for r in results if str(r.get("status") or "").lower() != "ok")
+            skipped = max(0, len(targets) - len(results))
+            print(f"Relogin Playwright: ok={ok_count} failed={fail_count} omitidas={skipped}")
             press_enter()
         elif op == "7":
-            _launch_hashtag_mode(alias)
+            _launch_inbox(alias)
         elif op == "8":
             _launch_content_publisher(alias)
         elif op == "9":
@@ -2987,9 +3432,10 @@ def menu_accounts():
         elif op == "13":
             break
         else:
-            warn("Opción inválida.")
+            warn("OpciÃ³n invÃ¡lida.")
             press_enter()
 
 
-# Mantener compatibilidad con importación dinámica
-mark_connected.__doc__ = "Actualiza el flag de conexión en almacenamiento"
+# Mantener compatibilidad con importaciÃ³n dinÃ¡mica
+mark_connected.__doc__ = "Actualiza el flag de conexiÃ³n en almacenamiento"
+

@@ -15,6 +15,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from src.auth.persistent_login import ChallengeRequired, ensure_logged_in_async
 from src.instagram_adapter import INBOX_URL, check_logged_in, get_login_errors, is_logged_in
 from src.playwright_service import BASE_PROFILES, PlaywrightService, shutdown
+from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
 
 logger = logging.getLogger(__name__)
 
@@ -336,9 +337,7 @@ async def login_and_persist_async(
             "profile_path": "",
         }
 
-    proxy_payload = account.get("proxy")
-    if not proxy_payload:
-        proxy_payload = build_proxy(account.get("proxy_url"))
+    proxy_payload = proxy_from_account(account)
 
     totp_secret = (account.get("totp_secret") or "").replace(" ", "")
     totp_callback = account.get("totp_callback")
@@ -572,9 +571,13 @@ async def login_account_playwright_async(
             "row_number": account.get("row_number"),
         }
 
-    proxy_payload = account.get("proxy")
+    proxy_payload = proxy_from_account(account)
     if not proxy_payload:
-        proxy_payload = build_proxy(account.get("proxy_url") or account.get("proxy"))
+        proxy_payload = normalize_playwright_proxy(
+            account.get("proxy"),
+            proxy_user=account.get("proxy_user"),
+            proxy_pass=account.get("proxy_pass"),
+        )
     if proxy_payload:
         account["proxy"] = proxy_payload
     trace(_proxy_label(proxy_payload))

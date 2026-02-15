@@ -128,7 +128,6 @@ def _log_step(message: str) -> None:
 
 _HIDDEN_IMPORTS = [
     "accounts",
-    "actions.hashtag_mode",
     "actions.content_publisher",
     "actions.interactions",
     "actions.interactions_adapters",
@@ -145,6 +144,7 @@ _HIDDEN_IMPORTS = [
     "sdk_sanitize",
     "session_store",
     "state_view",
+    "src.analytics.stats_engine",
     "storage",
     "totp_store",
     "ui",
@@ -267,6 +267,25 @@ def _headless_exe_candidates(browser_dir: Path) -> list[Path]:
     return [browser_dir / "chrome-headless-shell" / "chrome-headless-shell"]
 
 
+def _standalone_chrome_candidates(root: Path) -> list[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            root / "chrome-win64" / "chrome.exe",
+            root / "chrome-win" / "chrome.exe",
+            root / "browsers" / "chrome-win64" / "chrome.exe",
+            root / "browsers" / "chrome-win" / "chrome.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            root / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+            root / "browsers" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+        ]
+    return [
+        root / "chrome-linux" / "chrome",
+        root / "browsers" / "chrome-linux" / "chrome",
+    ]
+
+
 def _validate_executable(exe_path: Path) -> bool:
     size = _safe_stat_size(exe_path)
     if size <= _MIN_EXECUTABLE_BYTES:
@@ -296,6 +315,13 @@ def _pick_latest_valid_dir(root: Path, prefix: str, candidates_fn) -> Optional[P
         for exe_path in candidates_fn(folder):
             if _validate_executable(exe_path):
                 return folder
+    return None
+
+
+def _select_standalone_executable(root: Path) -> Optional[Path]:
+    for exe_path in _standalone_chrome_candidates(root):
+        if _validate_executable(exe_path):
+            return exe_path
     return None
 
 
@@ -395,6 +421,11 @@ def _resolve_playwright_browsers_path() -> Optional[Path]:
         if candidate.exists():
             return candidate
 
+    project_root = Path(__file__).resolve().parents[1]
+    for candidate in (project_root, project_root / "browsers"):
+        if _select_standalone_executable(candidate):
+            return candidate
+
     if sys.platform.startswith("win"):
         local = os.environ.get("LOCALAPPDATA")
         if local:
@@ -475,6 +506,13 @@ def _copy_playwright_selected(source: Path, target: Path, selected_dirs: list[Pa
             shutil.copytree(item, target / item.name)
 
 
+def _copy_standalone_browser(target: Path, executable: Path) -> None:
+    browser_dir = executable.parent
+    destination = target / "browsers" / browser_dir.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(browser_dir, destination)
+
+
 def _copy_playwright_browsers(
     dest_root: Path, source: Path, *, mode: str | None = None
 ) -> None:
@@ -484,6 +522,11 @@ def _copy_playwright_browsers(
     bundle_mode = (mode or _playwright_bundle_mode()).strip().lower()
     if bundle_mode in {"none", "external", "skip", "no"}:
         _log_step("Playwright browsers omitidos (modo external)")
+        return
+    standalone = _select_standalone_executable(source)
+    if standalone:
+        _log_step(f"Browser standalone seleccionado: {standalone}")
+        _copy_standalone_browser(target, standalone)
         return
     selected_dirs, reason = _select_playwright_browser_dirs(source)
     if not selected_dirs:
@@ -540,7 +583,7 @@ def build_for_license(
                         False,
                         None,
                         "No se encontraron los navegadores de Playwright. "
-                        "Ejecuta: python -m playwright install",
+                        "Coloca browsers/chrome-win64 o ejecuta: python -m playwright install",
                     )
 
         _log_step("Preparando workspace temporal...")

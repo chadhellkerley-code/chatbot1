@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -19,7 +20,6 @@ except Exception:  # pragma: no cover
     PlaywrightTimeoutError = Exception  # type: ignore
     sync_playwright = None  # type: ignore
 
-from src.auth.onboarding import build_proxy
 from src.playwright_service import (
     BASE_PROFILES,
     DEFAULT_ARGS,
@@ -83,6 +83,145 @@ _NOTE_PHRASES = (
 )
 
 
+def _status_check_timeout_ms() -> int:
+    raw = os.getenv("ACCOUNT_STATUS_CHECK_TIMEOUT_MS", "1500")
+    try:
+        return max(250, int(float(raw)))
+    except Exception:
+        return 1500
+
+
+def _status_log_path() -> Path:
+    explicit = (os.getenv("ACCOUNT_STATUS_FILE") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    app_root = (os.getenv("APP_DATA_ROOT") or "").strip()
+    if app_root:
+        return Path(app_root).expanduser() / "storage" / "accounts_status.json"
+    return Path(__file__).resolve().parents[1] / "storage" / "accounts_status.json"
+
+
+def log_account_status(username: str, status: str) -> None:
+    user = str(username or "").strip().lstrip("@")
+    current = str(status or "unknown").strip().lower() or "unknown"
+    now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    logger.info("PlaywrightDM account_status account=@%s status=%s", user, current)
+    if not user:
+        return
+    try:
+        path = _status_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, dict[str, str]] = {}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except Exception:
+                payload = {}
+        payload[user] = {
+            "username": user,
+            "status": current,
+            "last_checked": now_utc,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _safe_page_text(page: Page) -> str:
+    try:
+        body = page.locator("body")
+        if body.count() > 0:
+            return (body.first.inner_text() or "").strip().lower()
+    except Exception:
+        pass
+    try:
+        html = page.content() or ""
+    except Exception:
+        return ""
+    cleaned = re.sub(r"<[^>]+>", " ", html)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip().lower()
+
+
+def _detect_account_status_impl(page: Page) -> str:
+    try:
+        url = (getattr(page, "url", "") or "").lower()
+    except Exception:
+        url = ""
+
+    try:
+        if "/accounts/login/" in url or "/accounts/login" in url:
+            return "session_expired"
+        if "/challenge/" in url or "/checkpoint/" in url or "two_factor" in url:
+            return "checkpoint"
+        if "/accounts/suspended/" in url:
+            return "suspended"
+        if "/accounts/disabled/" in url:
+            return "blocked"
+
+        try:
+            if page.locator("input[name='username'], input[name='password']").count() > 0:
+                return "session_expired"
+        except Exception:
+            pass
+
+        text = _safe_page_text(page)
+        if "temporarily blocked" in text or "bloqueada temporalmente" in text:
+            return "blocked"
+        if "disabled your account" in text or "your account has been disabled" in text:
+            return "blocked"
+        if "suspended" in text or "cuenta suspendida" in text:
+            return "suspended"
+        if "checkpoint" in text or "challenge required" in text:
+            return "checkpoint"
+
+        alive_selector = ",".join(
+            (
+                "a[href='/direct/inbox/']",
+                "a[href*='/direct/inbox/']",
+                "a[href*='/direct/t/']",
+                "a[aria-label='Direct']",
+                "a[aria-label='Mensajes']",
+                "input[placeholder='Buscar']",
+                "input[placeholder='Search']",
+                "input[name='queryBox']",
+                "div[role='textbox'][contenteditable='true']",
+                "textarea[placeholder*='Message']",
+                "textarea[placeholder*='Mensaje']",
+                "svg[aria-label='Home']",
+                "svg[aria-label='Inicio']",
+            )
+        )
+        try:
+            if page.locator(alive_selector).count() > 0:
+                return "alive"
+        except Exception:
+            pass
+
+        try:
+            page.wait_for_selector(alive_selector, timeout=_status_check_timeout_ms())
+            return "alive"
+        except Exception:
+            pass
+
+        if "/direct/inbox/" in url or "/direct/t/" in url:
+            return "alive"
+
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+async def detect_account_status(page: Page) -> str:
+    return _detect_account_status_impl(page)
+
+
+def detect_account_status_sync(page: Page) -> str:
+    return _detect_account_status_impl(page)
+
+
 @dataclass
 class UserLike:
     pk: str
@@ -140,6 +279,7 @@ class PlaywrightDMClient:
         self._current_thread_id: Optional[str] = None
         self._thread_cache: dict[str, ThreadLike] = {}
         self._thread_cache_meta: dict[str, dict] = {}
+        self._account_status_checked = False
 
     @staticmethod
     def storage_state_path(username: str) -> Path:
@@ -175,6 +315,7 @@ class PlaywrightDMClient:
             self._context = None
             self._page = None
             self._current_thread_id = None
+            self._account_status_checked = False
 
     def get_my_username(self) -> str:
         return self.username
@@ -194,7 +335,8 @@ class PlaywrightDMClient:
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False) -> List[ThreadLike]:
         """
-        Discovery de inbox: Retorna lista de threads visibles sin abrirlos aún.
+        Discovery de inbox: carga progresiva de threads con scroll del panel lateral.
+        Soporta cantidades altas (p.ej. 100/500) sin quedarse solo en los visibles iniciales.
         """
         page = self._ensure_page()
         self._open_inbox()
@@ -203,52 +345,131 @@ class PlaywrightDMClient:
 
         threads: List[ThreadLike] = []
         seen_titles = set()
-
+        rows = None
+        selected_selector = ""
         for selector in selector_candidates:
             try:
-                rows = page.locator(selector)
-                total = rows.count()
+                candidate = page.locator(selector)
+                total = candidate.count()
                 if _DM_VERBOSE_PROBES:
                     print(style_text(f"[Probe] Selector '{selector}' -> count={total}", color=Fore.WHITE))
-                if total == 0:
-                    continue
-
-                for idx in range(total):
-                    if len(threads) >= amount:
-                        break
-
-                    row = rows.nth(idx)
-                    if not self._row_is_valid(row, selector=selector):
-                        continue
-
-                    if filter_unread and _thread_unread_count(row) <= 0:
-                        continue
-
-                    lines = self._row_lines(row)
-                    title = lines[0] if lines else "unknown"
-                    if title in seen_titles:
-                        continue
-                    seen_titles.add(title)
-
-                    # ID Estable recomendado: account:recipient
-                    stable_id = f"{self.username}:{title}"
-
-                    thread = ThreadLike(
-                        id=stable_id,
-                        pk=stable_id,
-                        users=[UserLike(pk=title, id=title, username=title)],
-                        title=title,
-                        source_index=idx,
-                    )
-                    # Guardar meta para poder encontrarlo luego por título
-                    self._thread_cache[stable_id] = thread
-                    self._thread_cache_meta[stable_id] = {"title": title, "idx": idx, "selector": selector}
-                    threads.append(thread)
-
-                if threads:
+                if total > 0:
+                    rows = candidate
+                    selected_selector = selector
                     break
             except Exception:
                 continue
+
+        if rows is None:
+            return threads
+
+        inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
+        self._scroll_panel_to_top(inbox_panel)
+
+        target = max(1, int(amount or 1))
+        max_scroll_passes = max(25, min(2000, target * 6))
+        stagnant_passes = 0
+
+        for _pass in range(max_scroll_passes):
+            before_count = len(threads)
+            try:
+                total = rows.count()
+            except Exception:
+                total = 0
+
+            for idx in range(total):
+                if len(threads) >= target:
+                    break
+
+                row = rows.nth(idx)
+                if not self._row_is_valid(row, selector=selected_selector):
+                    continue
+
+                if filter_unread and _thread_unread_count(row) <= 0:
+                    continue
+
+                lines = self._row_lines(row)
+                title = (lines[0] if lines else "unknown").strip()
+                if not title:
+                    continue
+                title_key = title.lower()
+                if title_key in seen_titles:
+                    continue
+                seen_titles.add(title_key)
+
+                # ID estable por cuenta+título (se resuelve a id real al abrir thread).
+                stable_id = f"{self.username}:{title}"
+
+                thread = ThreadLike(
+                    id=stable_id,
+                    pk=stable_id,
+                    users=[UserLike(pk=title, id=title, username=title)],
+                    title=title,
+                    # El índice deja de ser confiable cuando hay scroll/virtualización;
+                    # forzamos apertura por cache/título para evitar clicks en fila incorrecta.
+                    source_index=idx,
+                )
+                self._thread_cache[stable_id] = thread
+                self._thread_cache_meta[stable_id] = {
+                    "title": title,
+                    "idx": idx,
+                    "selector": selected_selector,
+                }
+                threads.append(thread)
+
+            if len(threads) >= target:
+                break
+
+            try:
+                before_scroll = inbox_panel.evaluate(
+                    """(el) => ({
+                        top: Number((el && el.scrollTop) || 0),
+                        height: Number((el && el.scrollHeight) || 0)
+                    })"""
+                )
+            except Exception:
+                before_scroll = {"top": 0, "height": 0}
+
+            moved = self._scroll_panel_down(inbox_panel)
+            if not moved:
+                break
+
+            added = len(threads) - before_count
+            try:
+                total_after_scroll = rows.count()
+            except Exception:
+                total_after_scroll = total
+            try:
+                after_scroll = inbox_panel.evaluate(
+                    """(el) => ({
+                        top: Number((el && el.scrollTop) || 0),
+                        height: Number((el && el.scrollHeight) || 0)
+                    })"""
+                )
+            except Exception:
+                after_scroll = {"top": 0, "height": 0}
+            scroll_top_unchanged = float((after_scroll or {}).get("top", 0)) <= float((before_scroll or {}).get("top", 0)) + 1
+            scroll_height_not_increased = float((after_scroll or {}).get("height", 0)) <= float((before_scroll or {}).get("height", 0))
+            no_new_rows_detected = int(total_after_scroll) <= int(total)
+            if added <= 0 and scroll_top_unchanged and scroll_height_not_increased and no_new_rows_detected:
+                stagnant_passes += 1
+            else:
+                stagnant_passes = 0
+            if stagnant_passes >= 8:
+                break
+
+            try:
+                page.wait_for_timeout(150)
+            except Exception:
+                pass
+
+        if _DM_VERBOSE_PROBES:
+            print(
+                style_text(
+                    f"[Probe] list_threads target={target} discovered={len(threads)}",
+                    color=Fore.WHITE,
+                )
+            )
 
         return threads
 
@@ -318,11 +539,68 @@ class PlaywrightDMClient:
             "div[role='main'] div[role='button'][tabindex='0']",
         ]
 
-    def _get_inbox_panel(self, page: Page):
+    def _get_inbox_panel(self, page: Page, rows=None):
         """
         [Probe/Fix] Intenta encontrar el panel lateral de mensajes.
         Retorna (locator, metodo, selector, meta).
         """
+        if rows is not None:
+            try:
+                if rows.count() > 0:
+                    first_row = rows.nth(0)
+                    handle = first_row.evaluate_handle(
+                        """(el) => {
+                            if (!el) return null;
+                            const isScrollable = (node) => {
+                                if (!node) return false;
+                                const style = window.getComputedStyle(node);
+                                const overflowY = String((style && style.overflowY) || "").toLowerCase();
+                                const allowsScroll = overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay");
+                                const hasScrollableContent = Number(node.scrollHeight || 0) - Number(node.clientHeight || 0) > 4;
+                                return allowsScroll && hasScrollableContent;
+                            };
+
+                            let node = el;
+                            for (let i = 0; node && i < 14; i += 1) {
+                                if (isScrollable(node)) return node;
+                                node = node.parentElement;
+                            }
+
+                            node = el;
+                            for (let i = 0; node && i < 14; i += 1) {
+                                const hasScrollableContent = Number(node.scrollHeight || 0) - Number(node.clientHeight || 0) > 4;
+                                if (hasScrollableContent) return node;
+                                node = node.parentElement;
+                            }
+
+                            return document.scrollingElement || document.documentElement || document.body || null;
+                        }"""
+                    )
+                    resolved = handle.as_element() if handle is not None else None
+                    if resolved is not None:
+                        try:
+                            meta = resolved.evaluate(
+                                """(el) => ({
+                                    tag: String((el && el.tagName) || ""),
+                                    role: String((el && el.getAttribute && el.getAttribute("role")) || ""),
+                                    ariaLabel: String((el && el.getAttribute && el.getAttribute("aria-label")) || ""),
+                                    clientHeight: Number((el && el.clientHeight) || 0),
+                                    scrollHeight: Number((el && el.scrollHeight) || 0)
+                                })"""
+                            )
+                        except Exception:
+                            meta = {}
+                        if _DM_VERBOSE_PROBES:
+                            print(
+                                style_text(
+                                    f"[Probe] _get_inbox_panel resolved by row: {meta}",
+                                    color=Fore.WHITE,
+                                )
+                            )
+                        return resolved, "row_ancestor", "row_scrollable_ancestor", meta or {}
+            except Exception:
+                pass
+
         for selector in (
             "div[role='navigation'][aria-label='Lista de conversaciones']",
             "div[role='navigation'][aria-label='Conversation list']",
@@ -341,6 +619,62 @@ class PlaywrightDMClient:
         if _DM_VERBOSE_PROBES:
             print(style_text("[Probe] _get_inbox_panel no encontró nada, usando page", color=Fore.YELLOW))
         return page, "page", "", {"count": 1}
+
+    def _scroll_panel_to_top(self, panel) -> None:
+        try:
+            panel.evaluate(
+                """(el) => {
+                    if (!el) return;
+                    try { el.scrollTop = 0; } catch (_) {}
+                }"""
+            )
+            self._ensure_page().wait_for_timeout(120)
+        except Exception:
+            return
+
+    def _scroll_panel_down(self, panel) -> bool:
+        page = self._ensure_page()
+        try:
+            result = panel.evaluate(
+                """(el) => {
+                    if (!el) return { before: 0, after: 0, max: 0 };
+                    const before = Number(el.scrollTop || 0);
+                    const max = Math.max(0, Number((el.scrollHeight || 0) - (el.clientHeight || 0)));
+                    const step = Math.max(350, Math.floor(Number(el.clientHeight || 600) * 0.9));
+                    const next = Math.min(max, before + step);
+                    try { el.scrollTop = next; } catch (_) {}
+                    const after = Number(el.scrollTop || 0);
+                    return { before, after, max };
+                }"""
+            )
+            before = float((result or {}).get("before", 0))
+            after = float((result or {}).get("after", 0))
+            max_scroll = float((result or {}).get("max", 0))
+            if after > before + 1:
+                return True
+            if before + 1 >= max_scroll:
+                return False
+        except Exception:
+            pass
+
+        # Fallback de rueda para UIs que no exponen scrollTop.
+        try:
+            try:
+                box = panel.bounding_box()
+            except Exception:
+                box = None
+            if box:
+                x = float(box.get("x") or 0.0) + max(8.0, min(float(box.get("width") or 0.0) - 8.0, 40.0))
+                y = float(box.get("y") or 0.0) + max(8.0, min(float(box.get("height") or 0.0) - 8.0, 40.0))
+                try:
+                    page.mouse.move(x, y)
+                except Exception:
+                    pass
+            page.mouse.wheel(0, 1200)
+            page.wait_for_timeout(120)
+            return True
+        except Exception:
+            return False
 
     def _row_is_valid(self, row, *, selector: str | None = None) -> bool:
         """
@@ -564,10 +898,25 @@ class PlaywrightDMClient:
         try:
             is_valid = self._open_thread(thread)
             if not is_valid:
+                if log:
+                    logger.info(
+                        "[TRACE_MSG_DIAG] thread=%s open_thread_validated=%s final_collected_len=%d return_pairs_ordered=%s",
+                        thread.id,
+                        is_valid,
+                        0,
+                        [],
+                    )
                 return []
         except Exception as e:
             if log:
                 logger.warning("PlaywrightDM error al abrir thread %s: %s", thread.id, e)
+                logger.info(
+                    "[TRACE_MSG_DIAG] thread=%s open_thread_exception=%r final_collected_len=%d return_pairs_ordered=%s",
+                    thread.id,
+                    e,
+                    0,
+                    [],
+                )
             return []
 
         # Esperar a que los mensajes se hidraten
@@ -579,6 +928,41 @@ class PlaywrightDMClient:
 
         nodes = self._collect_message_nodes(page)
         total = nodes.count()
+        scroll_up_triggered = False
+        scroll_iterations = 0
+        new_nodes_after_scroll = False
+        dedup_total = total
+        if log:
+            dedup_keys: set[str] = set()
+            for raw_idx in range(total):
+                try:
+                    raw_node = nodes.nth(raw_idx)
+                    raw_msg_id = _extract_message_id(raw_node)
+                    if raw_msg_id:
+                        dedup_keys.add(f"id:{raw_msg_id}")
+                    else:
+                        raw_text = _extract_message_text(raw_node)
+                        raw_ts = _extract_message_timestamp(raw_node)
+                        raw_key = hashlib.sha1(
+                            f"{raw_text}|{raw_ts}".encode("utf-8", errors="ignore")
+                        ).hexdigest()[:16]
+                        dedup_keys.add(f"fallback:{raw_key}")
+                except Exception:
+                    continue
+            dedup_total = len(dedup_keys)
+            logger.info(
+                "[TRACE_MSG_DIAG] thread=%s total_dom_nodes_before_parse=%d total_nodes_after_dedup=%d",
+                thread.id,
+                total,
+                dedup_total,
+            )
+            logger.info(
+                "[TRACE_MSG_DIAG] thread=%s scroll_up_triggered=%s scroll_iterations=%d new_nodes_after_scrolling=%s",
+                thread.id,
+                scroll_up_triggered,
+                scroll_iterations,
+                new_nodes_after_scroll,
+            )
         if total <= 0:
             if log:
                 logger.info(
@@ -586,6 +970,12 @@ class PlaywrightDMClient:
                     thread.id,
                     _thread_peer_id(thread, self.user_id),
                     self.username,
+                )
+                logger.info(
+                    "[TRACE_MSG_DIAG] thread=%s final_collected_len=%d return_pairs_ordered=%s",
+                    thread.id,
+                    0,
+                    [],
                 )
             return []
 
@@ -607,6 +997,17 @@ class PlaywrightDMClient:
                 if not msg_id:
                     # Message ID estable recomendado
                     msg_id = hashlib.sha1(f"{text}|{timestamp}|{direction}".encode()).hexdigest()[:12]
+                if log:
+                    preview = (text or "").replace("\n", " ").replace("\r", " ")[:50]
+                    logger.info(
+                        "[TRACE_MSG_DIAG] thread=%s parsed_idx=%d text50=%r timestamp=%s user_id=%s direction=%s",
+                        thread.id,
+                        idx,
+                        preview,
+                        timestamp,
+                        user_id,
+                        direction,
+                    )
                 collected.append(
                     MessageLike(
                         id=msg_id,
@@ -619,11 +1020,32 @@ class PlaywrightDMClient:
             except Exception:
                 continue
 
+        if log:
+            pre_sort_pairs = [(m.user_id, m.timestamp) for m in collected]
+            logger.info(
+                "[TRACE_MSG_DIAG] thread=%s before_sort_count=%d pairs=%s",
+                thread.id,
+                len(collected),
+                pre_sort_pairs,
+            )
         collected.sort(key=lambda m: (m.timestamp is not None, m.timestamp or 0), reverse=True)
+        if log:
+            post_sort_pairs = [(m.user_id, m.timestamp) for m in collected]
+            logger.info(
+                "[TRACE_MSG_DIAG] thread=%s after_sort_count=%d pairs=%s",
+                thread.id,
+                len(collected),
+                post_sort_pairs,
+            )
 
         last_outbound = next((m for m in collected if m.user_id == self.user_id), None)
         last_inbound = next((m for m in collected if m.user_id != self.user_id), None)
         if log:
+            logger.info(
+                "[TRACE_MSG_DIAG] thread=%s final_collected_len=%d",
+                thread.id,
+                len(collected),
+            )
             logger.info(
                 "PlaywrightDM mensajes_leidos thread=%s peer=%s count=%d last_in_ts=%s last_out_ts=%s",
                 thread.id,
@@ -631,6 +1053,11 @@ class PlaywrightDMClient:
                 len(collected),
                 _fmt_ts(last_inbound.timestamp if last_inbound else None),
                 _fmt_ts(last_outbound.timestamp if last_outbound else None),
+            )
+            logger.info(
+                "[TRACE_MSG_DIAG] thread=%s return_pairs_ordered=%s",
+                thread.id,
+                [(m.user_id, m.timestamp) for m in collected],
             )
             if used_fallback_ts:
                 logger.warning(
@@ -716,7 +1143,39 @@ class PlaywrightDMClient:
         except PlaywrightTimeoutError:
             pass
         self._dismiss_overlays(page)
+        if not self._account_status_checked:
+            status = detect_account_status_sync(page)
+            self._account_status_checked = True
+            log_account_status(self.username, status)
+            try:
+                import health_store
+
+                health_store.update_from_playwright_status(self.username, status, reason=status)
+            except Exception:
+                pass
+            if status != "alive":
+                logger.warning(
+                    "PlaywrightDM account_status_stop account=@%s status=%s url=%s",
+                    self.username,
+                    status,
+                    page.url,
+                )
+                self.close()
+                raise RuntimeError(
+                    f"Cuenta @{self.username} no disponible para operar. Estado detectado: {status}."
+                )
         self._assert_logged_in(page)
+
+        row_selectors = tuple(self._row_selector_candidates())
+        chosen = ""
+        for selector in row_selectors:
+            try:
+                if page.locator(selector).count():
+                    chosen = selector
+                    break
+            except Exception:
+                continue
+        rows_ready = bool(chosen)
 
         found_container = None
         # Lista ampliada de selectores de contenedor para mayor robustez
@@ -739,7 +1198,7 @@ class PlaywrightDMClient:
             except Exception:
                 continue
 
-        if not found_container:
+        if not found_container and not rows_ready:
             # Si ninguno es visible de inmediato, esperar brevemente al más probable
             try:
                 page.wait_for_selector("div[role='main'], main, div[role='navigation']", timeout=10_000)
@@ -753,35 +1212,29 @@ class PlaywrightDMClient:
 
         if _DM_VERBOSE_PROBES:
             print(style_text(f"[Probe] Inbox container: {found_container}", color=Fore.WHITE))
-        for search_selector in ("input[placeholder='Buscar']", "input[placeholder='Search']", "input[name='queryBox']"):
-            try:
-                page.wait_for_selector(search_selector, timeout=15_000)
-                break
-            except Exception:
-                continue
-        rows_ready = False
-        row_selectors = tuple(self._row_selector_candidates())
-        chosen = ""
-        deadline = time.time() + 12.0
-        while time.time() < deadline and not chosen:
-            for selector in row_selectors:
+        if not rows_ready:
+            for search_selector in ("input[placeholder='Buscar']", "input[placeholder='Search']", "input[name='queryBox']"):
                 try:
-                    if page.locator(selector).count():
-                        chosen = selector
-                        break
+                    page.wait_for_selector(search_selector, timeout=15_000)
+                    break
                 except Exception:
                     continue
-            if not chosen:
-                try:
-                    page.wait_for_timeout(500)
-                except Exception:
-                    break
-        if chosen:
-            try:
-                page.wait_for_selector(chosen, timeout=8_000)
-                rows_ready = True
-            except Exception:
-                rows_ready = False
+        if not rows_ready:
+            deadline = time.time() + 12.0
+            while time.time() < deadline and not rows_ready:
+                for selector in row_selectors:
+                    try:
+                        if page.locator(selector).count():
+                            chosen = selector
+                            rows_ready = True
+                            break
+                    except Exception:
+                        continue
+                if not rows_ready:
+                    try:
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        break
         if not rows_ready:
             logger.warning("PlaywrightDM inbox rows not ready for @%s", self.username)
             for selector in row_selectors:
@@ -1093,6 +1546,7 @@ class PlaywrightDMClient:
         composer_visible = False
         url_is_thread = False
         thread_id_changed = False
+        message_panel_visible = False
 
         while time.time() < deadline:
             post_url = page.url or ""
@@ -1108,16 +1562,21 @@ class PlaywrightDMClient:
                 except Exception:
                     composer_visible = False
 
-            if url_is_thread and composer_visible and thread_id_changed:
+            try:
+                message_panel_visible = page.locator(_MESSAGE_NODE_SELECTORS[0]).count() > 0
+            except Exception:
+                message_panel_visible = False
+
+            if composer_visible and (url_is_thread or message_panel_visible):
                 break
             try:
                 page.wait_for_timeout(200)
             except Exception:
                 time.sleep(0.2)
 
-        if not (url_is_thread and composer_visible and thread_id_changed):
+        if not (composer_visible and (url_is_thread or message_panel_visible)):
             logger.error(
-                "PlaywrightDM open_thread_validation_error account=@%s target_thread=%s selector=%s idx=%s row=%s pre_url=%s post_url=%s click_href=%s url_is_thread=%s composer_visible=%s thread_id_changed=%s",
+                "PlaywrightDM open_thread_validation_error account=@%s target_thread=%s selector=%s idx=%s row=%s pre_url=%s post_url=%s click_href=%s url_is_thread=%s composer_visible=%s thread_id_changed=%s message_panel_visible=%s",
                 self.username,
                 thread.id,
                 selector,
@@ -1129,11 +1588,19 @@ class PlaywrightDMClient:
                 url_is_thread,
                 composer_visible,
                 thread_id_changed,
+                message_panel_visible,
             )
             self._dismiss_transient_overlay(page)
             return False
 
+        print(
+            style_text(
+                f"[TRACE_ID SYNC BEFORE] pre_url={pre_url} post_url={post_url} post_thread_id={post_thread_id} id={thread.id} pk={thread.pk} flags=url_is_thread:{url_is_thread},composer_visible:{composer_visible},message_panel_visible:{message_panel_visible},thread_id_changed:{thread_id_changed}",
+                color=Fore.WHITE,
+            )
+        )
         self._sync_thread_id(thread, post_thread_id)
+        print(style_text(f"[TRACE_ID SYNC AFTER] id={thread.id} pk={thread.pk}", color=Fore.WHITE))
         self._current_thread_id = thread.id
         self._assert_logged_in(page)
         self._refresh_thread_participants(page, thread)
@@ -1348,7 +1815,6 @@ class PlaywrightDMClient:
 
         if INBOX_URL not in (page.url or "") or re.search(r"/direct/t/", page.url):
             self.return_to_inbox()
-        inbox_panel, _method, _selector, _panel_counts = self._get_inbox_panel(page)
 
         selector_candidates = [
             "div[role='navigation'][aria-label='Lista de conversaciones'] div[role='button'][tabindex='0']:has(abbr[aria-label])",
@@ -1368,7 +1834,7 @@ class PlaywrightDMClient:
         selected_selector = ""
         for selector in selector_candidates:
             try:
-                candidate = inbox_panel.locator(selector)
+                candidate = page.locator(selector)
                 if candidate.count() > 0:
                     rows = candidate
                     selected_selector = selector
@@ -1383,43 +1849,71 @@ class PlaywrightDMClient:
             )
             return False
 
-        total = rows.count()
-        for idx in range(total):
-            row = rows.nth(idx)
-            if not self._row_is_valid(row, selector=selected_selector):
-                continue
-            try:
-                text_value = (row.inner_text() or "").lower()
-            except Exception:
-                continue
-            if not any(c.lower() in text_value for c in candidates):
-                continue
+        inbox_panel, _method, _selector, _panel_counts = self._get_inbox_panel(page, rows=rows)
+        self._scroll_panel_to_top(inbox_panel)
+        target_scan = max(25, len(self._thread_cache_meta) + 10)
+        max_scroll_passes = max(25, min(2000, target_scan * 4))
 
-            row_preview = self._row_preview(row)
-            pre_url = page.url or ""
-            clicked, click_href = self._click_row_target(
-                row,
-                selector=selected_selector,
-                idx=idx,
-            )
-            if not clicked:
-                continue
-            if self._validate_open_state(
-                thread,
-                pre_url=pre_url,
-                selector=selected_selector,
-                idx=idx,
-                row_preview=row_preview,
-                click_href=click_href,
-            ):
-                return True
-            self.return_to_inbox()
+        scanned = 0
+        stagnant_passes = 0
+        for _pass in range(max_scroll_passes):
+            try:
+                total = rows.count()
+            except Exception:
+                total = 0
+            matched_in_pass = False
+            for idx in range(total):
+                row = rows.nth(idx)
+                if not self._row_is_valid(row, selector=selected_selector):
+                    continue
+                try:
+                    text_value = (row.inner_text() or "").lower()
+                except Exception:
+                    continue
+                scanned += 1
+                if not any(c.lower() in text_value for c in candidates):
+                    continue
+
+                matched_in_pass = True
+                row_preview = self._row_preview(row)
+                pre_url = page.url or ""
+                clicked, click_href = self._click_row_target(
+                    row,
+                    selector=selected_selector,
+                    idx=idx,
+                )
+                if not clicked:
+                    continue
+                if self._validate_open_state(
+                    thread,
+                    pre_url=pre_url,
+                    selector=selected_selector,
+                    idx=idx,
+                    row_preview=row_preview,
+                    click_href=click_href,
+                ):
+                    return True
+                self.return_to_inbox()
+
+            moved = self._scroll_panel_down(inbox_panel)
+            if not moved:
+                break
+            if matched_in_pass:
+                stagnant_passes = 0
+            else:
+                stagnant_passes += 1
+            if stagnant_passes >= 8:
+                break
+            try:
+                page.wait_for_timeout(120)
+            except Exception:
+                pass
 
         logger.error(
             "PlaywrightDM open_thread_cache_failed account=@%s thread_id=%s scanned=%s",
             self.username,
             thread.id,
-            total,
+            scanned,
         )
         return False
 
@@ -1540,20 +2034,11 @@ class PlaywrightDMClient:
 
 
 def _proxy_from_account(account: dict) -> Optional[dict]:
-    if not account:
-        return None
-    proxy = account.get("proxy")
-    if proxy:
-        return proxy
-    payload = {
-        "url": account.get("proxy_url"),
-        "username": account.get("proxy_user"),
-        "password": account.get("proxy_pass"),
-    }
     try:
-        return build_proxy(payload)
+        from src.proxy_payload import proxy_from_account
     except Exception:
         return None
+    return proxy_from_account(account)
 
 
 def _extract_thread_id(href: str) -> str:

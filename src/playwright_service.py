@@ -14,7 +14,7 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright, asyn
 # relativamente a un directorio base configurable (APP_DATA_ROOT) o, en su defecto,
 # al directorio del proyecto para garantizar la persistencia.
 _BASE_ROOT = runtime_base(Path(__file__).resolve().parent.parent)
-if not os.getenv("PLAYWRIGHT_BROWSERS_PATH"):
+if not os.getenv("PLAYWRIGHT_BROWSERS_PATH") and not os.getenv("PLAYWRIGHT_CHROME_EXECUTABLE"):
     local_browsers = _BASE_ROOT / "ms-playwright"
     if local_browsers.exists():
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(local_browsers)
@@ -38,6 +38,12 @@ DEFAULT_ARGS = [
 ]
 _PLAYWRIGHT_CHROMIUM_PREFIX = "chromium-"
 _PLAYWRIGHT_HEADLESS_PREFIX = "chromium_headless_shell-"
+_PLAYWRIGHT_EXECUTABLE_ENV_KEYS = (
+    "PLAYWRIGHT_CHROME_EXECUTABLE",
+    "PLAYWRIGHT_EXECUTABLE_PATH",
+    "CHROME_EXECUTABLE",
+)
+_MIN_EXECUTABLE_BYTES = 1 * 1024 * 1024
 
 
 def _parse_revision(name: str, prefix: str) -> int:
@@ -95,6 +101,50 @@ def _headless_exe_candidates(browser_dir: Path) -> list[Path]:
     return [browser_dir / "chrome-headless-shell" / "chrome-headless-shell"]
 
 
+def _standalone_chrome_candidates(root: Path) -> list[Path]:
+    if sys.platform.startswith("win"):
+        return [
+            root / "chrome-win64" / "chrome.exe",
+            root / "chrome-win" / "chrome.exe",
+            root / "browsers" / "chrome-win64" / "chrome.exe",
+            root / "browsers" / "chrome-win" / "chrome.exe",
+        ]
+    if sys.platform == "darwin":
+        return [
+            root / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+            root / "browsers" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+        ]
+    return [
+        root / "chrome-linux" / "chrome",
+        root / "browsers" / "chrome-linux" / "chrome",
+    ]
+
+
+def _is_valid_executable(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > _MIN_EXECUTABLE_BYTES
+    except Exception:
+        return False
+
+
+def _resolve_executable_from_env() -> Optional[Path]:
+    for key in _PLAYWRIGHT_EXECUTABLE_ENV_KEYS:
+        value = (os.environ.get(key) or "").strip()
+        if not value:
+            continue
+        candidate = Path(value).expanduser()
+        if _is_valid_executable(candidate):
+            return candidate
+    return None
+
+
+def _select_standalone_executable(root: Path) -> Optional[Path]:
+    for exe_path in _standalone_chrome_candidates(root):
+        if _is_valid_executable(exe_path):
+            return exe_path
+    return None
+
+
 def _select_executable(root: Path, *, headless: bool) -> Optional[Path]:
     if not root.exists():
         return None
@@ -118,14 +168,32 @@ def _select_executable(root: Path, *, headless: bool) -> Optional[Path]:
 
 
 def resolve_playwright_executable(headless: bool) -> Optional[Path]:
+    explicit = _resolve_executable_from_env()
+    if explicit:
+        return explicit
+
     env_root = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
-    roots = []
+    playwright_roots = []
+    standalone_roots = []
     if env_root:
-        roots.append(Path(env_root).expanduser())
-    roots.append(_BASE_ROOT / "ms-playwright")
+        env_path = Path(env_root).expanduser()
+        playwright_roots.append(env_path)
+        standalone_roots.extend([env_path, env_path.parent])
+    standalone_roots.append(_BASE_ROOT)
+    playwright_roots.append(_BASE_ROOT / "ms-playwright")
 
     seen: set[str] = set()
-    for root in roots:
+    for root in standalone_roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        executable = _select_standalone_executable(root)
+        if executable:
+            return executable
+
+    seen.clear()
+    for root in playwright_roots:
         for candidate in (root, root / "ms-playwright"):
             key = str(candidate)
             if key in seen:

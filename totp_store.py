@@ -189,3 +189,14 @@ def generate_code(username: str) -> Optional[str]:
     except Exception as exc:  # pragma: no cover - pyotp errors
         logger.error("Error generando código TOTP para @%s: %s", username, exc)
         return None
+
+
+def get_secret(username: str) -> Optional[str]:
+    """
+    Return the decrypted TOTP secret for a username (if available).
+
+    WARNING: this is extremely sensitive and should only be used for explicit
+    export/backup flows. Prefer exporting encrypted `storage/totp/*.json` when possible.
+    """
+
+    return _load_secret(username)
