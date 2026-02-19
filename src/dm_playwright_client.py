@@ -83,6 +83,33 @@ _NOTE_PHRASES = (
 )
 
 
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 10_000) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return max(min_value, min(max_value, int(default)))
+    try:
+        value = int(float(str(raw).strip()))
+    except Exception:
+        value = int(default)
+    return max(min_value, min(max_value, value))
+
+
+_DM_SCROLL_WAIT_MS = _env_int("AUTORESPONDER_DM_SCROLL_WAIT_MS", 180, min_value=50, max_value=2_500)
+_DM_SCROLL_ATTEMPTS = _env_int("AUTORESPONDER_DM_SCROLL_ATTEMPTS", 4, min_value=1, max_value=12)
+_DM_STAGNANT_BASE_LIMIT = _env_int(
+    "AUTORESPONDER_DM_STAGNANT_BASE_LIMIT",
+    12,
+    min_value=8,
+    max_value=200,
+)
+_DM_STAGNANT_MAX_LIMIT = _env_int(
+    "AUTORESPONDER_DM_STAGNANT_MAX_LIMIT",
+    40,
+    min_value=_DM_STAGNANT_BASE_LIMIT,
+    max_value=500,
+)
+
+
 def _status_check_timeout_ms() -> int:
     raw = os.getenv("ACCOUNT_STATUS_CHECK_TIMEOUT_MS", "1500")
     try:
@@ -368,6 +395,7 @@ class PlaywrightDMClient:
 
         target = max(1, int(amount or 1))
         max_scroll_passes = max(25, min(2000, target * 6))
+        stagnant_limit = self._stagnation_limit(target)
         stagnant_passes = 0
 
         for _pass in range(max_scroll_passes):
@@ -420,15 +448,7 @@ class PlaywrightDMClient:
             if len(threads) >= target:
                 break
 
-            try:
-                before_scroll = inbox_panel.evaluate(
-                    """(el) => ({
-                        top: Number((el && el.scrollTop) || 0),
-                        height: Number((el && el.scrollHeight) || 0)
-                    })"""
-                )
-            except Exception:
-                before_scroll = {"top": 0, "height": 0}
+            before_scroll = self._panel_scroll_metrics(inbox_panel)
 
             moved = self._scroll_panel_down(inbox_panel)
             if not moved:
@@ -439,15 +459,7 @@ class PlaywrightDMClient:
                 total_after_scroll = rows.count()
             except Exception:
                 total_after_scroll = total
-            try:
-                after_scroll = inbox_panel.evaluate(
-                    """(el) => ({
-                        top: Number((el && el.scrollTop) || 0),
-                        height: Number((el && el.scrollHeight) || 0)
-                    })"""
-                )
-            except Exception:
-                after_scroll = {"top": 0, "height": 0}
+            after_scroll = self._panel_scroll_metrics(inbox_panel)
             scroll_top_unchanged = float((after_scroll or {}).get("top", 0)) <= float((before_scroll or {}).get("top", 0)) + 1
             scroll_height_not_increased = float((after_scroll or {}).get("height", 0)) <= float((before_scroll or {}).get("height", 0))
             no_new_rows_detected = int(total_after_scroll) <= int(total)
@@ -455,13 +467,10 @@ class PlaywrightDMClient:
                 stagnant_passes += 1
             else:
                 stagnant_passes = 0
-            if stagnant_passes >= 8:
+            if stagnant_passes >= stagnant_limit:
                 break
 
-            try:
-                page.wait_for_timeout(150)
-            except Exception:
-                pass
+            self._wait_for_scroll_settle(page)
 
         if _DM_VERBOSE_PROBES:
             print(
@@ -620,61 +629,131 @@ class PlaywrightDMClient:
             print(style_text("[Probe] _get_inbox_panel no encontró nada, usando page", color=Fore.YELLOW))
         return page, "page", "", {"count": 1}
 
+    def _stagnation_limit(self, target: int) -> int:
+        target_value = max(1, int(target or 1))
+        scaled = _DM_STAGNANT_BASE_LIMIT + int(max(0, target_value - 25) / 60)
+        return max(_DM_STAGNANT_BASE_LIMIT, min(_DM_STAGNANT_MAX_LIMIT, scaled))
+
+    def _wait_for_scroll_settle(self, page: Page, *, extra_ms: int = 0) -> None:
+        wait_ms = max(50, int(_DM_SCROLL_WAIT_MS + max(0, int(extra_ms))))
+        try:
+            page.wait_for_timeout(wait_ms)
+        except Exception:
+            pass
+
+    def _panel_scroll_metrics(self, panel) -> dict[str, float]:
+        try:
+            result = panel.evaluate(
+                """(el) => {
+                    const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                    if (!node) return { top: 0, height: 0, client: 0, max: 0 };
+                    const top = Number(node.scrollTop || 0);
+                    const height = Number(node.scrollHeight || 0);
+                    const client = Number(node.clientHeight || 0);
+                    const max = Math.max(0, height - client);
+                    return { top, height, client, max };
+                }"""
+            )
+        except Exception:
+            result = {}
+        top = float((result or {}).get("top", 0))
+        height = float((result or {}).get("height", 0))
+        client = float((result or {}).get("client", 0))
+        max_scroll = float((result or {}).get("max", max(0.0, height - client)))
+        return {"top": top, "height": height, "client": client, "max": max_scroll}
+
     def _scroll_panel_to_top(self, panel) -> None:
         try:
             panel.evaluate(
                 """(el) => {
-                    if (!el) return;
-                    try { el.scrollTop = 0; } catch (_) {}
+                    const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                    if (!node) return;
+                    try { node.scrollTop = 0; } catch (_) {}
                 }"""
             )
-            self._ensure_page().wait_for_timeout(120)
         except Exception:
             return
+        self._wait_for_scroll_settle(self._ensure_page(), extra_ms=20)
 
     def _scroll_panel_down(self, panel) -> bool:
         page = self._ensure_page()
-        try:
-            result = panel.evaluate(
-                """(el) => {
-                    if (!el) return { before: 0, after: 0, max: 0 };
-                    const before = Number(el.scrollTop || 0);
-                    const max = Math.max(0, Number((el.scrollHeight || 0) - (el.clientHeight || 0)));
-                    const step = Math.max(350, Math.floor(Number(el.clientHeight || 600) * 0.9));
+        attempts = max(1, int(_DM_SCROLL_ATTEMPTS))
+
+        for attempt in range(attempts):
+            before = self._panel_scroll_metrics(panel)
+            before_top = float(before.get("top", 0))
+            before_height = float(before.get("height", 0))
+            before_max = float(before.get("max", 0))
+
+            try:
+                factor = 0.90 + min(0.28, attempt * 0.07)
+                scroll_script = """(el) => {
+                    const factor = __FACTOR__;
+                    const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                    if (!node) return { before: 0, after: 0, max: 0 };
+                    const before = Number(node.scrollTop || 0);
+                    const max = Math.max(0, Number((node.scrollHeight || 0) - (node.clientHeight || 0)));
+                    const step = Math.max(350, Math.floor(Number(node.clientHeight || 600) * Number(factor || 1)));
                     const next = Math.min(max, before + step);
-                    try { el.scrollTop = next; } catch (_) {}
-                    const after = Number(el.scrollTop || 0);
+                    try { node.scrollTop = next; } catch (_) {}
+                    const after = Number(node.scrollTop || 0);
                     return { before, after, max };
                 }"""
-            )
-            before = float((result or {}).get("before", 0))
-            after = float((result or {}).get("after", 0))
-            max_scroll = float((result or {}).get("max", 0))
-            if after > before + 1:
-                return True
-            if before + 1 >= max_scroll:
-                return False
-        except Exception:
-            pass
-
-        # Fallback de rueda para UIs que no exponen scrollTop.
-        try:
-            try:
-                box = panel.bounding_box()
+                panel.evaluate(
+                    scroll_script.replace("__FACTOR__", f"{factor:.6f}"),
+                )
             except Exception:
-                box = None
-            if box:
-                x = float(box.get("x") or 0.0) + max(8.0, min(float(box.get("width") or 0.0) - 8.0, 40.0))
-                y = float(box.get("y") or 0.0) + max(8.0, min(float(box.get("height") or 0.0) - 8.0, 40.0))
+                pass
+
+            if attempt > 0:
                 try:
-                    page.mouse.move(x, y)
+                    box = panel.bounding_box()
+                except Exception:
+                    box = None
+                if box:
+                    x = float(box.get("x") or 0.0) + max(12.0, min(float(box.get("width") or 0.0) - 12.0, 44.0))
+                    y = float(box.get("y") or 0.0) + max(12.0, min(float(box.get("height") or 0.0) - 12.0, 44.0))
+                    try:
+                        page.mouse.move(x, y)
+                    except Exception:
+                        pass
+                try:
+                    page.mouse.wheel(0, 1200 + (attempt * 350))
                 except Exception:
                     pass
-            page.mouse.wheel(0, 1200)
-            page.wait_for_timeout(120)
-            return True
-        except Exception:
-            return False
+                if attempt >= 2:
+                    try:
+                        panel.focus()
+                    except Exception:
+                        pass
+                    try:
+                        page.keyboard.press("PageDown")
+                    except Exception:
+                        pass
+                    if attempt == attempts - 1:
+                        try:
+                            page.keyboard.press("End")
+                        except Exception:
+                            pass
+
+            self._wait_for_scroll_settle(page, extra_ms=30 if attempt > 0 else 0)
+
+            after = self._panel_scroll_metrics(panel)
+            after_top = float(after.get("top", 0))
+            after_height = float(after.get("height", 0))
+            after_max = float(after.get("max", 0))
+
+            top_moved = after_top > before_top + 1
+            height_grew = after_height > before_height + 2
+            if top_moved or height_grew:
+                return True
+
+            max_ref = max(after_max, before_max)
+            if after_top + 1 < max_ref:
+                continue
+
+        final = self._panel_scroll_metrics(panel)
+        return float(final.get("top", 0)) + 1 < float(final.get("max", 0))
 
     def _row_is_valid(self, row, *, selector: str | None = None) -> bool:
         """
@@ -1853,6 +1932,7 @@ class PlaywrightDMClient:
         self._scroll_panel_to_top(inbox_panel)
         target_scan = max(25, len(self._thread_cache_meta) + 10)
         max_scroll_passes = max(25, min(2000, target_scan * 4))
+        stagnant_limit = self._stagnation_limit(target_scan)
 
         scanned = 0
         stagnant_passes = 0
@@ -1902,12 +1982,9 @@ class PlaywrightDMClient:
                 stagnant_passes = 0
             else:
                 stagnant_passes += 1
-            if stagnant_passes >= 8:
+            if stagnant_passes >= stagnant_limit:
                 break
-            try:
-                page.wait_for_timeout(120)
-            except Exception:
-                pass
+            self._wait_for_scroll_settle(page, extra_ms=20)
 
         logger.error(
             "PlaywrightDM open_thread_cache_failed account=@%s thread_id=%s scanned=%s",

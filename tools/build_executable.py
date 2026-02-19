@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 from collections import deque
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, TextIO, Tuple
 
 
 def _slugify(value: str) -> str:
@@ -407,6 +407,18 @@ def _tail_log(path: Path, lines: int = 40) -> str:
     return "\n".join(tail)
 
 
+def _tail_stream(stream: TextIO, lines: int = 40) -> str:
+    tail = deque(maxlen=lines)
+    try:
+        stream.flush()
+        stream.seek(0)
+        for line in stream:
+            tail.append(line.rstrip())
+    except OSError:
+        return ""
+    return "\n".join(tail)
+
+
 def _ensure_playwright_available() -> tuple[bool, str]:
     try:
         import playwright  # noqa: F401
@@ -453,6 +465,10 @@ def _resolve_playwright_browsers_path() -> Optional[Path]:
 
 def _playwright_bundle_mode() -> str:
     return os.environ.get("PLAYWRIGHT_BUNDLE", "all").strip().lower()
+
+
+def _build_mode() -> str:
+    return os.environ.get("BUILD_MODE", "full").strip().lower()
 
 
 def _should_bundle_playwright_browsers() -> bool:
@@ -560,9 +576,17 @@ def build_for_license(
     build_root = _resolve_build_root()
     temp_base = Path(tempfile.mkdtemp(prefix="license_build_", dir=build_root))
     workspace = temp_base / "workspace"
+    build_mode = _build_mode()
+    minimal_mode = build_mode == "minimal"
     include_playwright = os.environ.get("INCLUDE_PLAYWRIGHT", "1") != "0"
     bundle_playwright = _should_bundle_playwright_browsers()
     onefile = os.environ.get("PYINSTALLER_ONEFILE", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+    windowed = os.environ.get("PYINSTALLER_WINDOWED", "1").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -573,9 +597,18 @@ def build_for_license(
         build_timeout = int(timeout_env)
     else:
         build_timeout = 7200 if include_playwright else 1800
-    log_path = dist_dir / f"{exe_name}_pyinstaller.log"
+    log_path: Optional[Path] = None
+    pyinstaller_tail = ""
 
     try:
+        if minimal_mode:
+            for stale_path in (
+                dist_dir / f"{exe_name}_source.zip",
+                dist_dir / f"{exe_name}_pyinstaller.log",
+            ):
+                if stale_path.exists() and stale_path.is_file():
+                    stale_path.unlink()
+
         playwright_src: Optional[Path] = None
         if include_playwright:
             ok_playwright, message = _ensure_playwright_available()
@@ -595,6 +628,8 @@ def build_for_license(
         _log_step(f"Directorio temporal: {build_root}")
         _log_step(f"Timeout PyInstaller: {build_timeout}s")
         _log_step(f"Modo PyInstaller: {'onefile' if onefile else 'onedir'}")
+        _log_step(f"Modo ventana (sin consola): {'on' if windowed else 'off'}")
+        _log_step(f"Modo build: {'minimal' if minimal_mode else 'full'}")
         start = time.perf_counter()
         try:
             _copy_project(root, workspace)
@@ -629,14 +664,20 @@ def build_for_license(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        _log_step("Generando bundle limpio (zip) del workspace...")
-        bundle_base = dist_dir / f"{exe_name}_source"
-        if bundle_base.with_suffix(".zip").exists():
-            bundle_base.with_suffix(".zip").unlink()
-        archive_path = Path(
-            shutil.make_archive(str(bundle_base), "zip", root_dir=workspace)
-        )
-        _log_step(f"Bundle limpio generado: {archive_path}")
+        archive_path: Optional[Path] = None
+        if minimal_mode:
+            _log_step("Bundle limpio omitido (modo minimal)")
+        else:
+            _log_step("Generando bundle limpio (zip) del workspace...")
+            bundle_base = dist_dir / f"{exe_name}_source"
+            if bundle_base.with_suffix(".zip").exists():
+                bundle_base.with_suffix(".zip").unlink()
+            archive_path = Path(
+                shutil.make_archive(str(bundle_base), "zip", root_dir=workspace)
+            )
+            _log_step(f"Bundle limpio generado: {archive_path}")
+
+        styles_path = workspace / "styles.qss"
 
         command = [
             sys.executable,
@@ -651,6 +692,18 @@ def build_for_license(
             f"{payload_path}{os.pathsep}storage",
             "client_launcher.py",
         ]
+        if windowed:
+            command.append("--windowed")
+        if styles_path.exists():
+            command.extend(
+                [
+                    "--add-data",
+                    f"{styles_path}{os.pathsep}.",
+                ]
+            )
+            _log_step(f"Incluyendo stylesheet: {styles_path}")
+        else:
+            _log_step("styles.qss no encontrado en workspace; build seguira sin tema visual.")
         collect_all_modules = _parse_collect_all_modules()
         if collect_all_modules:
             _log_step(f"PyInstaller collect-all: {', '.join(collect_all_modules)}")
@@ -673,36 +726,49 @@ def build_for_license(
         for module in _parse_excludes():
             command.extend(["--exclude-module", module])
 
-        _log_step(f"Log de PyInstaller: {log_path}")
+        if minimal_mode:
+            _log_step("Log de PyInstaller omitido (modo minimal)")
+            log_handle_cm = tempfile.SpooledTemporaryFile(
+                max_size=10 * 1024 * 1024,
+                mode="w+",
+                encoding="utf-8",
+                errors="ignore",
+            )
+        else:
+            log_path = dist_dir / f"{exe_name}_pyinstaller.log"
+            _log_step(f"Log de PyInstaller: {log_path}")
+            log_handle_cm = log_path.open("w+", encoding="utf-8", errors="ignore")
         _log_step("Ejecutando PyInstaller (puede tardar varios minutos)...")
         start = time.monotonic()
         next_heartbeat = start + 30
-        with log_path.open("w", encoding="utf-8", errors="ignore") as log_handle:
+        with log_handle_cm as log_handle:
             proc = subprocess.Popen(
                 command,
                 cwd=workspace,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
             )
-        while True:
-            retcode = proc.poll()
-            if retcode is not None:
-                if retcode != 0:
-                    raise subprocess.CalledProcessError(retcode, command)
-                break
-            now = time.monotonic()
-            if now - start >= build_timeout:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                raise subprocess.TimeoutExpired(command, build_timeout)
-            if now >= next_heartbeat:
-                elapsed = int(now - start)
-                _log_step(f"Compilando... {elapsed}s")
-                next_heartbeat = now + 30
-            time.sleep(1)
+            while True:
+                retcode = proc.poll()
+                if retcode is not None:
+                    if retcode != 0:
+                        pyinstaller_tail = _tail_stream(log_handle)
+                        raise subprocess.CalledProcessError(retcode, command)
+                    break
+                now = time.monotonic()
+                if now - start >= build_timeout:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    pyinstaller_tail = _tail_stream(log_handle)
+                    raise subprocess.TimeoutExpired(command, build_timeout)
+                if now >= next_heartbeat:
+                    elapsed = int(now - start)
+                    _log_step(f"Compilando... {elapsed}s")
+                    next_heartbeat = now + 30
+                time.sleep(1)
         _log_step("PyInstaller finalizo correctamente")
 
         output = _guess_output(workspace / "dist", exe_name)
@@ -723,18 +789,19 @@ def build_for_license(
                 dest_root, playwright_src, mode=_playwright_bundle_mode()
             )
             _log_step("Navegadores Playwright copiados")
-        message = (
-            f"Ejecutable generado en {final_output} (bundle limpio: {archive_path})"
-        )
+        if archive_path is None:
+            message = f"Ejecutable generado en {final_output}"
+        else:
+            message = f"Ejecutable generado en {final_output} (bundle limpio: {archive_path})"
         return True, final_output, message
     except subprocess.CalledProcessError as exc:
-        tail = _tail_log(log_path)
+        tail = pyinstaller_tail or (_tail_log(log_path) if log_path else "")
         detail = f"Error al ejecutar PyInstaller: {exc}"
         if tail:
             detail = f"{detail}\nUltimas lineas:\n{tail}"
         return False, None, detail
     except subprocess.TimeoutExpired:
-        tail = _tail_log(log_path)
+        tail = pyinstaller_tail or (_tail_log(log_path) if log_path else "")
         detail = (
             "PyInstaller tardo demasiado y fue detenido. "
             "Proba de nuevo o aumenta PYINSTALLER_TIMEOUT."

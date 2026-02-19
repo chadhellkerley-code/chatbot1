@@ -748,11 +748,49 @@ def _detect_language(text: str) -> str:
 def _should_stop(stop_event: asyncio.Event) -> bool:
     if stop_event.is_set():
         return True
+    if _runtime_stop_is_set():
+        stop_event.set()
+        warn("Deteniendo filtrado por solicitud del usuario.")
+        return True
     if _poll_quit_key():
         stop_event.set()
+        _request_runtime_stop("se presionó Q")
         warn("Deteniendo filtrado por solicitud del usuario (Q).")
         return True
     return False
+
+
+def _runtime_stop_is_set() -> bool:
+    try:
+        from runtime import STOP_EVENT
+    except Exception:
+        return False
+    try:
+        return bool(STOP_EVENT.is_set())
+    except Exception:
+        return False
+
+
+def _request_runtime_stop(reason: str) -> None:
+    try:
+        from runtime import request_stop
+    except Exception:
+        return
+    try:
+        request_stop(reason)
+    except Exception:
+        return
+
+
+def _reset_runtime_stop_event() -> None:
+    try:
+        from runtime import reset_stop_event
+    except Exception:
+        return
+    try:
+        reset_stop_event()
+    except Exception:
+        return
 
 
 def _poll_quit_key() -> bool:
@@ -2179,6 +2217,7 @@ async def _execute_filter_list_async(
     filter_cfg: LeadFilterConfig,
     run_cfg: LeadFilterRunConfig,
 ) -> bool:
+    _reset_runtime_stop_event()
     pending_indices = [
         idx for idx, item in enumerate(list_data.get("items") or [])
         if item.get("status") == "PENDING"
@@ -2352,7 +2391,11 @@ async def _filter_worker(
                 list_lock,
             )
             _log_filter_result(username, account_username, result_label, reason)
-            await _apply_delay(run_cfg.delay_min, run_cfg.delay_max)
+            await _apply_delay(
+                run_cfg.delay_min,
+                run_cfg.delay_max,
+                stop_event=stop_event,
+            )
             queue.task_done()
     except ChallengeRequired as exc:
         warn(f"Challenge requerido para @{account_username}: {exc}")
@@ -3358,15 +3401,40 @@ def _log_filter_result(username: str, account: str, result: str, reason: str) ->
     print(f"@{username} | @{account} | {result} | {detail}", flush=True)
 
 
-async def _apply_delay(min_s: float, max_s: float) -> None:
+async def _apply_delay(
+    min_s: float,
+    max_s: float,
+    *,
+    stop_event: Optional[asyncio.Event] = None,
+) -> None:
     low = max(0.0, float(min_s))
     high = max(low, float(max_s))
     if high <= 0:
         return
-    await asyncio.sleep(random.uniform(low, high))
+    if stop_event is not None and _should_stop(stop_event):
+        return
+    remaining = random.uniform(low, high)
+    while remaining > 0:
+        if stop_event is not None and _should_stop(stop_event):
+            return
+        step = min(0.2, remaining)
+        await asyncio.sleep(step)
+        remaining -= step
 
 
 def _clear_console() -> None:
+    stdin_tty = False
+    stdout_tty = False
+    try:
+        stdin_tty = bool(sys.stdin.isatty())
+    except Exception:
+        stdin_tty = False
+    try:
+        stdout_tty = bool(sys.stdout.isatty())
+    except Exception:
+        stdout_tty = False
+    if not (stdin_tty or stdout_tty):
+        return
     try:
         os.system("cls" if os.name == "nt" else "clear")
     except Exception:

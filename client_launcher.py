@@ -374,13 +374,31 @@ _configure_app_version()
 from license_client import launch_with_license
 
 
+def _show_startup_error(title: str, message: str) -> None:
+    text = f"{message}\n\nLa aplicación se cerrará."
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)
+            return
+        except Exception:
+            pass
+    try:
+        print(f"{title}: {text}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def _launch_entrypoint() -> int:
     try:
         from gui_app import launch_gui_app
     except Exception as exc:
-        print(f"GUI wrapper unavailable ({exc}). Running CLI mode.")
-        launch_with_license()
-        return 0
+        _show_startup_error(
+            "Insta CRM",
+            f"No se pudo cargar la interfaz gráfica.\nDetalle: {exc}",
+        )
+        return 1
 
     try:
         return int(
@@ -390,9 +408,11 @@ def _launch_entrypoint() -> int:
             )
         )
     except Exception as exc:
-        print(f"GUI wrapper failed ({exc}). Running CLI mode.")
-        launch_with_license()
-        return 0
+        _show_startup_error(
+            "Insta CRM",
+            f"La interfaz gráfica falló al iniciar.\nDetalle: {exc}",
+        )
+        return 1
 
 
 if __name__ == "__main__":

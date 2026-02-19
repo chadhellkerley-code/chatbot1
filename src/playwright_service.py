@@ -230,12 +230,32 @@ class PlaywrightService:
         self._base_profiles = Path(base_profiles or BASE_PROFILES)
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._launch_proxy: Optional[dict] = None
 
     @property
     def playwright(self) -> Optional[Playwright]:
         return self._playwright
 
-    async def start(self) -> "PlaywrightService":
+    @staticmethod
+    def _launch_proxy_payload(proxy: Optional[dict]) -> Optional[dict]:
+        if not proxy or not isinstance(proxy, dict):
+            return None
+        server = (
+            str(proxy.get("server") or proxy.get("url") or proxy.get("proxy") or "")
+            .strip()
+        )
+        if not server:
+            return None
+        payload: dict = {"server": server}
+        username = str(proxy.get("username") or "").strip()
+        password = str(proxy.get("password") or "").strip()
+        if username:
+            payload["username"] = username
+        if password:
+            payload["password"] = password
+        return payload
+
+    async def start(self, launch_proxy: Optional[dict] = None) -> "PlaywrightService":
         if self._playwright is not None:
             return self
 
@@ -246,6 +266,10 @@ class PlaywrightService:
             "slow_mo": 120,
             "args": DEFAULT_ARGS,
         }
+        proxy_payload = self._launch_proxy_payload(launch_proxy)
+        self._launch_proxy = proxy_payload
+        if proxy_payload:
+            launch_kwargs["proxy"] = proxy_payload
         executable = resolve_playwright_executable(headless=self._headless)
         if executable:
             launch_kwargs["executable_path"] = str(executable)
@@ -268,9 +292,12 @@ class PlaywrightService:
         if storage_state:
             storage_state_path = str(storage_state)
 
+        # If browser already has a global proxy, do not override at context level.
+        context_proxy = None if self._launch_proxy else self._launch_proxy_payload(proxy)
+
         ctx = await self._browser.new_context(
             storage_state=storage_state_path,
-            proxy=proxy or None,
+            proxy=context_proxy,
             viewport=DEFAULT_VIEWPORT,
             user_agent=DEFAULT_USER_AGENT,
             locale=DEFAULT_LOCALE,

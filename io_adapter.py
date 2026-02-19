@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import builtins
+import os
 import re
 import sys
 import threading
@@ -42,43 +43,98 @@ class _StreamProxy:
 
     def __init__(self, adapter: "IOAdapter", stream: Any) -> None:
         self._adapter = adapter
-        self._stream = stream
+        self._fallback_stream = open(os.devnull, "w", encoding="utf-8")
+        self._owns_fallback_stream = True
+        self._owns_stream = False
+        if stream is None:
+            # In windowed EXE builds stderr/stdout may be None.
+            # Playwright requires fileno(), so provide a real writable stream.
+            self._stream = self._fallback_stream
+            self._owns_stream = True
+        else:
+            self._stream = stream
 
     def write(self, data: Any) -> int:
         text = self._adapter._stringify_arg(data)
-        written = self._stream.write(text)
+        written: Any = len(text)
+        if self._stream is not None:
+            try:
+                written = self._stream.write(text)
+            except Exception:
+                try:
+                    written = self._fallback_stream.write(text)
+                except Exception:
+                    written = len(text)
         self._adapter._capture_stream_text(text)
         return written if isinstance(written, int) else len(text)
 
     def flush(self) -> None:
-        self._stream.flush()
+        for stream in (self._stream, self._fallback_stream):
+            if stream is None:
+                continue
+            try:
+                stream.flush()
+            except Exception:
+                continue
 
     def writelines(self, lines: Any) -> None:
         for line in lines:
             self.write(line)
 
-    def isatty(self) -> bool:
+    def _safe_isatty(self, stream: Any) -> bool:
+        if stream is None:
+            return False
         try:
-            return bool(self._stream.isatty())
+            return bool(stream.isatty())
         except Exception:
             return False
 
+    def isatty(self) -> bool:
+        return self._safe_isatty(self._stream)
+
     def fileno(self) -> int:
-        return self._stream.fileno()
+        for stream in (self._stream, self._fallback_stream):
+            if stream is None:
+                continue
+            try:
+                return stream.fileno()
+            except Exception:
+                continue
+        raise OSError("No backing stream available")
+
+    def close(self) -> None:
+        if self._owns_stream and self._stream is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            finally:
+                self._stream = None
+        if not self._owns_fallback_stream or self._fallback_stream is None:
+            return
+        try:
+            self._fallback_stream.close()
+        except Exception:
+            return
+        finally:
+            self._fallback_stream = None
 
     @property
     def encoding(self) -> str:
-        return getattr(self._stream, "encoding", "utf-8")
+        return getattr(self._stream or self._fallback_stream, "encoding", "utf-8")
 
     @property
     def errors(self) -> str:
-        return getattr(self._stream, "errors", "replace")
+        return getattr(self._stream or self._fallback_stream, "errors", "replace")
 
     @property
     def closed(self) -> bool:
-        return bool(getattr(self._stream, "closed", False))
+        stream = self._stream or self._fallback_stream
+        return bool(getattr(stream, "closed", False))
 
     def __getattr__(self, name: str) -> Any:
+        if self._stream is None:
+            raise AttributeError(name)
         return getattr(self._stream, name)
 
 
@@ -147,6 +203,10 @@ class IOAdapter(QObject):
                 sys.stdout = self._original_stdout
             if self._stderr_proxy is not None and sys.stderr is self._stderr_proxy:
                 sys.stderr = self._original_stderr
+            if self._stdout_proxy is not None:
+                self._stdout_proxy.close()
+            if self._stderr_proxy is not None:
+                self._stderr_proxy.close()
             self._stdout_proxy = None
             self._stderr_proxy = None
             with self._ACTIVE_PATCH_LOCK:
@@ -203,8 +263,6 @@ class IOAdapter(QObject):
         self._original_print(*args, **kwargs)
 
     def _input_override(self, prompt: Any = "") -> str:
-        if self._shutting_down:
-            return ""
         if threading.current_thread() is threading.main_thread():
             if not self._warned_main_thread_input:
                 self._warned_main_thread_input = True
@@ -212,6 +270,8 @@ class IOAdapter(QObject):
                     "[gui] input() called from UI thread; returning empty string to avoid deadlock.\n"
                 )
             return ""
+        if self._shutting_down:
+            raise SystemExit(0)
 
         with self._pending_lock:
             if self._prefilled_inputs:
@@ -247,6 +307,8 @@ class IOAdapter(QObject):
         self.input_requested.emit(request)
 
         pending.event.wait()
+        if self._shutting_down:
+            raise SystemExit(0)
         self._dbg(f"input_released request_id={request.request_id} value_len={len(pending.value)}")
         return pending.value
 

@@ -11,17 +11,13 @@ import json
 import logging
 import os
 import random
-import shutil
 import textwrap
 import threading
 import time
 import uuid
-import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
-
-from http.client import RemoteDisconnected
 
 from paths import runtime_base
 from ui import Fore, full_line, style_text
@@ -40,8 +36,6 @@ BASE.mkdir(parents=True, exist_ok=True)
 DATA_FILE = BASE / "whatsapp_automation.json"
 EXPORTS_DIR = BASE / "whatsapp_exports"
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-SESSIONS_DIR = BASE / "browser_sessions"
-SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 MIN_PHONE_DIGITS = 8
 MAX_PHONE_DIGITS = 15
@@ -53,6 +47,8 @@ WHATSAPP_WEB_URL = "https://web.whatsapp.com"
 # Playwright usa un "user_data_dir" persistente. Por defecto se ubica dentro de storage/
 # para sobrevivir reinicios y builds donde el cwd puede variar.
 DEFAULT_PLAYWRIGHT_SESSION_DIR = BASE / "storage" / "whatsapp_session"
+PLAYWRIGHT_SESSIONS_DIR = BASE / "storage" / "whatsapp_sessions"
+PLAYWRIGHT_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 _PLAYWRIGHT_LOCK = threading.RLock()
 _STRUCTURED_LOG_PATH = BASE / "storage" / "logs" / "whatsapp_automation.jsonl"
@@ -96,6 +92,11 @@ def _now() -> datetime:
 
 def _now_iso() -> str:
     return _now().isoformat() + "Z"
+
+
+def _playwright_session_dir_for_number(number_id: str) -> Path:
+    safe_id = (number_id or "").strip() or str(uuid.uuid4())
+    return PLAYWRIGHT_SESSIONS_DIR / safe_id
 
 
 # ======================================================================
@@ -349,6 +350,7 @@ class WhatsAppDataStore:
             key: self._ensure_number_structure(value)
             for key, value in dict(data.get("numbers", {})).items()
         }
+        self._normalize_number_sessions(merged["numbers"])
         merged["contact_lists"] = {
             key: self._ensure_contact_list_structure(value)
             for key, value in dict(data.get("contact_lists", {})).items()
@@ -368,31 +370,68 @@ class WhatsAppDataStore:
         return merged
 
     # ------------------------------------------------------------------
+    def _normalize_number_sessions(self, numbers: dict[str, dict[str, Any]]) -> None:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for item in numbers.values():
+            path = str(item.get("session_path") or "").strip()
+            if not path:
+                continue
+            grouped.setdefault(path, []).append(item)
+        for _path, items in grouped.items():
+            if len(items) <= 1:
+                continue
+            # Conserva el primer perfil y separa el resto para evitar operar con el número incorrecto.
+            for conflicted in items[1:]:
+                number_id = conflicted.get("id") or str(uuid.uuid4())
+                conflicted["session_path"] = str(_playwright_session_dir_for_number(number_id))
+                conflicted["connected"] = False
+                conflicted["connection_state"] = "pendiente"
+                conflicted.setdefault("session_notes", []).append(
+                    {
+                        "created_at": _now_iso(),
+                        "text": "Se detectó sesión compartida con otro número. Vinculación requerida para aislar la operación.",
+                    }
+                )
+
+    # ------------------------------------------------------------------
     def _ensure_number_structure(self, value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
+            generated_id = str(uuid.uuid4())
             return {
-                "id": str(uuid.uuid4()),
+                "id": generated_id,
                 "alias": "",
                 "phone": "",
                 "connected": False,
                 "last_connected_at": None,
                 "session_notes": [],
                 "keep_alive": True,
+                "session_path": str(_playwright_session_dir_for_number(generated_id)),
                 "connection_method": "playwright",
+                "background_mode": True,
             }
+        method = str(value.get("connection_method") or "playwright").strip().lower()
+        if method != "playwright":
+            method = "playwright"
+        number_id = value.get("id") or str(uuid.uuid4())
+        raw_session_path = (value.get("session_path") or "").strip()
+        if raw_session_path:
+            session_path = raw_session_path
+        else:
+            session_path = str(_playwright_session_dir_for_number(number_id))
         return {
-            "id": value.get("id") or str(uuid.uuid4()),
+            "id": number_id,
             "alias": value.get("alias", ""),
             "phone": value.get("phone", ""),
             "connected": bool(value.get("connected", False)),
             "last_connected_at": value.get("last_connected_at"),
             "session_notes": list(value.get("session_notes", [])),
             "keep_alive": bool(value.get("keep_alive", True)),
-            "session_path": value.get("session_path", ""),
+            "session_path": session_path,
             "qr_snapshot": value.get("qr_snapshot"),
             "last_qr_capture_at": value.get("last_qr_capture_at"),
             "connection_state": value.get("connection_state", "pendiente"),
-            "connection_method": value.get("connection_method", "playwright"),
+            "connection_method": method,
+            "background_mode": bool(value.get("background_mode", True)),
         }
 
     # ------------------------------------------------------------------
@@ -520,6 +559,7 @@ class WhatsAppDataStore:
             "events": events,
             "max_contacts": _to_int(value.get("max_contacts"), 0),
             "last_session_at": value.get("last_session_at"),
+            "completion_notified": bool(value.get("completion_notified", False)),
             "log": log,
         }
 
@@ -763,9 +803,9 @@ class _WASelectors:
 
     # Conversación
     CHAT_INPUT = [
-        "div[contenteditable='true'][data-testid='conversation-compose-box-input']",
+        "footer div[contenteditable='true'][data-testid='conversation-compose-box-input']",
         "footer div[contenteditable='true'][role='textbox']",
-        "div[role='textbox'][contenteditable='true']",
+        "footer div[contenteditable='true']",
     ]
     SEND_BUTTON = [
         "button[data-testid='compose-btn-send']",
@@ -979,24 +1019,16 @@ def _print_numbers_summary(store: WhatsAppDataStore) -> None:
 
 
 def _select_connection_backend() -> str | None:
-    backend_labels = {
-        "1": "playwright",
-        "2": "selenium",
-        "3": "system",
-    }
     while True:
         print(_line())
         _subtitle("Método de vinculación")
-        print("1) Navegador automatizado con Playwright (Chromium)")
-        print("2) Navegador automatizado con Selenium (Chrome/Safari)")
-        print("3) Abrir navegador predeterminado del sistema")
-        print("4) Volver\n")
+        print("1) Playwright (Chromium persistente)")
+        print("2) Volver\n")
         choice = ask("Opción: ").strip()
-        if choice == "4":
+        if choice == "2":
             return None
-        backend = backend_labels.get(choice)
-        if backend:
-            return backend
+        if choice == "1":
+            return "playwright"
         _info("Opción inválida. Intentá nuevamente.", color=Fore.YELLOW)
 
 
@@ -1037,20 +1069,10 @@ def _link_new_number(store: WhatsAppDataStore) -> None:
         return
 
     session_id = str(uuid.uuid4())
-    if backend == "playwright":
-        session_dir = DEFAULT_PLAYWRIGHT_SESSION_DIR
-    else:
-        session_dir = SESSIONS_DIR / session_id
+    session_dir = _playwright_session_dir_for_number(session_id)
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    backend_titles = {
-        "playwright": "Playwright (Chromium)",
-        "selenium": "Selenium",
-        "system": "el navegador predeterminado",
-    }
-    _info(
-        f"Preparando {backend_titles.get(backend, 'el método seleccionado')} para WhatsApp Web..."
-    )
+    _info("Preparando Playwright (Chromium) para WhatsApp Web...")
     success, snapshot, details = _initiate_whatsapp_web_login(session_dir, backend)
     if details:
         _info(details)
@@ -1063,11 +1085,6 @@ def _link_new_number(store: WhatsAppDataStore) -> None:
             success = True
 
     state = store.state.setdefault("numbers", {})
-    method_descriptions = {
-        "playwright": "Playwright (Chromium)",
-        "selenium": "Selenium",
-        "system": "el navegador predeterminado del sistema",
-    }
     record = {
         "id": session_id,
         "alias": alias or phone,
@@ -1078,9 +1095,7 @@ def _link_new_number(store: WhatsAppDataStore) -> None:
             {
                 "created_at": _now_iso(),
                 "text": note
-                or "Sesión gestionada mediante {}.".format(
-                    method_descriptions.get(backend, "el método seleccionado")
-                ),
+                or "Sesión gestionada mediante Playwright (Chromium).",
             }
         ],
         "keep_alive": True,
@@ -1089,6 +1104,7 @@ def _link_new_number(store: WhatsAppDataStore) -> None:
         "last_qr_capture_at": _now_iso() if snapshot else None,
         "connection_state": "verificado" if success else "pendiente",
         "connection_method": backend,
+        "background_mode": True,
     }
     if not success:
         record["session_notes"].append(
@@ -1138,34 +1154,17 @@ def _remove_linked_number(store: WhatsAppDataStore) -> None:
         return
     state = store.state.setdefault("numbers", {})
     state.pop(selected.get("id"), None)
-    session_path = selected.get("session_path")
-    if session_path:
-        path = Path(session_path)
-        can_delete = False
-        try:
-            can_delete = path.exists() and path.resolve().is_relative_to(SESSIONS_DIR.resolve())
-        except Exception:
-            can_delete = path.exists() and str(path).startswith(str(SESSIONS_DIR))
-        if can_delete:
-            try:
-                shutil.rmtree(path)
-            except OSError:
-                pass
     store.save()
-    ok(f"Se eliminó la sesión asociada a '{alias}'.")
+    ok(f"Se eliminó el número vinculado '{alias}'.")
     press_enter()
 
 
 def _initiate_whatsapp_web_login(
     session_dir: Path, backend: str
 ) -> tuple[bool, Path | None, str]:
-    if backend == "playwright":
-        return _initiate_with_playwright(session_dir)
-    if backend == "selenium":
-        return _initiate_with_selenium(session_dir)
-    if backend == "system":
-        return _initiate_with_system_browser()
-    return False, None, "Método de vinculación desconocido."
+    if backend != "playwright":
+        return False, None, "Solo se admite Playwright para la vinculación automática."
+    return _initiate_with_playwright(session_dir)
 
 
 def _initiate_with_playwright(session_dir: Path) -> tuple[bool, Path | None, str]:
@@ -1262,159 +1261,6 @@ def _initiate_with_playwright(session_dir: Path) -> tuple[bool, Path | None, str
     message = " ".join(info_messages)
     return success, snapshot_path if snapshot_path.exists() else None, message
 
-
-def _initiate_with_selenium(session_dir: Path) -> tuple[bool, Path | None, str]:
-    try:
-        from selenium import webdriver
-        from selenium.common.exceptions import TimeoutException, WebDriverException
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.support.ui import WebDriverWait
-    except ImportError:
-        return (
-            False,
-            None,
-            "Selenium no está instalado. Ejecutá 'pip install selenium' y asegurate de contar con el driver correspondiente.",
-        )
-
-    snapshot_path = session_dir / "qr.png"
-    info_messages: list[str] = []
-    success = False
-    driver = None
-    driver_label = ""
-
-    profile_root = session_dir / "selenium_profile"
-    profile_root.mkdir(parents=True, exist_ok=True)
-
-    chrome_profile = profile_root / "chrome"
-    chrome_profile.mkdir(parents=True, exist_ok=True)
-    try:
-        from selenium.webdriver.chrome.options import Options as ChromeOptions
-
-        chrome_options = ChromeOptions()
-        chrome_options.add_argument(f"--user-data-dir={str(chrome_profile)}")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--remote-allow-origins=*")
-        driver = webdriver.Chrome(options=chrome_options)
-        driver_label = "Chrome"
-    except Exception:
-        driver = None
-
-    if driver is None:
-        try:
-            driver = webdriver.Safari()
-            driver_label = "Safari"
-        except Exception:
-            driver = None
-
-    if driver is None:
-        return (
-            False,
-            None,
-            "No se pudo iniciar un navegador compatible con Selenium. Verificá que el driver esté instalado y habilitado.",
-        )
-
-    info_messages.append(
-        f"Se abrió {driver_label} mediante Selenium. Escaneá el QR para continuar."
-    )
-
-    monitor_completed = False
-
-    try:
-        driver.get(WHATSAPP_WEB_URL)
-        wait = WebDriverWait(driver, 60)
-        try:
-            wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, _WASelectors.QR_CANVAS[0]))
-            )
-        except TimeoutException:
-            pass
-
-        try:
-            driver.save_screenshot(str(snapshot_path))
-        except RemoteDisconnected:
-            raise
-        except Exception:
-            pass
-
-        if snapshot_path.exists():
-            info_messages.append(
-                f"Se guardó una captura del código QR en {snapshot_path}."
-            )
-        info_messages.append(
-            "Escaneá el código con tu celular para completar la vinculación."
-        )
-
-        verification_targets = list(_WASelectors.APP_READY)
-        deadline = time.time() + 90
-        while time.time() < deadline:
-            success = False
-            for selector in verification_targets:
-                try:
-                    WebDriverWait(driver, 8).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    success = True
-                    break
-                except TimeoutException:
-                    continue
-            if success:
-                break
-            try:
-                qr_visible = driver.find_elements(By.CSS_SELECTOR, _WASelectors.QR_CANVAS[0])
-            except RemoteDisconnected:
-                raise
-            except WebDriverException as exc:
-                raise exc
-            if not qr_visible:
-                success = True
-                break
-            time.sleep(2)
-        monitor_completed = True
-    except RemoteDisconnected:
-        info_messages.append(
-            "El navegador se cerró antes de completar la vinculación. Volvé a intentar."
-        )
-        success = False
-    except WebDriverException:
-        info_messages.append(
-            "Selenium no pudo completar la automatización. Revisá la configuración del navegador y volvé a intentar."
-        )
-        success = False
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
-
-    if monitor_completed:
-        if success:
-            info_messages.append(
-                "La sesión quedó vinculada correctamente y permanecerá activa en segundo plano."
-            )
-        else:
-            info_messages.append(
-                "No se detectó la vinculación en 90 segundos. Se canceló automáticamente."
-            )
-
-    message = " ".join(info_messages)
-    return success, snapshot_path if snapshot_path.exists() else None, message
-
-
-def _initiate_with_system_browser() -> tuple[bool, Path | None, str]:
-    opened = webbrowser.open(WHATSAPP_WEB_URL)
-    if opened:
-        message = (
-            f"Se abrió el navegador predeterminado en {WHATSAPP_WEB_URL}. "
-            "Escaneá el código QR y luego confirmá en la terminal si la vinculación se completó."
-        )
-    else:
-        message = (
-            f"Intentá abrir manualmente {WHATSAPP_WEB_URL} desde tu navegador, "
-            "escaneá el código QR y luego confirmá en la terminal si la vinculación se completó."
-        )
-    return False, None, message
 
 
 # ----------------------------------------------------------------------
@@ -1914,6 +1760,7 @@ def _plan_message_run(store: WhatsAppDataStore) -> None:
         "events": events,
         "max_contacts": max_contacts,
         "last_session_at": None,
+        "completion_notified": False,
         "log": [],
     }
     _append_run_log(
@@ -2246,6 +2093,57 @@ def _refresh_run_counters(run: dict[str, Any]) -> None:
     )
 
 
+def _emit_run_completion_screen(run: dict[str, Any]) -> None:
+    total, sent, _, cancelled, failed = _run_counts(run)
+    processed = sent + failed + cancelled
+    number_label = _run_number_label(run)
+    list_label = _run_list_label(run)
+    print(_line())
+    title("Resumen final de envío por WhatsApp")
+    print(_line())
+    print(f"Número usado: {number_label}")
+    print(f"Lista operada: {list_label}")
+    print(f"Éxitos: {sent}")
+    print(f"Fallidos: {failed}")
+    print(f"Omitidos/Cancelados: {cancelled}")
+    print(f"Procesados: {processed}/{total}")
+    print(_line())
+    _log_structured(
+        "whatsapp.run.completed.summary",
+        run_id=run.get("id"),
+        number=number_label,
+        list_alias=list_label,
+        sent=sent,
+        failed=failed,
+        cancelled=cancelled,
+        total=total,
+    )
+
+
+def _has_active_message_runs(runs: list[dict[str, Any]]) -> bool:
+    for run in runs:
+        status = (run.get("status") or "").lower()
+        if status not in {"completado", "cancelado"}:
+            return True
+    return False
+
+
+def _has_active_background_automations(store: WhatsAppDataStore) -> bool:
+    ai_configs = store.state.get("ai_automations", {})
+    ai_active = any(
+        isinstance(config, dict) and bool(config.get("active", False))
+        for config in ai_configs.values()
+    )
+    followup = store.state.get("followup", {})
+    followup_active = isinstance(followup, dict) and bool(followup.get("auto_enabled", False))
+    return ai_active or followup_active
+
+
+def _playwright_runtime_exists() -> bool:
+    with _PLAYWRIGHT_RUNTIME_LOCK:
+        return _PLAYWRIGHT_RUNTIME is not None
+
+
 def _reconcile_runs(store: WhatsAppDataStore) -> None:
     runs = store.state.setdefault("message_runs", [])
     now = _now()
@@ -2318,6 +2216,10 @@ def _reconcile_runs(store: WhatsAppDataStore) -> None:
                 )
                 changed = True
             _refresh_run_counters(run)
+            if not run.get("completion_notified"):
+                _emit_run_completion_screen(run)
+                run["completion_notified"] = True
+                changed = True
             continue
         next_at = _next_pending_at(events)
         if run.get("next_run_at") != next_at:
@@ -2340,6 +2242,16 @@ def _reconcile_runs(store: WhatsAppDataStore) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Error procesando seguimiento automático de WhatsApp: %s", exc)
         _log_structured("whatsapp.reconcile.followup.error", error=str(exc))
+    if (
+        not _has_active_message_runs(runs)
+        and not _has_active_background_automations(store)
+        and _playwright_runtime_exists()
+    ):
+        _shutdown_playwright_runtime()
+        _log_structured(
+            "whatsapp.playwright.runtime.closed",
+            reason="no_active_runs",
+        )
     if changed:
         store.save()
 
@@ -2358,6 +2270,18 @@ def _resolve_playwright_user_data_dir(sender: dict[str, Any] | None = None) -> P
             candidate = (BASE / candidate).resolve()
         return candidate
     return DEFAULT_PLAYWRIGHT_SESSION_DIR
+
+
+def _wa_automation_headless(sender: dict[str, Any] | None = None) -> bool:
+    """
+    Ejecuta automatizaciones en segundo plano por defecto.
+    Override temporal: WPP_HEADFUL=1 fuerza modo visible.
+    """
+    if (os.getenv("WPP_HEADFUL", "").strip().lower() in {"1", "true", "yes", "on"}):
+        return False
+    if sender is None:
+        return True
+    return bool(sender.get("background_mode", True))
 
 
 def _normalize_message(text: str) -> str:
@@ -2419,6 +2343,49 @@ def _wa_wait_for_login_state(page: Any, *, timeout_seconds: float) -> str:
             return "qr"
         time.sleep(0.5)
     return "timeout"
+
+
+def _wa_find_visible_chat_input(page: Any, *, timeout_ms: int = 45000) -> Any | None:
+    """
+    Selecciona el textbox visible de escritura del chat activo.
+    Evita tomar inputs ocultos o cajas de búsqueda laterales.
+    """
+    selector = _join_selectors(_WASelectors.CHAT_INPUT)
+    deadline = time.time() + max(timeout_ms, 1000) / 1000.0
+    while time.time() < deadline:
+        try:
+            candidates = page.locator(selector)
+            total = min(_wa_locator_count(candidates), 20)
+        except Exception:
+            total = 0
+            candidates = None
+        if not candidates or total <= 0:
+            page.wait_for_timeout(250)
+            continue
+
+        for idx in range(total):
+            candidate = candidates.nth(idx)
+            try:
+                if not candidate.is_visible():
+                    continue
+                in_footer = bool(
+                    candidate.evaluate(
+                        "el => Boolean(el && el.closest && el.closest('footer'))"
+                    )
+                )
+                if not in_footer:
+                    continue
+                box = candidate.bounding_box() or {}
+                width = float(box.get("width") or 0.0)
+                height = float(box.get("height") or 0.0)
+                if width < 40 or height < 10:
+                    continue
+                return candidate
+            except Exception:
+                continue
+
+        page.wait_for_timeout(250)
+    return None
 
 
 def _register_playwright_runtime_cleanup() -> None:
@@ -2584,7 +2551,103 @@ def _extract_playwright_bubble_text(bubble: Any) -> str:
             text = ""
         if text:
             texts.append(text)
-    return "\n".join(texts).strip()
+    merged = "\n".join(texts).strip()
+    if merged:
+        return merged
+    try:
+        fallback = (bubble.inner_text() or "").strip()
+    except Exception:
+        fallback = ""
+    return fallback
+
+
+def _wa_bubble_direction(bubble: Any) -> str:
+    try:
+        cls = (bubble.get_attribute("class") or "").lower()
+    except Exception:
+        cls = ""
+    if "message-out" in cls:
+        return "outgoing"
+    if "message-in" in cls:
+        return "incoming"
+    try:
+        if bubble.locator(_WASelectors.CHECK_READ).count() > 0:
+            return "outgoing"
+        if bubble.locator(_WASelectors.CHECK_DELIVERED).count() > 0:
+            return "outgoing"
+        if bubble.locator(_WASelectors.CHECK_SENT).count() > 0:
+            return "outgoing"
+    except Exception:
+        pass
+    try:
+        if bubble.locator(_join_selectors(_WASelectors.BUBBLE_OUT)).count() > 0:
+            return "outgoing"
+        if bubble.locator(_join_selectors(_WASelectors.BUBBLE_IN)).count() > 0:
+            return "incoming"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _wa_confirmation_from_bubble(bubble: Any) -> str:
+    try:
+        if bubble.locator(_WASelectors.CHECK_READ).count() > 0:
+            return "leido"
+        if bubble.locator(_WASelectors.CHECK_DELIVERED).count() > 0:
+            return "entregado"
+        if bubble.locator(_WASelectors.CHECK_SENT).count() > 0:
+            return "enviado"
+    except Exception:
+        return "enviado"
+    return "enviado"
+
+
+def _wa_wait_outgoing_bubble(
+    page: Any,
+    *,
+    expected_text: str,
+    before_count: int,
+    timeout_ms: int = 25000,
+) -> tuple[Any | None, str]:
+    container_selector = _WASelectors.MESSAGE_CONTAINER[0]
+    expected = _normalize_message(expected_text)
+    deadline = time.time() + max(timeout_ms, 1000) / 1000.0
+
+    while time.time() < deadline:
+        try:
+            nodes = page.locator(container_selector)
+            total = _wa_locator_count(nodes)
+        except Exception:
+            total = 0
+            nodes = None
+        if total <= 0 or nodes is None:
+            page.wait_for_timeout(250)
+            continue
+        if before_count > 0 and total <= before_count:
+            page.wait_for_timeout(250)
+            continue
+
+        if before_count > 0:
+            start = max(0, min(before_count, total - 1))
+        else:
+            start = max(0, total - 8)
+        for idx in range(total - 1, start - 1, -1):
+            bubble = nodes.nth(idx)
+            text = _normalize_message(_extract_playwright_bubble_text(bubble))
+            if expected and text and (expected in text or text in expected):
+                direction = _wa_bubble_direction(bubble)
+                confirmation = _wa_confirmation_from_bubble(bubble)
+                if direction == "outgoing":
+                    return bubble, confirmation
+
+        if total > before_count:
+            for idx in range(total - 1, start - 1, -1):
+                bubble = nodes.nth(idx)
+                if _wa_bubble_direction(bubble) == "outgoing":
+                    return bubble, _wa_confirmation_from_bubble(bubble)
+
+        page.wait_for_timeout(300)
+    return None, ""
 
 
 def _send_with_playwright(
@@ -2623,7 +2686,10 @@ def _send_with_playwright(
     trace_id = str(uuid.uuid4())
 
     try:
-        with _playwright_persistent_page(sender=sender, headless=False) as (page, _context):
+        with _playwright_persistent_page(
+            sender=sender,
+            headless=_wa_automation_headless(sender),
+        ) as (page, _context):
             page.goto(WHATSAPP_WEB_URL, wait_until="domcontentloaded")
 
             state = _wa_wait_for_login_state(page, timeout_seconds=15.0)
@@ -2661,11 +2727,8 @@ def _send_with_playwright(
                 }
 
             page.goto(f"{WHATSAPP_WEB_URL}/send?phone={digits}", wait_until="domcontentloaded")
-
-            input_selector = _join_selectors(_WASelectors.CHAT_INPUT)
-            try:
-                page.wait_for_selector(input_selector, timeout=45000)
-            except PlaywrightTimeoutError:
+            input_box = _wa_find_visible_chat_input(page, timeout_ms=45000)
+            if input_box is None:
                 alert = _collect_playwright_alert_text(page) or (
                     "No se pudo abrir la conversación. Confirmá que el número tenga WhatsApp."
                 )
@@ -2682,17 +2745,18 @@ def _send_with_playwright(
                     "reason": alert,
                     "session_expired": False,
                 }
-
-            input_box = page.locator(input_selector).first
             try:
                 input_box.click(timeout=5000)
             except Exception:
-                return {
-                    "success": False,
-                    "code": "input_missing",
-                    "reason": "No se encontró el cuadro de mensaje en WhatsApp Web.",
-                    "session_expired": False,
-                }
+                try:
+                    input_box.focus()
+                except Exception:
+                    return {
+                        "success": False,
+                        "code": "input_missing",
+                        "reason": "No se encontró el cuadro de mensaje en WhatsApp Web.",
+                        "session_expired": False,
+                    }
 
             # Limpiar texto previo (si lo hubiera).
             for hotkey in ("Control+A", "Meta+A"):
@@ -2704,11 +2768,10 @@ def _send_with_playwright(
                     continue
 
             # Conteo previo para confirmar envío.
-            out_selector = _join_selectors(_WASelectors.BUBBLE_OUT)
             try:
-                before_out = page.locator(out_selector).count()
+                before_count = _wa_locator_count(page.locator(_WASelectors.MESSAGE_CONTAINER[0]))
             except Exception:
-                before_out = 0
+                before_count = 0
 
             # Tipeo multi-línea (Shift+Enter) y Enter para enviar.
             for idx, line in enumerate(typed_message.splitlines() or [""]):
@@ -2720,22 +2783,14 @@ def _send_with_playwright(
                     page.keyboard.type(" ")
             page.keyboard.press("Enter")
 
-            try:
-                page.wait_for_function(
-                    "(args) => document.querySelectorAll(args.sel).length > args.before",
-                    arg={"sel": out_selector, "before": before_out},
-                    timeout=20000,
-                )
-            except PlaywrightTimeoutError:
-                # Fallback: el conteo puede no reflejar el DOM; intentamos validar texto.
-                pass
-
-            out_bubbles = page.locator(out_selector)
-            try:
-                out_count = out_bubbles.count()
-            except Exception:
-                out_count = 0
-            if out_count <= 0:
+            normalized_message = _normalize_message(typed_message)
+            matched_bubble, confirmation = _wa_wait_outgoing_bubble(
+                page,
+                expected_text=typed_message,
+                before_count=before_count,
+                timeout_ms=25000,
+            )
+            if matched_bubble is None:
                 return {
                     "success": False,
                     "code": "send_unconfirmed",
@@ -2743,31 +2798,30 @@ def _send_with_playwright(
                     "session_expired": False,
                 }
 
-            last_bubble = out_bubbles.nth(out_count - 1)
-            bubble_text = _extract_playwright_bubble_text(last_bubble)
-            normalized_message = _normalize_message(typed_message)
-            normalized_bubble = _normalize_message(bubble_text)
-            if normalized_message and (
-                normalized_message not in normalized_bubble
-                and normalized_bubble not in normalized_message
-            ):
-                return {
-                    "success": False,
-                    "code": "text_mismatch",
-                    "reason": "WhatsApp no mostró el contenido del mensaje enviado.",
-                    "session_expired": False,
-                }
+            # Espera corta para intentar escalar de "enviado" a "entregado/leído".
+            confirmation = confirmation or "enviado"
+            if confirmation == "enviado":
+                upgrade_deadline = time.time() + 6.0
+                while time.time() < upgrade_deadline:
+                    upgraded = _wa_confirmation_from_bubble(matched_bubble)
+                    if upgraded in {"entregado", "leido"}:
+                        confirmation = upgraded
+                        break
+                    page.wait_for_timeout(400)
 
-            confirmation = "enviado"
-            try:
-                if last_bubble.locator(_WASelectors.CHECK_READ).count() > 0:
-                    confirmation = "leido"
-                elif last_bubble.locator(_WASelectors.CHECK_DELIVERED).count() > 0:
-                    confirmation = "entregado"
-                elif last_bubble.locator(_WASelectors.CHECK_SENT).count() > 0:
-                    confirmation = "enviado"
-            except Exception:
-                confirmation = "enviado"
+            bubble_text = _extract_playwright_bubble_text(matched_bubble)
+            normalized_bubble = _normalize_message(bubble_text)
+            if normalized_message and normalized_bubble:
+                if (
+                    normalized_message not in normalized_bubble
+                    and normalized_bubble not in normalized_message
+                ):
+                    return {
+                        "success": False,
+                        "code": "text_mismatch",
+                        "reason": "WhatsApp no mostró el contenido del mensaje enviado.",
+                        "session_expired": False,
+                    }
 
             _log_structured(
                 "whatsapp.send.ok",
@@ -2817,16 +2871,15 @@ def _send_message_via_backend(
 ) -> dict[str, Any]:
     method = (sender.get("connection_method") or "").lower()
     message = event.get("message", "")
-    if method == "selenium":
-        return _send_with_selenium(sender, contact, message)
-    if method == "playwright":
-        return _send_with_playwright(sender, contact, message)
-    return {
-        "success": True,
-        "confirmation": "entregado",
-        "note": event.get("notes") or "Mensaje enviado correctamente.",
-        "delivered_at": _now_iso(),
-    }
+    if method != "playwright":
+        sender["connection_method"] = "playwright"
+        _log_structured(
+            "whatsapp.sender.method.normalized",
+            sender_id=sender.get("id"),
+            previous_method=method or "missing",
+            normalized_method="playwright",
+        )
+    return _send_with_playwright(sender, contact, message)
 
 
 # ======================================================================
@@ -2902,19 +2955,7 @@ def _wa_get_last_message_snapshot(page: Any) -> dict[str, str]:
 
     bubble = nodes.nth(total - 1)
     text = _extract_playwright_bubble_text(bubble)
-    direction = "unknown"
-    try:
-        cls = (bubble.get_attribute("class") or "").lower()
-        if "message-out" in cls:
-            direction = "outgoing"
-        elif "message-in" in cls:
-            direction = "incoming"
-        elif bubble.locator(_join_selectors(_WASelectors.BUBBLE_OUT)).count() > 0:
-            direction = "outgoing"
-        elif bubble.locator(_join_selectors(_WASelectors.BUBBLE_IN)).count() > 0:
-            direction = "incoming"
-    except Exception:
-        direction = "unknown"
+    direction = _wa_bubble_direction(bubble)
     return {"direction": direction, "text": text}
 
 
@@ -2930,6 +2971,13 @@ def _wa_get_active_chat_title(page: Any) -> str:
         except Exception:
             continue
     return ""
+
+
+def _extract_sender_phone_from_chat_title(chat_title: str) -> str:
+    digits = "".join(ch for ch in (chat_title or "") if ch.isdigit())
+    if len(digits) < MIN_PHONE_DIGITS:
+        return ""
+    return digits
 
 
 def _wa_build_conversation_history(page: Any, max_items: int = 10) -> list[dict[str, Any]]:
@@ -2951,14 +2999,11 @@ def _wa_build_conversation_history(page: Any, max_items: int = 10) -> list[dict[
                 continue
             role = "user"
             try:
-                cls = (bubble.get_attribute("class") or "").lower()
-                if "message-out" in cls:
+                direction = _wa_bubble_direction(bubble)
+                if direction == "outgoing":
                     role = "assistant"
-                elif "message-in" in cls:
+                elif direction == "incoming":
                     role = "user"
-                else:
-                    if bubble.locator(_join_selectors(_WASelectors.BUBBLE_OUT)).count() > 0:
-                        role = "assistant"
             except Exception:
                 role = "user"
             history.append({"role": role, "content": text})
@@ -2976,7 +3021,10 @@ def _wa_read_next_unread(
     """
     trace_id = str(uuid.uuid4())
     try:
-        with _playwright_persistent_page(sender=sender, headless=False) as (page, _context):
+        with _playwright_persistent_page(
+            sender=sender,
+            headless=_wa_automation_headless(sender),
+        ) as (page, _context):
             page.goto(WHATSAPP_WEB_URL, wait_until="domcontentloaded")
             state = _wa_wait_for_login_state(page, timeout_seconds=max(5.0, timeout_seconds))
             if state == "qr":
@@ -3006,14 +3054,16 @@ def _wa_read_next_unread(
             if row is None:
                 return {"ok": False, "code": "no_unread", "reason": reason}
 
-            # Esperamos el input como señal de chat abierto.
-            input_selector = _join_selectors(_WASelectors.CHAT_INPUT)
-            try:
-                page.wait_for_selector(input_selector, timeout=10000)
-            except Exception:
-                pass
+            input_box = _wa_find_visible_chat_input(page, timeout_ms=10000)
+            if input_box is None:
+                return {
+                    "ok": False,
+                    "code": "input_missing",
+                    "reason": "No se encontró el cuadro de mensaje en el chat activo.",
+                }
 
             chat_title = _wa_get_active_chat_title(page)
+            sender_phone = _extract_sender_phone_from_chat_title(chat_title)
             snapshot = _wa_get_last_message_snapshot(page)
             if snapshot.get("direction") == "outgoing":
                 return {
@@ -3042,6 +3092,7 @@ def _wa_read_next_unread(
             result = {
                 "ok": True,
                 "chat_title": chat_title,
+                "sender_phone": sender_phone,
                 "incoming_text": last_in,
                 "history": history,
                 "meta": {"trace_id": trace_id},
@@ -3244,7 +3295,12 @@ def _process_auto_reply_for_sender(
         }
 
     chat_title = read_result.get("chat_title", "")
-    contact = _find_contact_for_incoming_chat(store, chat_title=chat_title)
+    sender_phone = (read_result.get("sender_phone") or "").strip()
+    contact = _find_contact_for_incoming_chat(
+        store,
+        chat_title=chat_title,
+        sender_phone=sender_phone,
+    )
     if contact:
         _sync_contact_state_after_receive(contact, incoming_text=incoming_text)
 
@@ -3294,6 +3350,7 @@ def _wa_open_chat_by_title(page: Any, title: str) -> bool:
     expected = (title or "").strip().lower()
     if not expected:
         return False
+    expected_norm = " ".join(expected.split())
     row_selector = _join_selectors(_WASelectors.CHAT_ROW_CANDIDATES)
     rows = page.locator(row_selector)
     for idx in range(min(_wa_locator_count(rows), 300)):
@@ -3312,7 +3369,8 @@ def _wa_open_chat_by_title(page: Any, title: str) -> bool:
                         text_bits.append(value.lower())
             except Exception:
                 continue
-        if any(expected == bit or expected in bit for bit in text_bits):
+        normalized_bits = [" ".join(bit.split()) for bit in text_bits]
+        if expected_norm in normalized_bits:
             try:
                 row.click(timeout=5000)
                 return True
@@ -3329,7 +3387,10 @@ def _wa_reply_on_current_chat(
 ) -> dict[str, Any]:
     """Envía un mensaje en el chat actualmente abierto (flujo de unread -> autoreply)."""
     try:
-        with _playwright_persistent_page(sender=sender, headless=False) as (page, _context):
+        with _playwright_persistent_page(
+            sender=sender,
+            headless=_wa_automation_headless(sender),
+        ) as (page, _context):
             page.goto(WHATSAPP_WEB_URL, wait_until="domcontentloaded")
             state = _wa_wait_for_login_state(page, timeout_seconds=12.0)
             if state == "qr":
@@ -3359,29 +3420,74 @@ def _wa_reply_on_current_chat(
                         "session_expired": False,
                     }
 
-            input_selector = _join_selectors(_WASelectors.CHAT_INPUT)
-            try:
-                page.wait_for_selector(input_selector, timeout=10000)
-            except Exception:
+            input_box = _wa_find_visible_chat_input(page, timeout_ms=10000)
+            if input_box is None:
                 return {
                     "success": False,
                     "code": "input_missing",
                     "reason": "No se encontró el cuadro de mensaje en el chat activo.",
                     "session_expired": False,
                 }
+            try:
+                input_box.click(timeout=5000)
+            except Exception:
+                try:
+                    input_box.focus()
+                except Exception:
+                    return {
+                        "success": False,
+                        "code": "input_missing",
+                        "reason": "No se pudo enfocar el cuadro de mensaje en el chat activo.",
+                        "session_expired": False,
+                    }
 
-            input_box = page.locator(input_selector).first
-            input_box.click()
+            for hotkey in ("Control+A", "Meta+A"):
+                try:
+                    page.keyboard.press(hotkey)
+                    page.keyboard.press("Delete")
+                    break
+                except Exception:
+                    continue
+
+            try:
+                before_count = _wa_locator_count(page.locator(_WASelectors.MESSAGE_CONTAINER[0]))
+            except Exception:
+                before_count = 0
+
             for idx, line in enumerate((message or "").splitlines() or [""]):
                 if idx:
                     page.keyboard.press("Shift+Enter")
                 page.keyboard.type(line or " ")
             page.keyboard.press("Enter")
 
+            matched_bubble, confirmation = _wa_wait_outgoing_bubble(
+                page,
+                expected_text=message or "",
+                before_count=before_count,
+                timeout_ms=20000,
+            )
+            if matched_bubble is None:
+                return {
+                    "success": False,
+                    "code": "send_unconfirmed",
+                    "reason": "WhatsApp no confirmó la auto-respuesta en la conversación.",
+                    "session_expired": False,
+                }
+
+            confirmation = confirmation or "enviado"
+            if confirmation == "enviado":
+                upgrade_deadline = time.time() + 4.0
+                while time.time() < upgrade_deadline:
+                    upgraded = _wa_confirmation_from_bubble(matched_bubble)
+                    if upgraded in {"entregado", "leido"}:
+                        confirmation = upgraded
+                        break
+                    page.wait_for_timeout(300)
+
             delivered_at = _now_iso()
             return {
                 "success": True,
-                "confirmation": "enviado",
+                "confirmation": confirmation,
                 "note": "Respuesta automática enviada mediante Playwright.",
                 "delivered_at": delivered_at,
                 "session_expired": False,
@@ -3445,7 +3551,7 @@ def _select_connected_sender(
 ) -> dict[str, Any] | None:
     def _is_supported(sender: dict[str, Any]) -> bool:
         method = (sender.get("connection_method") or "").lower()
-        return method in {"playwright", "selenium"}
+        return method == "playwright"
 
     preferred = (preferred_id or "").strip()
     if preferred:
@@ -3566,14 +3672,9 @@ def _run_ai_automations(store: WhatsAppDataStore) -> bool:
             changed = True
 
             if not ok_result and code == "session_expired":
-                sender["connected"] = False
-                sender["connection_state"] = "fallido"
-                sender["last_connected_at"] = None
-                sender.setdefault("session_notes", []).append(
-                    {
-                        "created_at": _now_iso(),
-                        "text": "Auto-reply detectó sesión cerrada. Repetí la vinculación escaneando el QR.",
-                    }
+                _mark_sender_session_expired(
+                    sender,
+                    note="Auto-reply detectó sesión cerrada. Repetí la vinculación escaneando el QR.",
                 )
                 changed = True
         except Exception as exc:  # noqa: BLE001
@@ -3670,6 +3771,11 @@ def _run_followup_scheduler(store: WhatsAppDataStore) -> bool:
                 {"message": message, "notes": "Seguimiento automático"},
             )
             if not send_result.get("success"):
+                if send_result.get("session_expired"):
+                    _mark_sender_session_expired(
+                        sender,
+                        note="El seguimiento automático detectó sesión cerrada. Repetí la vinculación escaneando el QR.",
+                    )
                 contact.setdefault("history", []).append(
                     {
                         "type": "followup_failed",
@@ -3708,386 +3814,17 @@ def _run_followup_scheduler(store: WhatsAppDataStore) -> bool:
         )
     return changed
 
-def _start_selenium_driver(session_dir: Path) -> tuple[Any | None, str | None, str | None]:
-    try:
-        from selenium import webdriver
-        from selenium.common.exceptions import WebDriverException
-        from selenium.webdriver.chrome.options import Options as ChromeOptions
-    except ImportError:
-        return None, None, (
-            "Selenium no está disponible en este entorno. Instalalo para habilitar el envío automatizado."
-        )
 
-    profile_root = session_dir / "selenium_profile"
-    chrome_profile = profile_root / "chrome"
-    chrome_profile.mkdir(parents=True, exist_ok=True)
-
-    driver = None
-    label: str | None = None
-    error: str | None = None
-
-    try:
-        chrome_options = ChromeOptions()
-        chrome_options.add_argument(f"--user-data-dir={str(chrome_profile)}")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--remote-allow-origins=*")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1280,720")
-        driver = webdriver.Chrome(options=chrome_options)
-        label = "Chrome"
-    except Exception as exc:  # noqa: BLE001
-        driver = None
-        error = str(exc)
-
-    if driver is None:
-        try:
-            driver = webdriver.Safari()
-            label = "Safari"
-            error = None
-        except Exception as exc:  # noqa: BLE001
-            driver = None
-            error = error or str(exc)
-
-    if driver is None:
-        return None, None, (
-            "No se pudo iniciar un navegador con Selenium. Verificá que el driver esté instalado y habilitado."
-        )
-
-    return driver, label, error
-
-
-def _collect_selenium_alert_text(driver: Any) -> str:
-    texts: list[str] = []
-    for selector in _WASelectors.ALERT_TEXT:
-        try:
-            for element in driver.find_elements("css selector", selector):
-                text = (element.text or "").strip()
-                if text and text not in texts:
-                    texts.append(text)
-        except Exception:  # noqa: BLE001
-            continue
-    if texts:
-        return " ".join(texts)
-    try:
-        body = driver.find_element("tag name", "body")
-        snippet = (body.text or "").strip().splitlines()
-        if snippet:
-            return snippet[0]
-    except Exception:  # noqa: BLE001
-        return ""
-    return ""
-
-
-def _extract_selenium_bubble_text(element: Any) -> str:
-    texts: list[str] = []
-    candidates: list[Any] = []
-    for selector in _WASelectors.BUBBLE_TEXT:
-        try:
-            candidates = element.find_elements("css selector", selector)
-        except Exception:  # noqa: BLE001
-            candidates = []
-        if candidates:
-            break
-    for item in candidates:
-        try:
-            text = (item.text or "").strip()
-        except Exception:  # noqa: BLE001
-            text = ""
-        if text:
-            texts.append(text)
-    return "\n".join(texts).strip()
-
-
-def _selenium_wait_presence(wait: Any, By: Any, EC: Any, selectors: list[str]) -> Any | None:
-    for selector in selectors:
-        try:
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-            return selector
-        except Exception:
-            continue
-    return None
-
-
-def _selenium_wait_clickable(wait: Any, By: Any, EC: Any, selectors: list[str]) -> Any | None:
-    for selector in selectors:
-        try:
-            return wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
-        except Exception:
-            continue
-    return None
-
-
-def _send_with_selenium(
-    sender: dict[str, Any], contact: dict[str, Any], message: str
-) -> dict[str, Any]:
-    try:
-        from selenium.common.exceptions import TimeoutException, WebDriverException
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.support.ui import WebDriverWait
-    except ImportError:
-        return {
-            "success": False,
-            "code": "selenium_missing",
-            "reason": "Selenium no está instalado. Instalalo para enviar mensajes automáticamente.",
-            "session_expired": False,
+def _mark_sender_session_expired(sender: dict[str, Any], *, note: str) -> None:
+    sender["connected"] = False
+    sender["connection_state"] = "fallido"
+    sender["last_connected_at"] = None
+    sender.setdefault("session_notes", []).append(
+        {
+            "created_at": _now_iso(),
+            "text": note,
         }
-
-    session_path = sender.get("session_path")
-    if not session_path:
-        return {
-            "success": False,
-            "code": "session_missing",
-            "reason": "No se encontró la carpeta de sesión asociada a este número.",
-            "session_expired": False,
-        }
-
-    session_dir = Path(session_path)
-    if not session_dir.exists():
-        return {
-            "success": False,
-            "code": "session_missing",
-            "reason": "La sesión guardada ya no está disponible en el disco.",
-            "session_expired": False,
-        }
-
-    driver, driver_label, init_error = _start_selenium_driver(session_dir)
-    if driver is None:
-        return {
-            "success": False,
-            "code": "driver_unavailable",
-            "reason": init_error
-            or "No se pudo iniciar el navegador automatizado para WhatsApp Web.",
-            "session_expired": False,
-        }
-
-    digits = "".join(ch for ch in (contact.get("number") or "") if ch.isdigit())
-    if not digits:
-        try:
-            driver.quit()
-        except Exception:  # noqa: BLE001
-            pass
-        return {
-            "success": False,
-            "code": "invalid_number",
-            "reason": "El número no tiene dígitos suficientes para WhatsApp.",
-            "session_expired": False,
-        }
-
-    wait = WebDriverWait(driver, 45)
-
-    trace_id = str(uuid.uuid4())
-    try:
-        driver.get(WHATSAPP_WEB_URL + "/")
-        try:
-            wait.until(
-                EC.any_of(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, _WASelectors.PANE_SIDE[0])),
-                    EC.presence_of_element_located((By.CSS_SELECTOR, _WASelectors.PANE_SIDE[1])),
-                    EC.presence_of_element_located((By.CSS_SELECTOR, _WASelectors.QR_CANVAS[0])),
-                )
-            )
-        except TimeoutException:
-            return {
-                "success": False,
-                "code": "whatsapp_unreachable",
-                "reason": "WhatsApp Web no respondió a tiempo. Intentá nuevamente en unos minutos.",
-                "session_expired": False,
-            }
-
-        if driver.find_elements(By.CSS_SELECTOR, _WASelectors.QR_CANVAS[0]):
-            _log_structured(
-                "whatsapp.selenium.session_expired",
-                trace_id=trace_id,
-                sender_id=sender.get("id"),
-                contact_number=contact.get("number"),
-            )
-            return {
-                "success": False,
-                "code": "session_expired",
-                "reason": "La sesión de WhatsApp caducó. Volvé a escanear el código QR.",
-                "session_expired": True,
-            }
-
-        driver.get(f"{WHATSAPP_WEB_URL}/send?phone={digits}")
-
-        input_selector = _selenium_wait_presence(wait, By, EC, list(_WASelectors.CHAT_INPUT))
-        if not input_selector:
-            message_text = _collect_selenium_alert_text(driver) or (
-                "No se pudo abrir la conversación. Confirmá que el número tenga WhatsApp."
-            )
-            _log_structured(
-                "whatsapp.selenium.chat_unavailable",
-                trace_id=trace_id,
-                sender_id=sender.get("id"),
-                contact_number=contact.get("number"),
-                reason=message_text,
-            )
-            return {
-                "success": False,
-                "code": "chat_unavailable",
-                "reason": message_text,
-                "session_expired": False,
-            }
-
-        try:
-            input_box = driver.find_element(
-                By.CSS_SELECTOR,
-                input_selector,
-            )
-        except Exception:  # noqa: BLE001
-            _log_structured(
-                "whatsapp.selenium.input_missing",
-                trace_id=trace_id,
-                sender_id=sender.get("id"),
-                contact_number=contact.get("number"),
-            )
-            return {
-                "success": False,
-                "code": "input_missing",
-                "reason": "No se encontró el cuadro de mensaje en WhatsApp Web.",
-                "session_expired": False,
-            }
-
-        try:
-            input_box.click()
-            input_box.send_keys(Keys.CONTROL, "a")
-            input_box.send_keys(Keys.DELETE)
-        except Exception:  # noqa: BLE001
-            try:
-                input_box.click()
-                input_box.send_keys(Keys.COMMAND, "a")
-                input_box.send_keys(Keys.DELETE)
-            except Exception:  # noqa: BLE001
-                pass
-
-        typed_message = message or ""
-        if typed_message.strip():
-            for index, line in enumerate(typed_message.splitlines() or [""]):
-                if index:
-                    input_box.send_keys(Keys.SHIFT, Keys.ENTER)
-                if line:
-                    input_box.send_keys(line)
-                else:
-                    input_box.send_keys(" ")
-        else:
-            input_box.send_keys(" ")
-
-        snapshot = (input_box.text or "").strip()
-        if not snapshot:
-            return {
-                "success": False,
-                "code": "empty_message",
-                "reason": "El mensaje quedó vacío y no se envió a WhatsApp.",
-                "session_expired": False,
-            }
-
-        send_button = _selenium_wait_clickable(wait, By, EC, list(_WASelectors.SEND_BUTTON))
-        if send_button is None:
-            return {
-                "success": False,
-                "code": "send_disabled",
-                "reason": "WhatsApp no habilitó el botón de envío para este contacto.",
-                "session_expired": False,
-            }
-
-        before_count = len(driver.find_elements(By.CSS_SELECTOR, _WASelectors.MESSAGE_CONTAINER[0]))
-        send_button.click()
-
-        try:
-            wait.until(
-                lambda drv: len(drv.find_elements(By.CSS_SELECTOR, _WASelectors.MESSAGE_CONTAINER[0]))
-                > before_count
-            )
-        except TimeoutException:
-            return {
-                "success": False,
-                "code": "send_unconfirmed",
-                "reason": "WhatsApp no confirmó el mensaje en la conversación.",
-                "session_expired": False,
-            }
-
-        bubbles = driver.find_elements(By.CSS_SELECTOR, _WASelectors.MESSAGE_CONTAINER[0])
-        if not bubbles:
-            return {
-                "success": False,
-                "code": "bubble_missing",
-                "reason": "No se detectó el mensaje dentro de la conversación.",
-                "session_expired": False,
-            }
-
-        last_bubble = bubbles[-1]
-        bubble_text = _extract_selenium_bubble_text(last_bubble)
-        normalized_message = _normalize_message(typed_message)
-        normalized_bubble = _normalize_message(bubble_text)
-        if normalized_message and (
-            normalized_message not in normalized_bubble
-            and normalized_bubble not in normalized_message
-        ):
-            return {
-                "success": False,
-                "code": "text_mismatch",
-                "reason": "WhatsApp no mostró el contenido del mensaje enviado.",
-                "session_expired": False,
-            }
-
-        confirmation = "enviado"
-        try:
-            if last_bubble.find_elements(By.CSS_SELECTOR, _WASelectors.CHECK_READ):
-                confirmation = "leido"
-            elif last_bubble.find_elements(By.CSS_SELECTOR, _WASelectors.CHECK_DELIVERED):
-                confirmation = "entregado"
-            elif last_bubble.find_elements(By.CSS_SELECTOR, _WASelectors.CHECK_SENT):
-                confirmation = "enviado"
-        except Exception:  # noqa: BLE001
-            confirmation = "enviado"
-
-        note = "Mensaje confirmado en WhatsApp Web mediante Selenium."
-        if driver_label:
-            note = f"Mensaje confirmado en WhatsApp Web mediante Selenium ({driver_label})."
-
-        return {
-            "success": True,
-            "confirmation": confirmation,
-            "note": note,
-            "delivered_at": _now_iso(),
-            "session_expired": False,
-        }
-    except TimeoutException:
-        _log_structured(
-            "whatsapp.selenium.timeout",
-            trace_id=trace_id,
-            sender_id=sender.get("id"),
-            contact_number=contact.get("number"),
-        )
-        return {
-            "success": False,
-            "code": "timeout",
-            "reason": "WhatsApp Web tardó demasiado en responder al enviar el mensaje.",
-            "session_expired": False,
-        }
-    except WebDriverException as exc:
-        _log_structured(
-            "whatsapp.selenium.webdriver_error",
-            trace_id=trace_id,
-            sender_id=sender.get("id"),
-            contact_number=contact.get("number"),
-            error=str(exc),
-        )
-        return {
-            "success": False,
-            "code": "webdriver_error",
-            "reason": "Selenium reportó un error inesperado durante el envío.",
-            "session_expired": False,
-        }
-    finally:
-        try:
-            driver.quit()
-        except Exception:  # noqa: BLE001
-            pass
+    )
 
 
 def _deliver_event(store: WhatsAppDataStore, run: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -4145,14 +3882,9 @@ def _deliver_event(store: WhatsAppDataStore, run: dict[str, Any], event: dict[st
                     )
                     failure_code = delivery_result.get("code") or "send_failed"
                     if delivery_result.get("session_expired"):
-                        sender["connected"] = False
-                        sender["connection_state"] = "fallido"
-                        sender["last_connected_at"] = None
-                        sender.setdefault("session_notes", []).append(
-                            {
-                                "created_at": _now_iso(),
-                                "text": "La sesión caducó durante un envío automático. Repetí la vinculación escaneando el QR.",
-                            }
+                        _mark_sender_session_expired(
+                            sender,
+                            note="La sesión caducó durante un envío automático. Repetí la vinculación escaneando el QR.",
                         )
                         _append_run_log(
                             run,
@@ -4984,3 +4716,4 @@ def _export_contacts_csv(store: WhatsAppDataStore) -> Path:
 
 
 __all__ = ["menu_whatsapp"]
+

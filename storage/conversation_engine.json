@@ -955,22 +955,28 @@
       "stage": "initial",
       "messages_sent": [],
       "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
+      "last_message_received_at": 1771365507.865377,
+      "last_message_id_seen": "68ab85396dae",
+      "last_message_sender": "lead",
       "followup_stage": 0,
       "last_followup_sent_at": null,
       "created_at": 1771120114.4580312,
-      "updated_at": 1771123894.8121083,
-      "last_interaction_at": 1771123853.722721,
+      "updated_at": 1771365507.8974972,
+      "last_interaction_at": 1771365498.3418891,
       "source": "playwright",
-      "captured_at_epoch": 1771123894.8041668,
+      "captured_at_epoch": 1771365507.7610612,
       "messages": [
         {
-          "message_id": "e33cc1528247",
+          "message_id": "68ab85396dae",
+          "direction": "inbound",
+          "text": "Hola\nHola",
+          "timestamp_epoch": 1771365507.6619081
+        },
+        {
+          "message_id": "fb88ff4651a3",
           "direction": "outbound",
           "text": "como va\ncomo va",
-          "timestamp_epoch": 1771123894.7376118
+          "timestamp_epoch": 1771365507.5294042
         }
       ]
     },

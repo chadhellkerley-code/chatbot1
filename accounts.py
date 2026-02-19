@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import contextlib
 import csv
 import getpass
@@ -10,6 +11,7 @@ import io
 import json
 import random
 import re
+import sys
 import time
 import zipfile
 from collections import defaultdict
@@ -26,12 +28,36 @@ from urllib.parse import urlparse
 from config import SETTINGS
 from client_factory import get_instagram_client
 from adapters.base import TwoFARequired, TwoFactorCodeRejected
+
+
+def _ask_secret(prompt: str) -> str:
+    """
+    Read secret values without blocking when UI mode monkeypatches input().
+    """
+    input_fn = getattr(builtins, "input", None)
+    if getattr(input_fn, "__module__", "") == "io_adapter":
+        return ask(prompt)
+    stdin = getattr(sys, "stdin", None)
+    stdout = getattr(sys, "stdout", None)
+    try:
+        has_tty = bool(stdin and stdin.isatty() and stdout and stdout.isatty())
+    except Exception:
+        has_tty = False
+    if not has_tty:
+        return ask(prompt)
+    try:
+        return getpass.getpass(prompt)
+    except (EOFError, KeyboardInterrupt):
+        raise
+    except Exception:
+        return ask(prompt)
+
+
 # FunciÃ³n temporal hasta que se migre correctamente
 def prompt_two_factor_code(username: str, method: str, attempt: int):
     """Stub temporal - solicita cÃ³digo 2FA manualmente"""
-    import getpass
     prompt = f"Ingrese el cÃ³digo recibido por {method} para {username}: "
-    code = getpass.getpass(prompt) if method.lower() == 'totp' else input(prompt)
+    code = _ask_secret(prompt) if method.lower() == "totp" else input(prompt)
     return code.strip().replace("-", "").replace(" ", "") if code else None
 
 try:
@@ -779,7 +805,7 @@ def relogin_accounts_with_playwright_background(
         password = _account_password(account).strip()
         if password:
             return password
-        entered = getpass.getpass(f"Password @{username} (Enter = omitir): ")
+        entered = _ask_secret(f"Password @{username} (Enter = omitir): ")
         entered = (entered or "").strip()
         if entered:
             _store_account_password(username, entered)
@@ -1464,11 +1490,11 @@ def prompt_login(username: str, *, interactive: bool = True) -> bool:
                     "Instagram rechazÃ³ la sesiÃ³n guardada. Posiblemente haya un challenge o chequeo de seguridad pendiente."
                 )
                 return False
-            password = getpass.getpass(
+            password = _ask_secret(
                 f"Nueva password @{account['username']}: "
             )
         else:
-            password = getpass.getpass(
+            password = _ask_secret(
                 f"Password @{account['username']}: "
             )
 
@@ -2584,7 +2610,7 @@ def _open_playwright_manual_session(
         profile_dir = storage_state.parent
 
         svc = PlaywrightService(headless=False, base_profiles=profile_root)
-        await svc.start()
+        await svc.start(launch_proxy=proxy_payload)
 
         ctx = None
         try:
@@ -3223,7 +3249,7 @@ def menu_accounts():
             if add_account(u, alias, proxy_data):
                 if not totp_saved:
                     remove_totp_secret(u)
-                password = getpass.getpass(f"Password @{u}: ")
+                password = _ask_secret(f"Password @{u}: ")
                 if not password:
                     warn("No se ingresÃ³ password; la cuenta quedÃ³ sin sesiÃ³n.")
                 else:

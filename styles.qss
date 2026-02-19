@@ -204,6 +204,14 @@ QPushButton#MenuOptionButton:pressed {
     background-color: #253246;
 }
 
+QPushButton#MenuOptionButton[compact="true"] {
+    text-align: center;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 34px;
+}
+
 QLineEdit#InputField {
     background-color: #1f2937;
     border: 1px solid #34465f;
@@ -246,6 +254,22 @@ QFrame#ExecCard {
     border-radius: 6px;
 }
 
+QFrame#LeadPromptCard {
+    background-color: #162033;
+    border: 1px solid #314561;
+    border-radius: 6px;
+}
+
+QLabel#LeadPromptTypedValue {
+    background-color: #0f1728;
+    border: 1px solid #314561;
+    border-radius: 6px;
+    color: #eef4ff;
+    font-family: "Consolas";
+    font-size: 12px;
+    padding: 8px 10px;
+}
+
 QLabel#ExecTag {
     background-color: #1f2937;
     border: 1px solid #34465f;
@@ -266,6 +290,62 @@ QLabel[class="ExecMetricValue"] {
     color: #f0f5fd;
     font-size: 16px;
     font-weight: 700;
+}
+
+QFrame#campaign_summary_container {
+    background-color: #1f2937;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+}
+
+QLabel#CampaignSummaryTitle {
+    color: #e7edf8;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QFrame#CampaignSummarySeparator {
+    background-color: #2f3d52;
+    border: none;
+}
+
+QFrame#CampaignSummaryMetricCard {
+    border: 1px solid #3a4a63;
+    border-radius: 6px;
+}
+
+QFrame#CampaignSummaryMetricCard[tone="success"] {
+    background-color: #1d3a33;
+    border-color: #2f5b50;
+}
+
+QFrame#CampaignSummaryMetricCard[tone="danger"] {
+    background-color: #3b2229;
+    border-color: #66414a;
+}
+
+QFrame#CampaignSummaryMetricCard[tone="info"] {
+    background-color: #243648;
+    border-color: #3d5f7f;
+}
+
+QLabel#CampaignSummaryMetricValue {
+    color: #f0f5fd;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+QTableWidget#CampaignSummaryTable {
+    background-color: #111827;
+    border: 1px solid #2f3d52;
+    border-radius: 6px;
+    color: #d7deea;
+    gridline-color: #2a3443;
+    selection-background-color: #111827;
+}
+
+QTableWidget#CampaignSummaryTable::item {
+    padding: 4px 6px;
 }
 
 QTableWidget#ExecInflightTable {
@@ -365,4 +445,20 @@ QScrollBar::sub-line:vertical {
 QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical {
     background: none;
+}
+
+QDialog#LeadsSummaryDialog {
+    background-color: #111827;
+}
+
+QLabel#LeadsSummaryTitle {
+    color: #e8eef9;
+    font-size: 18px;
+    font-weight: 800;
+}
+
+QLabel#LeadsSummaryBody {
+    color: #cbd7ea;
+    font-size: 13px;
+    line-height: 1.4;
 }

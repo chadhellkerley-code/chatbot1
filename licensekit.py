@@ -1133,11 +1133,13 @@ def _build_universal_executable() -> None:
             "INCLUDE_PLAYWRIGHT": os.environ.get("INCLUDE_PLAYWRIGHT"),
             "PLAYWRIGHT_BUNDLE": os.environ.get("PLAYWRIGHT_BUNDLE"),
             "PYINSTALLER_ONEFILE": os.environ.get("PYINSTALLER_ONEFILE"),
+            "BUILD_MODE": os.environ.get("BUILD_MODE"),
         }
         os.environ["LICENSE_REMOTE_ONLY"] = "1"
         os.environ["INCLUDE_PLAYWRIGHT"] = "1"
         os.environ["PYINSTALLER_ONEFILE"] = "1" if use_onefile else "0"
         os.environ["PLAYWRIGHT_BUNDLE"] = bundle_mode
+        os.environ["BUILD_MODE"] = "full"
         try:
             success, artifact_path, message = build_for_license(record)
         finally:
@@ -1158,18 +1160,25 @@ def _build_universal_executable() -> None:
         press_enter()
         return
 
-    onefile_choice = ask("Generar un solo EXE (onefile)? (s/N): ").strip().lower()
-    use_onefile = onefile_choice == "s"
+    if choice == "2":
+        use_onefile = True
+        build_mode = "minimal"
+    else:
+        onefile_choice = ask("Generar un solo EXE (onefile)? (s/N): ").strip().lower()
+        use_onefile = onefile_choice == "s"
+        build_mode = "full"
 
     previous = {
         "LICENSE_REMOTE_ONLY": os.environ.get("LICENSE_REMOTE_ONLY"),
         "INCLUDE_PLAYWRIGHT": os.environ.get("INCLUDE_PLAYWRIGHT"),
         "PLAYWRIGHT_BUNDLE": os.environ.get("PLAYWRIGHT_BUNDLE"),
         "PYINSTALLER_ONEFILE": os.environ.get("PYINSTALLER_ONEFILE"),
+        "BUILD_MODE": os.environ.get("BUILD_MODE"),
     }
     os.environ["LICENSE_REMOTE_ONLY"] = "1"
     os.environ["INCLUDE_PLAYWRIGHT"] = "1"
     os.environ["PYINSTALLER_ONEFILE"] = "1" if use_onefile else "0"
+    os.environ["BUILD_MODE"] = build_mode
     if choice == "2":
         os.environ["PLAYWRIGHT_BUNDLE"] = "external"
     else:

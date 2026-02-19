@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import socket
 import sys
 import time
@@ -21,43 +20,27 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 
 def _initial_app_root() -> Path:
-    """Determina un directorio estable para guardar datos del cliente."""
-
-    candidates: List[Path] = []
+    """Devuelve una única raíz de datos para CLI y EXE."""
 
     if sys.argv and sys.argv[0]:
         try:
-            candidates.append(Path(os.path.abspath(sys.argv[0])).resolve().parent)
+            raw_entry = Path(os.path.abspath(sys.argv[0]))
+            if not raw_entry.exists():
+                raise FileNotFoundError(raw_entry)
+            entry = raw_entry.resolve()
+            base = entry.parent if entry.is_file() else entry
+            # En desarrollo, el EXE suele vivir en ./dist; usamos la raíz del proyecto.
+            if base.name.lower() == "dist":
+                parent = base.parent
+                if (parent / "app.py").exists():
+                    return parent
+            return base
         except Exception:
             pass
-
-    # Distribuciones congeladas (PyInstaller/zipapp) exponen ``sys.executable``
-    # apuntando al binario real en el bundle. Solo lo usamos cuando realmente
-    # estamos en modo congelado para evitar rutas del intérprete del sistema
-    # (por ejemplo, /usr/bin).
-    if getattr(sys, "frozen", False):
-        executable = getattr(sys, "executable", None)
-        if executable:
-            try:
-                candidates.append(Path(executable).resolve().parent)
-            except Exception:
-                pass
-
-    for candidate in candidates:
-        if candidate and candidate.exists():
-            return candidate
-
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        try:
-            return Path(meipass).resolve()
-        except Exception:
-            pass
-
     return Path(__file__).resolve().parent
 
 
-os.environ.setdefault("APP_DATA_ROOT", str(_initial_app_root()))
+os.environ["APP_DATA_ROOT"] = str(_initial_app_root())
 
 def _get_app_root() -> Path:
     """Determina el directorio raiz del bundle/ejecutable."""
@@ -348,13 +331,7 @@ SESSION_PATTERNS = [
     "v1_settings_*.json",
     "settings_*.json",
     "*.session.json",
-]
-
-CANDIDATE_SESSION_DIRS = [
-    "Station ID",
-    "session_id",
-    "station_id",
-    "Session ID",
+    "*.json",
 ]
 
 _DEBUG_ROOT_PRINTED = False
@@ -469,16 +446,6 @@ def _print_error(msg: str) -> None:
     print(msg)
     print(full_line(color=Fore.RED))
     print()
-
-
-def _slugify(value: str, fallback: str = "cliente") -> str:
-    value = (value or "").strip().lower()
-    if not value:
-        return fallback
-    value = value.replace(" ", "-")
-    value = re.sub(r"[^a-z0-9_-]+", "-", value)
-    value = value.strip("-")
-    return value or fallback
 
 
 def _storage_root() -> Path:
@@ -606,13 +573,8 @@ def _get_or_create_fingerprint() -> Tuple[str, Path, str]:
 
 
 def _resolve_sessions_dir() -> Path:
-    base_dir = _get_app_root()
-    for name in CANDIDATE_SESSION_DIRS:
-        candidate = base_dir / name
-        if candidate.is_dir():
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-    target = base_dir / "Station ID"
+    root = Path(os.environ.get("APP_DATA_ROOT") or _get_app_root())
+    target = root / "storage" / "sessions"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -638,54 +600,14 @@ def _iter_session_files(sess_dir: Path) -> Iterable[Path]:
                 yield candidate
 
 
-def _migrate_legacy_data(app_root: Path, data_root: Path) -> None:
-    """Replica datos existentes cuando cambiamos el directorio base."""
-
-    if data_root == app_root:
-        return
-
-    legacy_candidates = [
-        app_root / "data",
-        app_root / "storage",
-        app_root / "conversation_state.db",
-    ]
-
-    for candidate in legacy_candidates:
-        try:
-            if not candidate.exists():
-                continue
-            target = data_root / candidate.name
-            if candidate.is_file():
-                if not target.exists():
-                    target.write_bytes(candidate.read_bytes())
-                continue
-            target.mkdir(parents=True, exist_ok=True)
-            for child in candidate.glob("**/*"):
-                if not child.is_file():
-                    continue
-                relative = child.relative_to(candidate)
-                destination = target / relative
-                if destination.exists():
-                    continue
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(child.read_bytes())
-        except Exception:
-            continue
-
-
 def _prepare_client_environment(record: Dict[str, str]) -> None:
-    alias = record.get("client_alias") or record.get("client_slug") or record.get("client_name")
-    alias = _slugify(alias)
+    _ = record
     app_root = _get_app_root()
-    sessions_root = _resolve_sessions_dir()
-    data_root = sessions_root / alias if alias else sessions_root
-    data_root.mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_data(app_root, data_root)
     os.environ.setdefault("CLIENT_DISTRIBUTION", "1")
-    os.environ["CLIENT_SESSIONS_ROOT"] = str(sessions_root)
-    os.environ["CLIENT_ALIAS"] = alias
     os.environ["LICENSE_ALREADY_VALIDATED"] = "1"
-    os.environ["APP_DATA_ROOT"] = str(data_root)
+    os.environ.setdefault("APP_DATA_ROOT", str(app_root))
+    os.environ.pop("CLIENT_SESSIONS_ROOT", None)
+    os.environ.pop("CLIENT_ALIAS", None)
 
 
 def _client_integrity_marker_path() -> Path:
@@ -822,7 +744,7 @@ def _ensure_account_record(username: str, accounts: List[Dict]) -> Dict | None:
     except Exception:
         return None
 
-    alias = os.environ.get("CLIENT_ALIAS") or "default"
+    alias = "default"
     base_record = {
         "username": username,
         "alias": alias,

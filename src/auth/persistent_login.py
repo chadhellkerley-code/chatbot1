@@ -226,7 +226,7 @@ async def ensure_logged_in_async(
 
     _trace_msg(f"Launch browser ({'headful' if not headless else 'headless'})")
     svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
-    await svc.start()
+    await svc.start(launch_proxy=proxy_payload)
 
     async def _new_context(use_storage: bool) -> tuple[BrowserContext, Page]:
         ctx = await svc.new_context_for_account(
@@ -432,7 +432,8 @@ async def check_session_async(
     _session_log(profile_root_path, f"session_check_start username={username} headless={headless}")
 
     svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
-    await svc.start()
+    svc_proxy = normalize_playwright_proxy(proxy)
+    await svc.start(launch_proxy=svc_proxy)
     ctx: Optional[BrowserContext] = None
     page: Optional[Page] = None
     try:

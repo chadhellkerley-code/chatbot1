@@ -2,7 +2,10 @@
 
 from collections import deque
 import json
+import logging
 import re
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -12,10 +15,11 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QDialog,
     QFrame,
     QGridLayout,
     QHeaderView,
@@ -23,7 +27,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -108,6 +111,22 @@ _AUTORESPONDER_FOLLOWUP_SENT_RE = re.compile(
 _AUTORESPONDER_TRACE_RE = re.compile(
     r"^(trace_|\[trace_id|\[trace_)", re.IGNORECASE
 )
+_LEADS_RESULT_RE = re.compile(
+    r"^@(?P<lead>[^|]+?)\s*\|\s*@(?P<account>[^|]+?)\s*\|\s*(?P<result>CALIFICA|NO CALIFICA)\s*\|\s*(?P<detail>.*)$",
+    re.IGNORECASE,
+)
+_LEADS_SUMMARY_ROW_RE = re.compile(
+    r"total\s*[=:]\s*(?P<total>\d+)\s+procesados\s*[=:]\s*(?P<processed>\d+)\s+calificados\s*[=:]\s*(?P<qualified>\d+)\s+descartados\s*[=:]\s*(?P<discarded>\d+)",
+    re.IGNORECASE,
+)
+_LEADS_USERNAMES_LOADED_RE = re.compile(
+    r"usernames\s+cargados\s*:?\s*(?P<count>\d+)",
+    re.IGNORECASE,
+)
+_LEADS_EXPORT_ALIAS_RE = re.compile(
+    r"leads guardados en alias\s+['\"](?P<alias>[^'\"]+)['\"]",
+    re.IGNORECASE,
+)
 
 
 def _clean_log_chunk(text: str) -> str:
@@ -120,6 +139,37 @@ def _strip_cli_hints(text: str) -> str:
     cleaned = cleaned.replace("()", "")
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     return cleaned.strip()
+
+
+def _build_brand_logo_pixmap(size: int) -> QPixmap:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#0b1220"))
+    painter.drawRoundedRect(0, 0, size, size, 5, 5)
+
+    font = QFont("Consolas")
+    font.setBold(True)
+    font.setPixelSize(max(9, int(size * 0.55)))
+    painter.setFont(font)
+
+    baseline_y = int(size * 0.72)
+    painter.setPen(QColor("#ffffff"))
+    painter.drawText(int(size * 0.18), baseline_y, ">")
+    painter.setPen(QColor("#2563eb"))
+    painter.drawText(int(size * 0.45), baseline_y, "_")
+    painter.end()
+    return pixmap
+
+
+def _build_brand_icon() -> QIcon:
+    icon = QIcon()
+    for size in (16, 20, 24, 32, 48):
+        icon.addPixmap(_build_brand_logo_pixmap(size))
+    return icon
 
 
 def _normalize_username(value: Any) -> str:
@@ -174,7 +224,6 @@ class MainWindow(QMainWindow):
         ("exit", "Salir"),
     ]
     _SECTION_LOG_KEYS = (
-        "accounts",
         "leads",
         "logs",
         "stats",
@@ -188,7 +237,12 @@ class MainWindow(QMainWindow):
         self._mode = mode
         self._root_dir = Path(__file__).resolve().parent
 
-        self.setWindowTitle("Insta CRM GUI")
+        self.setWindowTitle("INSTA CLI – PROPIEDAD DE MATIDIAZLIFE")
+        brand_icon = _build_brand_icon()
+        self.setWindowIcon(brand_icon)
+        app = QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(brand_icon)
         self.resize(1320, 860)
         self.setAcceptDrops(True)
 
@@ -198,6 +252,9 @@ class MainWindow(QMainWindow):
         self._pending_request_is_primary_menu = False
         self._queued_primary_key: Optional[str] = None
         self._closing = False
+        self._shutdown_started = False
+        self._shutdown_reason = ""
+        self._shutdown_requested_from_primary_exit = False
         self.backend_exit_code: Optional[int] = None
         self._execution_mode_active = False
         self._execution_log_times: list[float] = []
@@ -214,6 +271,22 @@ class MainWindow(QMainWindow):
         self._autoresponder_delay_min_s: Optional[float] = None
         self._autoresponder_delay_max_s: Optional[float] = None
         self._inflight_parse_window_until = 0.0
+        self._leads_filter_running = False
+        self._leads_filter_started_at = 0.0
+        self._leads_total_target: Optional[int] = None
+        self._leads_processed_count = 0
+        self._leads_qualified_count = 0
+        self._leads_discarded_count = 0
+        self._leads_account_alias = "-"
+        self._leads_export_alias = "leads_filtrados"
+        self._leads_accounts_planned: Optional[int] = None
+        self._leads_account_usernames: list[str] = []
+        self._leads_waiting_manual_accounts = False
+        self._leads_accounts_seen: set[str] = set()
+        self._leads_counts_prefill_on_next_start: Optional[dict[str, int]] = None
+        self._leads_stop_requested = False
+        self._leads_stop_prompt_active = False
+        self._leads_completion_announced = False
 
         self._metric_values: dict[str, QLabel] = {}
         self._menu_option_buttons: list[QPushButton] = []
@@ -244,6 +317,10 @@ class MainWindow(QMainWindow):
         self._last_prompt_value = QLabel("-")
         self._last_prompt_value.setWordWrap(True)
         self._dashboard_updated_value = QLabel("-")
+        self._selected_accounts_alias = ""
+        self._accounts_alias_select_value = ""
+        self._accounts_alias_back_value = ""
+        self._accounts_alias_manual_mode = False
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_dashboard_page())
@@ -286,6 +363,9 @@ class MainWindow(QMainWindow):
         adapter.menu_detected.connect(self._preview_menu_detected)
 
     def start_backend(self, backend_entrypoint: Callable[[], None]) -> None:
+        if self._shutdown_started or self._closing:
+            self._append_log("[gui] backend start skipped: shutdown in progress.\n")
+            return
         if self._backend_thread and self._backend_thread.is_alive():
             return
 
@@ -297,7 +377,7 @@ class MainWindow(QMainWindow):
             target=self._backend_runner,
             args=(backend_entrypoint,),
             name="cli-backend",
-            daemon=False,
+            daemon=True,
         )
         self._backend_thread.start()
 
@@ -362,6 +442,7 @@ class MainWindow(QMainWindow):
         self._live_input_field.setObjectName("LiveInputField")
         self._live_input_field.setPlaceholderText("Escribe y presiona Enter (input literal)")
         self._live_input_field.returnPressed.connect(self._submit_live_input)
+        self._live_input_field.textChanged.connect(self._on_live_input_text_changed)
 
         self._live_input_submit = QPushButton("Enviar")
         self._live_input_submit.setObjectName("PrimaryButton")
@@ -410,14 +491,34 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(8, 8, 8, 8)
         header_layout.setSpacing(2)
 
-        brand_main = QLabel("HERRAMIENTA DE MENSAJERIA")
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(8)
+
+        brand_logo = QLabel(
+            "<span style='color:#ffffff;'>&gt;</span><span style='color:#2563eb;'>_</span>"
+        )
+        brand_logo.setObjectName("BrandHeaderLogo")
+        brand_logo.setAlignment(Qt.AlignCenter)
+        brand_logo.setFixedSize(24, 24)
+        brand_logo.setStyleSheet(
+            "background-color: #0b1220;"
+            "border: 1px solid #243246;"
+            "border-radius: 6px;"
+            "font-size: 12px;"
+            "font-weight: 700;"
+        )
+
+        brand_main = QLabel("INSTA CLI")
         brand_main.setObjectName("BrandHeaderMain")
-        brand_sub = QLabel("PROPIEDAD DE MATIDIAZLIFE")
+        brand_sub = QLabel("– PROPIEDAD DE MATIDIAZLIFE")
         brand_sub.setObjectName("BrandHeaderSub")
         mode_badge = QLabel(f"MODO {self._mode.upper()}")
         mode_badge.setObjectName("ModeBadge")
 
-        header_layout.addWidget(brand_main)
+        brand_row.addWidget(brand_logo, 0, Qt.AlignVCenter)
+        brand_row.addWidget(brand_main)
+        header_layout.addLayout(brand_row)
         header_layout.addWidget(brand_sub)
         header_layout.addSpacing(4)
         header_layout.addWidget(mode_badge)
@@ -469,11 +570,256 @@ class MainWindow(QMainWindow):
         layout.addWidget(value_widget, 1)
         return row
 
+    def _set_accounts_users_preview(self, text: str) -> None:
+        value = str(text).strip()
+        self._accounts_users_label.setText(value)
+        self._accounts_users_label.setVisible(bool(value))
+
+    def _resolve_selected_accounts_alias(self, request: Optional[InputRequest] = None) -> str:
+        alias = str(self._selected_accounts_alias).strip()
+        if alias and alias != "(vacio)":
+            return alias
+        if request is not None:
+            prompt_text = _strip_cli_hints(request.prompt or "")
+            match = re.search(
+                r"cuentas?\s+del\s+alias\s*:\s*([A-Za-z0-9._-]+)",
+                prompt_text,
+                re.IGNORECASE,
+            )
+            if match:
+                candidate = str(match.group(1)).strip()
+                if candidate:
+                    return candidate
+        return "default"
+
+    def _accounts_alias_users_text(self, alias: str) -> str:
+        selected_alias = str(alias or "default").strip() or "default"
+        alias_key = selected_alias.lower()
+        records = self._load_account_records({})
+        connected_callable = None
+        session_label_callable = None
+        badge_callable = None
+        life_badge_callable = None
+        try:
+            accounts_module = import_module("accounts")
+            candidate = getattr(accounts_module, "connected_status", None)
+            connected_callable = candidate if callable(candidate) else None
+            candidate = getattr(accounts_module, "_session_label", None)
+            session_label_callable = candidate if callable(candidate) else None
+            candidate = getattr(accounts_module, "_badge_for_display", None)
+            badge_callable = candidate if callable(candidate) else None
+            candidate = getattr(accounts_module, "_life_status_badge", None)
+            life_badge_callable = candidate if callable(candidate) else None
+        except Exception:
+            pass
+        users: list[str] = []
+        seen: set[str] = set()
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            record_alias = str(record.get("alias") or "default").strip() or "default"
+            if record_alias.lower() != alias_key:
+                continue
+            username = _normalize_username(record.get("username"))
+            if not username or username in seen:
+                continue
+            seen.add(username)
+            state = "activa" if bool(record.get("active", True)) else "inactiva"
+            connected = bool(record.get("connected", False))
+            if callable(connected_callable):
+                try:
+                    connected = bool(
+                        connected_callable(
+                            record,
+                            strict=False,
+                            reason="ui-alias-preview",
+                            fast=True,
+                            persist=False,
+                        )
+                    )
+                except Exception:
+                    connected = bool(record.get("connected", False))
+            connection_state = "conectada" if connected else "no conectada"
+
+            session_state = "sesion" if connected else "sin sesion"
+            if callable(session_label_callable):
+                try:
+                    raw_session = str(session_label_callable(username) or "")
+                except Exception:
+                    raw_session = ""
+                normalized_session = _normalized_label(raw_session)
+                if "sin sesion" in normalized_session:
+                    session_state = "sin sesion"
+                elif "sesion" in normalized_session:
+                    session_state = "sesion"
+
+            life_state = "DESCONOCIDA"
+            if callable(badge_callable) and callable(life_badge_callable):
+                try:
+                    badge, _ = badge_callable(record)
+                    raw_life = str(life_badge_callable(record, badge) or "")
+                    normalized_life = _normalized_label(raw_life)
+                    if "bloqueada" in normalized_life:
+                        life_state = "BLOQUEADA"
+                    elif "viva" in normalized_life:
+                        life_state = "VIVA"
+                    elif "en riesgo" in normalized_life:
+                        life_state = "EN RIESGO"
+                    elif "sin sesion" in normalized_life:
+                        life_state = "SIN SESION"
+                    elif "verificando" in normalized_life:
+                        life_state = "VERIFICANDO"
+                except Exception:
+                    life_state = "DESCONOCIDA"
+
+            users.append(
+                f"- @{username} [{state}] [{connection_state}] [{session_state}] [{life_state}]"
+            )
+        if not users:
+            return f"Cuentas del alias: {selected_alias}\n(no hay cuentas)"
+        return f"Cuentas del alias: {selected_alias}\n" + "\n".join(users)
+
+    def _extract_accounts_alias_selector_values(
+        self, options: list[MenuOption]
+    ) -> Optional[tuple[str, str]]:
+        select_value: Optional[str] = None
+        back_value: Optional[str] = None
+        for option in options:
+            label_norm = _normalized_label(option.label or "")
+            if select_value is None and "seleccionar alias" in label_norm and "crear" in label_norm:
+                select_value = str(option.value).strip()
+                continue
+            if back_value is None and "volver" in label_norm:
+                back_value = str(option.value).strip()
+        if select_value and back_value:
+            return select_value, back_value
+        return None
+
+    def _render_accounts_alias_selector_view(self, request: InputRequest) -> None:
+        parsed_values = self._extract_accounts_alias_selector_values(request.menu_options)
+        if parsed_values is None:
+            self._menu_title_label.setVisible(True)
+            self._menu_prompt_label.setVisible(True)
+            self._rebuild_menu_buttons(request.menu_options)
+            return
+        self._accounts_alias_select_value, self._accounts_alias_back_value = parsed_values
+        self._section_log_scope = None
+        self._set_accounts_users_preview("")
+        self._menu_title_label.setVisible(False)
+        self._menu_prompt_label.setVisible(False)
+        self._clear_menu_buttons()
+        self._menu_options_layout.takeAt(0)
+
+        select_button = QPushButton("Seleccionar alias o crear uno nuevo")
+        select_button.setObjectName("MenuOptionButton")
+        select_button.setMinimumHeight(52)
+        select_button.clicked.connect(self._show_accounts_aliases_view)
+
+        back_button = QPushButton("Volver atrás")
+        back_button.setObjectName("MenuOptionButton")
+        back_button.setMinimumHeight(52)
+        back_button.clicked.connect(
+            lambda checked=False: self._submit_current_input(self._accounts_alias_back_value)
+        )
+
+        self._menu_options_layout.addWidget(select_button)
+        self._menu_options_layout.addWidget(back_button)
+        self._menu_option_buttons.extend([select_button, back_button])
+        self._menu_options_layout.addStretch(1)
+        self._set_page(self.PAGE_MENU)
+        self._set_live_input_enabled(False, prompt="")
+
+    def _show_accounts_aliases_view(self) -> None:
+        self._section_log_scope = None
+        self._set_accounts_users_preview("")
+        self._menu_title_label.setVisible(True)
+        self._menu_title_label.setText("Alias disponibles")
+        self._menu_prompt_label.setVisible(False)
+        aliases = self._load_accounts_aliases()
+        self._clear_menu_buttons()
+        self._menu_options_layout.takeAt(0)
+
+        aliases_grid_widget = QWidget()
+        aliases_grid = QGridLayout(aliases_grid_widget)
+        aliases_grid.setContentsMargins(0, 0, 0, 0)
+        aliases_grid.setHorizontalSpacing(8)
+        aliases_grid.setVerticalSpacing(8)
+        max_columns = 4
+        for index, alias in enumerate(aliases):
+            alias_button = QPushButton(alias)
+            alias_button.setObjectName("MenuOptionButton")
+            alias_button.setProperty("compact", True)
+            alias_button.clicked.connect(
+                lambda checked=False, alias_value=alias: self._submit_accounts_alias(alias_value)
+            )
+            aliases_grid.addWidget(alias_button, index // max_columns, index % max_columns)
+            self._menu_option_buttons.append(alias_button)
+        self._menu_options_layout.addWidget(aliases_grid_widget)
+
+        create_button = QPushButton("Crear nuevo alias")
+        create_button.setObjectName("MenuOptionButton")
+        create_button.setMinimumHeight(52)
+        create_button.clicked.connect(self._start_accounts_alias_manual_entry)
+
+        back_button = QPushButton("Volver atrás")
+        back_button.setObjectName("MenuOptionButton")
+        back_button.setMinimumHeight(52)
+        back_button.clicked.connect(self._show_accounts_alias_selector_buttons)
+
+        self._menu_options_layout.addWidget(create_button)
+        self._menu_options_layout.addWidget(back_button)
+        self._menu_option_buttons.extend([create_button, back_button])
+        self._menu_options_layout.addStretch(1)
+        self._set_page(self.PAGE_MENU)
+        self._set_live_input_enabled(False, prompt="")
+
+    def _show_accounts_alias_selector_buttons(self) -> None:
+        self._accounts_alias_manual_mode = False
+        request = self._pending_request
+        if (
+            request is None
+            or not request.is_menu
+            or not self._is_accounts_alias_selector_menu(request.menu_options)
+        ):
+            return
+        self._render_accounts_alias_selector_view(request)
+
+    def _submit_accounts_alias(self, alias_value: str) -> None:
+        alias = str(alias_value).strip()
+        if not alias:
+            return
+        self._accounts_alias_manual_mode = False
+        select_value = str(self._accounts_alias_select_value).strip()
+        if not select_value:
+            return
+        self._selected_accounts_alias = alias
+        self._submit_current_input(select_value)
+        self._submit_current_input(alias)
+
+    def _start_accounts_alias_manual_entry(self) -> None:
+        select_value = str(self._accounts_alias_select_value).strip()
+        if not select_value:
+            return
+        self._accounts_alias_manual_mode = True
+        self._set_accounts_users_preview("")
+        self._menu_title_label.setVisible(False)
+        self._menu_prompt_label.setVisible(False)
+        self._clear_menu_buttons()
+        self._set_page(self.PAGE_MENU)
+        self._submit_current_input(select_value)
+        self._set_live_input_enabled(
+            True,
+            prompt="Escribe el nuevo alias y presiona Enter",
+            sensitive=False,
+        )
+
     def _on_sidebar_item_clicked(self, key: str) -> None:
         if key == "exit":
-            self.close()
+            self.shutdown_application(reason="sidebar-exit")
             return
         self._set_active_sidebar(key)
+        if key != "leads":
+            self._set_leads_live_card_visible(False)
         self._set_menu_activity_visible(False)
         if key not in self._SECTION_LOG_KEYS:
             self._section_log_scope = None
@@ -482,6 +828,9 @@ class MainWindow(QMainWindow):
             self._set_execution_mode(True)
             return
         if key == "autoresponder" and self._autoresponder_running:
+            self._set_execution_mode(True)
+            return
+        if key == "leads" and self._leads_filter_running:
             self._set_execution_mode(True)
             return
         self._set_execution_mode(False)
@@ -494,7 +843,9 @@ class MainWindow(QMainWindow):
             return
 
         self._set_page(self.PAGE_MENU)
+        self._menu_title_label.setVisible(True)
         self._menu_title_label.setText(self._primary_label_by_key.get(key, "Menu"))
+        self._menu_prompt_label.setVisible(True)
 
         if self._pending_request and self._pending_request.is_menu:
             if self._pending_request_is_primary_menu:
@@ -621,9 +972,51 @@ class MainWindow(QMainWindow):
         self._menu_prompt_label = QLabel("Selecciona una accion para ejecutar el flujo CLI.")
         self._menu_prompt_label.setObjectName("MutedText")
         self._menu_prompt_label.setWordWrap(True)
+        self._accounts_users_label = QLabel("")
+        self._accounts_users_label.setObjectName("StatusValue")
+        self._accounts_users_label.setWordWrap(True)
+        self._accounts_users_label.setVisible(False)
 
         layout.addWidget(self._menu_title_label)
         layout.addWidget(self._menu_prompt_label)
+        layout.addWidget(self._accounts_users_label)
+
+        self._leads_live_card = QFrame()
+        self._leads_live_card.setObjectName("LeadPromptCard")
+        leads_live_layout = QVBoxLayout(self._leads_live_card)
+        leads_live_layout.setContentsMargins(10, 10, 10, 10)
+        leads_live_layout.setSpacing(8)
+
+        leads_live_title = QLabel("Filtrado de leads · Vista en vivo")
+        leads_live_title.setObjectName("PageTitle")
+        self._leads_live_prompt_label = QLabel("Esperando pregunta...")
+        self._leads_live_prompt_label.setObjectName("MutedText")
+        self._leads_live_prompt_label.setWordWrap(True)
+
+        leads_typing_title = QLabel("Entrada en vivo")
+        leads_typing_title.setObjectName("MutedText")
+        self._leads_live_input_preview = QLabel("(vacío)")
+        self._leads_live_input_preview.setObjectName("LeadPromptTypedValue")
+        self._leads_live_input_preview.setWordWrap(True)
+
+        leads_sent_title = QLabel("Entradas enviadas")
+        leads_sent_title.setObjectName("MutedText")
+        self._leads_live_submitted_console = QPlainTextEdit()
+        self._leads_live_submitted_console.setObjectName("ExecLogConsole")
+        self._leads_live_submitted_console.setReadOnly(True)
+        self._leads_live_submitted_console.setMaximumBlockCount(180)
+        self._leads_live_submitted_console.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self._leads_live_submitted_console.setPlaceholderText("Aún no hay entradas enviadas.")
+        self._leads_live_submitted_console.setFixedHeight(110)
+
+        leads_live_layout.addWidget(leads_live_title)
+        leads_live_layout.addWidget(self._leads_live_prompt_label)
+        leads_live_layout.addWidget(leads_typing_title)
+        leads_live_layout.addWidget(self._leads_live_input_preview)
+        leads_live_layout.addWidget(leads_sent_title)
+        leads_live_layout.addWidget(self._leads_live_submitted_console)
+        self._leads_live_card.setVisible(False)
+        layout.addWidget(self._leads_live_card, 0)
 
         scroll = QScrollArea()
         scroll.setObjectName("SubmenuScroll")
@@ -732,6 +1125,85 @@ class MainWindow(QMainWindow):
         totals_layout.addLayout(metrics_grid)
         send_layout.addWidget(totals_card)
 
+        self.campaign_summary_container = QFrame()
+        self.campaign_summary_container.setObjectName("campaign_summary_container")
+        campaign_summary_layout = QVBoxLayout(self.campaign_summary_container)
+        campaign_summary_layout.setContentsMargins(10, 10, 10, 10)
+        campaign_summary_layout.setSpacing(10)
+
+        campaign_summary_title = QLabel("RESUMEN DE CAMPAÑA FINALIZADA")
+        campaign_summary_title.setObjectName("CampaignSummaryTitle")
+        campaign_summary_title.setAlignment(Qt.AlignCenter)
+        campaign_summary_layout.addWidget(campaign_summary_title)
+
+        campaign_summary_separator = QFrame()
+        campaign_summary_separator.setObjectName("CampaignSummarySeparator")
+        campaign_summary_separator.setFixedHeight(1)
+        campaign_summary_layout.addWidget(campaign_summary_separator)
+
+        summary_cards_row = QHBoxLayout()
+        summary_cards_row.setContentsMargins(0, 0, 0, 0)
+        summary_cards_row.setSpacing(10)
+        summary_cards = [
+            ("sent_ok", "Mensajes enviados correctamente", "success"),
+            ("error", "Mensajes con error", "danger"),
+            ("accounts", "Cuentas utilizadas", "info"),
+        ]
+        self._campaign_summary_labels: dict[str, QLabel] = {}
+        for key, title, tone in summary_cards:
+            card = QFrame()
+            card.setObjectName("CampaignSummaryMetricCard")
+            card.setProperty("tone", tone)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setSpacing(4)
+
+            title_label = QLabel(title)
+            title_label.setObjectName("MetricLabel")
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setWordWrap(True)
+
+            value_label = QLabel("0")
+            value_label.setObjectName("CampaignSummaryMetricValue")
+            value_label.setAlignment(Qt.AlignCenter)
+            self._campaign_summary_labels[key] = value_label
+
+            card_layout.addWidget(title_label)
+            card_layout.addWidget(value_label)
+            summary_cards_row.addWidget(card, 1)
+        campaign_summary_layout.addLayout(summary_cards_row)
+
+        self._campaign_summary_table = QTableWidget(3, 4)
+        self._campaign_summary_table.setObjectName("CampaignSummaryTable")
+        self._campaign_summary_table.setHorizontalHeaderLabels(
+            ["Cuenta", "Enviados OK", "Con error", "Total"]
+        )
+        self._campaign_summary_table.verticalHeader().setVisible(False)
+        self._campaign_summary_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._campaign_summary_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._campaign_summary_table.setFocusPolicy(Qt.NoFocus)
+        self._campaign_summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._campaign_summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._campaign_summary_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._campaign_summary_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._campaign_summary_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+
+        summary_table_rows = [
+            ("@cuenta_1", "0", "0", "0"),
+            ("@cuenta_2", "0", "0", "0"),
+            ("TOTAL", "0", "0", "0"),
+        ]
+        for row, row_values in enumerate(summary_table_rows):
+            for col, value in enumerate(row_values):
+                item = QTableWidgetItem(value)
+                if col > 0:
+                    item.setTextAlignment(Qt.AlignCenter)
+                self._campaign_summary_table.setItem(row, col, item)
+
+        campaign_summary_layout.addWidget(self._campaign_summary_table)
+        self.campaign_summary_container.setVisible(False)
+        send_layout.addWidget(self.campaign_summary_container)
+
         inflight_card = QFrame()
         inflight_card.setObjectName("ExecCard")
         inflight_layout = QVBoxLayout(inflight_card)
@@ -792,12 +1264,16 @@ class MainWindow(QMainWindow):
 
         self._autoresponder_execution_container = self._build_autoresponder_execution_panel()
         self._autoresponder_execution_container.setVisible(False)
+        self._leads_execution_container = self._build_leads_execution_panel()
+        self._leads_execution_container.setVisible(False)
 
         layout.addWidget(self._send_execution_container, 1)
         layout.addWidget(self._autoresponder_execution_container, 1)
+        layout.addWidget(self._leads_execution_container, 1)
 
         self._clear_execution_view()
         self._reset_autoresponder_execution_view()
+        self._reset_leads_execution_view()
         self._set_execution_view(None)
         return page
 
@@ -882,6 +1358,96 @@ class MainWindow(QMainWindow):
         label.setWordWrap(True)
         return label
 
+    def _build_leads_execution_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("ExecCard")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+        title = QLabel("Filtrado de leads activo")
+        title.setObjectName("PageTitle")
+
+        self._leads_stop_button = QPushButton("Frenar filtrado")
+        self._leads_stop_button.setObjectName("SecondaryButton")
+        self._leads_stop_button.setEnabled(False)
+        self._leads_stop_button.clicked.connect(self._request_leads_filter_stop)
+
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        header_row.addWidget(self._leads_stop_button)
+        layout.addLayout(header_row)
+
+        metrics_card = QFrame()
+        metrics_card.setObjectName("ExecCard")
+        metrics_layout = QVBoxLayout(metrics_card)
+        metrics_layout.setContentsMargins(10, 10, 10, 10)
+        metrics_layout.setSpacing(8)
+
+        metrics_title = QLabel("Estado del filtrado")
+        metrics_title.setObjectName("PageTitle")
+        metrics_layout.addWidget(metrics_title)
+
+        metrics_grid = QGridLayout()
+        metrics_grid.setContentsMargins(0, 0, 0, 0)
+        metrics_grid.setHorizontalSpacing(10)
+        metrics_grid.setVerticalSpacing(8)
+        self._leads_metric_labels: dict[str, QLabel] = {}
+        metric_items = [
+            ("total_target", "Leads a filtrar", "-"),
+            ("eta", "Tiempo estimado", "-"),
+            ("accounts", "Alias / cuentas en uso", "-"),
+            ("qualified", "Cuentas calificadas", "0"),
+            ("discarded", "Cuentas descartadas", "0"),
+            ("processed", "Totales procesadas", "0"),
+        ]
+        for idx, (key, title_text, initial) in enumerate(metric_items):
+            row = idx // 3
+            col = idx % 3
+            card = self._build_exec_metric(key=f"leads_{key}", title=title_text, initial=initial)
+            value_label = card.findChild(QLabel, f"ExecMetricValue_leads_{key}")
+            if value_label is not None:
+                value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                value_label.setWordWrap(True)
+                self._leads_metric_labels[key] = value_label
+            metrics_grid.addWidget(card, row, col)
+        metrics_layout.addLayout(metrics_grid)
+        layout.addWidget(metrics_card)
+
+        logs_card = QFrame()
+        logs_card.setObjectName("ExecCard")
+        logs_layout = QVBoxLayout(logs_card)
+        logs_layout.setContentsMargins(10, 10, 10, 10)
+        logs_layout.setSpacing(8)
+
+        logs_title_row = QHBoxLayout()
+        logs_title_row.setContentsMargins(0, 0, 0, 0)
+        logs_title_row.setSpacing(8)
+        logs_title = QLabel("Log del filtrado")
+        logs_title.setObjectName("PageTitle")
+
+        clear_button = QPushButton("Clear")
+        clear_button.setObjectName("SecondaryButton")
+        clear_button.clicked.connect(self._clear_leads_execution_log)
+        logs_title_row.addWidget(logs_title)
+        logs_title_row.addStretch(1)
+        logs_title_row.addWidget(clear_button)
+        logs_layout.addLayout(logs_title_row)
+
+        self._leads_log_console = QPlainTextEdit()
+        self._leads_log_console.setObjectName("ExecLogConsole")
+        self._leads_log_console.setReadOnly(True)
+        self._leads_log_console.setMaximumBlockCount(2000)
+        self._leads_log_console.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._leads_log_console.setPlaceholderText("Sin actividad de filtrado.")
+        logs_layout.addWidget(self._leads_log_console, 1)
+        layout.addWidget(logs_card, 1)
+
+        return panel
+
     def _build_exec_tag(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("ExecTag")
@@ -918,6 +1484,9 @@ class MainWindow(QMainWindow):
     def _clear_autoresponder_execution_log(self) -> None:
         self._autoresponder_log_console.clear()
 
+    def _clear_leads_execution_log(self) -> None:
+        self._leads_log_console.clear()
+
     def _reset_autoresponder_execution_view(self) -> None:
         self._autoresponder_active_accounts = 0
         self._autoresponder_responses_ok = 0
@@ -929,6 +1498,31 @@ class MainWindow(QMainWindow):
         self._autoresponder_log_console.clear()
         self._update_autoresponder_status_blocks()
         self._update_autoresponder_runtime_text()
+
+    def _reset_leads_execution_view(self) -> None:
+        self._leads_filter_running = False
+        self._leads_filter_started_at = 0.0
+        self._leads_total_target = None
+        self._leads_processed_count = 0
+        self._leads_qualified_count = 0
+        self._leads_discarded_count = 0
+        self._leads_account_alias = "-"
+        self._leads_export_alias = "leads_filtrados"
+        self._leads_accounts_planned = None
+        self._leads_account_usernames = []
+        self._leads_waiting_manual_accounts = False
+        self._leads_accounts_seen.clear()
+        self._leads_counts_prefill_on_next_start = None
+        self._leads_stop_requested = False
+        self._leads_stop_prompt_active = False
+        self._leads_completion_announced = False
+        if hasattr(self, "_leads_stop_button"):
+            self._leads_stop_button.setEnabled(False)
+        if hasattr(self, "_leads_log_console"):
+            self._leads_log_console.clear()
+        if hasattr(self, "_leads_live_submitted_console"):
+            self._leads_live_submitted_console.clear()
+        self._update_leads_metrics_view()
 
     @staticmethod
     def _format_elapsed_hhmmss(seconds: float) -> str:
@@ -987,6 +1581,67 @@ class MainWindow(QMainWindow):
             f"{self._format_elapsed_hhmmss(elapsed)}"
         )
 
+    def _format_eta_text(self) -> str:
+        if not self._leads_filter_running:
+            if self._leads_total_target is not None and self._leads_processed_count >= self._leads_total_target:
+                return "Completado"
+            return "-"
+        if self._leads_total_target is None or self._leads_processed_count <= 0:
+            return "Calculando..."
+        remaining = max(0, self._leads_total_target - self._leads_processed_count)
+        if remaining <= 0:
+            return "00:00:00"
+        elapsed = 0.0
+        if self._leads_filter_started_at > 0:
+            elapsed = max(0.0, time.monotonic() - self._leads_filter_started_at)
+        if elapsed <= 0:
+            return "Calculando..."
+        avg_seconds = elapsed / max(1, self._leads_processed_count)
+        eta_seconds = avg_seconds * remaining
+        return self._format_elapsed_hhmmss(eta_seconds)
+
+    def _accounts_metric_text(self) -> str:
+        alias = self._leads_account_alias or "-"
+        if self._leads_accounts_planned is not None:
+            return f"{alias} · {self._leads_accounts_planned} cuentas"
+        seen = len(self._leads_accounts_seen)
+        if seen > 0:
+            return f"{alias} · {seen} cuentas activas"
+        return alias
+
+    def _update_leads_metrics_view(self) -> None:
+        if not hasattr(self, "_leads_metric_labels"):
+            return
+        total_target_text = (
+            str(self._leads_total_target) if self._leads_total_target is not None else "-"
+        )
+        values = {
+            "total_target": total_target_text,
+            "eta": self._format_eta_text(),
+            "accounts": self._accounts_metric_text(),
+            "qualified": str(self._leads_qualified_count),
+            "discarded": str(self._leads_discarded_count),
+            "processed": str(self._leads_processed_count),
+        }
+        for key, value in values.items():
+            label = self._leads_metric_labels.get(key)
+            if label is not None:
+                label.setText(value)
+
+    def _set_leads_filter_running(self, running: bool) -> None:
+        if self._leads_filter_running == running:
+            return
+        self._leads_filter_running = running
+        if hasattr(self, "_leads_stop_button"):
+            self._leads_stop_button.setEnabled(running)
+        if running:
+            self._leads_filter_started_at = time.monotonic()
+            self._set_execution_mode(True)
+        else:
+            self._leads_filter_started_at = 0.0
+            self._set_execution_mode(self._campaign_running or self._autoresponder_running)
+        self._update_leads_metrics_view()
+
     @staticmethod
     def _append_spaced_log_entry(console: QPlainTextEdit, text: str) -> None:
         cursor = console.textCursor()
@@ -1043,11 +1698,87 @@ class MainWindow(QMainWindow):
             return
         self._append_spaced_log_entry(self._autoresponder_log_console, formatted)
 
+    def _format_leads_log_line(self, line: str) -> str:
+        text = _strip_cli_hints(line).strip()
+        if not text:
+            return ""
+        if text.startswith("[gui]") or text.startswith("[DBG]"):
+            return ""
+        if _CLI_HINT_LINE_RE.match(text):
+            return ""
+        if _MENU_OPTION_LINE_RE.match(text):
+            return ""
+        if _DECORATIVE_LINE_RE.match(text):
+            return ""
+        if text.lower() == "opcion:":
+            return ""
+        if " | " in text:
+            return text.replace(" | ", "\n")
+        return text
+
+    def _append_leads_execution_log(self, line: str) -> None:
+        formatted = self._format_leads_log_line(line)
+        if not formatted:
+            return
+        self._append_spaced_log_entry(self._leads_log_console, formatted)
+
+    def _is_leads_runtime_line(self, normalized_line: str, normalized: str) -> bool:
+        if _LEADS_RESULT_RE.search(normalized_line):
+            return True
+        leads_tokens = (
+            "ejecutando filtrado",
+            "filtrado detenido",
+            "leads guardados en alias",
+            "filtrado completado pero no hubo leads calificados para guardar",
+            "no quedan usernames pendientes",
+            "no hay cuentas validas para ejecutar el filtrado",
+            "paso 1 carga de usernames",
+            "usernames cargados",
+        )
+        return any(token in normalized for token in leads_tokens)
+
     def _set_menu_activity_visible(self, visible: bool) -> None:
         if not hasattr(self, "_menu_activity_card"):
             return
         self._menu_activity_card.setVisible(visible)
         self._menu_activity_open = visible
+
+    def _set_leads_live_card_visible(self, visible: bool) -> None:
+        if not hasattr(self, "_leads_live_card"):
+            return
+        allowed = bool(
+            visible
+            and self._active_sidebar_key == "leads"
+            and self._leads_filter_running
+        )
+        self._leads_live_card.setVisible(allowed)
+        if not allowed:
+            self._leads_live_prompt_label.setText("Esperando pregunta...")
+            self._leads_live_input_preview.setText("(vacío)")
+
+    def _update_leads_live_prompt(self, prompt_text: str) -> None:
+        if not hasattr(self, "_leads_live_prompt_label"):
+            return
+        cleaned = _strip_cli_hints(prompt_text or "").strip()
+        self._leads_live_prompt_label.setText(cleaned or "Esperando pregunta...")
+        self._leads_live_input_preview.setText("(vacío)")
+
+    def _append_leads_live_submission(self, prompt: str, value: str) -> None:
+        if not hasattr(self, "_leads_live_submitted_console"):
+            return
+        prompt_text = _strip_cli_hints(prompt or "").strip() or "Entrada"
+        payload = value if value else "(vacío)"
+        self._append_spaced_log_entry(
+            self._leads_live_submitted_console,
+            f"{prompt_text}\n{payload}",
+        )
+        self._leads_live_input_preview.setText("(vacío)")
+
+    def _on_live_input_text_changed(self, value: str) -> None:
+        if not hasattr(self, "_leads_live_card") or not self._leads_live_card.isVisible():
+            return
+        current = str(value or "")
+        self._leads_live_input_preview.setText(current if current else "(vacío)")
 
     def _primary_key_for_value(self, value: str) -> Optional[str]:
         target = str(value).strip()
@@ -1147,6 +1878,8 @@ class MainWindow(QMainWindow):
         key = self._current_section_log_key() or self._infer_section_log_key_from_line(line)
         if not key:
             return
+        if key not in self._section_log_buffers:
+            return
         formatted = self._format_menu_activity_log_line(line)
         if not formatted:
             return
@@ -1195,8 +1928,10 @@ class MainWindow(QMainWindow):
     def _set_execution_view(self, view: Optional[str]) -> None:
         send_visible = view == "send"
         autoresponder_visible = view == "autoresponder"
+        leads_visible = view == "leads"
         self._send_execution_container.setVisible(send_visible)
         self._autoresponder_execution_container.setVisible(autoresponder_visible)
+        self._leads_execution_container.setVisible(leads_visible)
 
     def _resolve_execution_view(self, active: bool) -> Optional[str]:
         if not active:
@@ -1205,12 +1940,16 @@ class MainWindow(QMainWindow):
             return "send"
         if self._autoresponder_running and self._active_sidebar_key == "autoresponder":
             return "autoresponder"
+        if self._leads_filter_running and self._active_sidebar_key == "leads":
+            return "leads"
         return None
 
     @Slot()
     def _tick_execution_clock(self) -> None:
         self._exec_time_tag.setText(f"Hora: {datetime.now().strftime('%H:%M:%S')}")
         self._update_autoresponder_runtime_text()
+        if self._leads_filter_running:
+            self._update_leads_metrics_view()
 
     def _set_execution_mode(self, active: bool, *, keep_view: bool = False) -> None:
         view = self._resolve_execution_view(active)
@@ -1248,7 +1987,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_exec_stop_button"):
             self._exec_stop_button.setEnabled(running)
         if not running:
-            self._set_execution_mode(self._autoresponder_running)
+            self._set_execution_mode(self._autoresponder_running or self._leads_filter_running)
 
     def _set_autoresponder_running(self, running: bool) -> None:
         if self._autoresponder_running == running:
@@ -1262,7 +2001,7 @@ class MainWindow(QMainWindow):
             self._update_autoresponder_runtime_text()
             return
         self._autoresponder_started_at = 0.0
-        self._set_execution_mode(self._campaign_running)
+        self._set_execution_mode(self._campaign_running or self._leads_filter_running)
         self._update_autoresponder_runtime_text()
 
     def _log_autoresponder_stop_summary(self, elapsed_seconds: float) -> None:
@@ -1315,6 +2054,42 @@ class MainWindow(QMainWindow):
             self._set_campaign_running(False)
         except Exception as exc:
             self._append_log(f"[gui] No se pudo solicitar freno de campaña: {exc}\n")
+
+    def _request_leads_filter_stop(self) -> None:
+        if not self._leads_filter_running:
+            self._append_log("[gui] No hay filtrado de leads en ejecución.\n")
+            return
+        stop_requested = False
+        try:
+            if sys.platform.startswith("win"):
+                import msvcrt  # type: ignore
+
+                msvcrt.ungetch("q")
+                stop_requested = True
+        except Exception:
+            pass
+        try:
+            from runtime import request_stop
+
+            request_stop("se presionó Q")
+            stop_requested = True
+        except Exception:
+            pass
+
+        if stop_requested:
+            self._leads_stop_requested = True
+            self._append_log(
+                "[gui] Frenar filtrado solicitado. Esperando confirmación del backend.\n"
+            )
+            self._append_leads_execution_log(
+                "Frenar filtrado solicitado. Esperando confirmación del backend."
+            )
+            return
+
+        self._append_log("[gui] No se pudo enviar la señal de freno para filtrado.\n")
+        self._append_leads_execution_log(
+            "No se pudo enviar la señal de freno para filtrado."
+        )
 
     def _parse_exec_event_row(
         self, line: str
@@ -1377,6 +2152,9 @@ class MainWindow(QMainWindow):
         normalized_line = self._normalize_execution_line(stripped)
         if not normalized_line:
             return
+        normalized = _normalized_label(normalized_line)
+        if self._is_leads_runtime_line(normalized_line, normalized):
+            return
 
         now = time.monotonic()
         self._execution_log_times = [t for t in self._execution_log_times if now - t <= 2.5]
@@ -1426,7 +2204,6 @@ class MainWindow(QMainWindow):
             self._set_execution_mode(True)
             send_log_line = True
 
-        normalized = _normalized_label(normalized_line)
         if "auto responder" in normalized or "autoresponder" in normalized:
             return
         execution_tokens = (
@@ -1470,6 +2247,152 @@ class MainWindow(QMainWindow):
 
         if send_log_line:
             self._append_execution_log(normalized_line)
+
+    def _start_leads_filter_run(self) -> None:
+        if self._leads_counts_prefill_on_next_start:
+            prefill = self._leads_counts_prefill_on_next_start
+            self._leads_total_target = prefill.get("total")
+            self._leads_processed_count = prefill.get("processed", 0)
+            self._leads_qualified_count = prefill.get("qualified", 0)
+            self._leads_discarded_count = prefill.get("discarded", 0)
+            self._leads_counts_prefill_on_next_start = None
+        else:
+            self._leads_processed_count = 0
+            self._leads_qualified_count = 0
+            self._leads_discarded_count = 0
+        self._leads_accounts_seen.clear()
+        self._leads_stop_requested = False
+        self._leads_stop_prompt_active = False
+        self._leads_completion_announced = False
+        self._clear_leads_execution_log()
+        self._set_leads_filter_running(True)
+        self._update_leads_metrics_view()
+
+    def _consume_leads_filter_line(self, line: str) -> None:
+        stripped = line.strip()
+        if not stripped:
+            return
+        normalized_line = self._normalize_execution_line(stripped)
+        if not normalized_line:
+            return
+        normalized = _normalized_label(normalized_line)
+        if not normalized:
+            return
+
+        if "crear nuevo filtrado" in normalized or "paso 1 carga de usernames" in normalized:
+            self._leads_total_target = None
+            self._leads_processed_count = 0
+            self._leads_qualified_count = 0
+            self._leads_discarded_count = 0
+            self._leads_accounts_seen.clear()
+            self._leads_counts_prefill_on_next_start = None
+            self._leads_stop_requested = False
+            self._leads_stop_prompt_active = False
+            self._leads_completion_announced = False
+            self._update_leads_metrics_view()
+
+        summary_match = _LEADS_SUMMARY_ROW_RE.search(normalized_line)
+        if summary_match:
+            total = int(summary_match.group("total"))
+            processed = int(summary_match.group("processed"))
+            qualified = int(summary_match.group("qualified"))
+            discarded = int(summary_match.group("discarded"))
+            self._leads_counts_prefill_on_next_start = {
+                "total": total,
+                "processed": processed,
+                "qualified": qualified,
+                "discarded": discarded,
+            }
+            self._leads_total_target = total
+            self._leads_processed_count = processed
+            self._leads_qualified_count = qualified
+            self._leads_discarded_count = discarded
+            self._update_leads_metrics_view()
+            return
+
+        usernames_match = _LEADS_USERNAMES_LOADED_RE.search(normalized_line)
+        if usernames_match:
+            count = int(usernames_match.group("count"))
+            self._leads_total_target = count
+            self._leads_processed_count = 0
+            self._leads_qualified_count = 0
+            self._leads_discarded_count = 0
+            self._leads_counts_prefill_on_next_start = {
+                "total": count,
+                "processed": 0,
+                "qualified": 0,
+                "discarded": 0,
+            }
+            self._update_leads_metrics_view()
+            return
+
+        if "ejecutando filtrado" in normalized:
+            self._start_leads_filter_run()
+            self._append_leads_execution_log(normalized_line)
+            return
+
+        result_match = _LEADS_RESULT_RE.search(normalized_line)
+        if result_match:
+            if not self._leads_filter_running and not self._leads_stop_requested:
+                self._start_leads_filter_run()
+            account = result_match.group("account").strip().lstrip("@")
+            if account:
+                self._leads_accounts_seen.add(account)
+            result = result_match.group("result").strip().upper()
+            if result == "CALIFICA":
+                self._leads_qualified_count += 1
+            else:
+                self._leads_discarded_count += 1
+            self._leads_processed_count = self._leads_qualified_count + self._leads_discarded_count
+            if (
+                self._leads_total_target is None
+                or self._leads_processed_count > self._leads_total_target
+            ):
+                self._leads_total_target = self._leads_processed_count
+            self._update_leads_metrics_view()
+            self._append_leads_execution_log(normalized_line)
+            return
+
+        if "filtrado detenido" in normalized:
+            if "que queres hacer" in normalized:
+                self._leads_stop_prompt_active = True
+            self._set_leads_filter_running(False)
+            self._append_leads_execution_log(normalized_line)
+            self._show_leads_completion_dialog()
+            return
+
+        export_match = _LEADS_EXPORT_ALIAS_RE.search(normalized_line)
+        if export_match:
+            self._leads_export_alias = export_match.group("alias").strip() or self._leads_export_alias
+            self._set_leads_filter_running(False)
+            self._append_leads_execution_log(normalized_line)
+            self._show_leads_completion_dialog()
+            return
+
+        if "filtrado completado pero no hubo leads calificados para guardar" in normalized:
+            self._set_leads_filter_running(False)
+            self._append_leads_execution_log(normalized_line)
+            self._show_leads_completion_dialog()
+            return
+
+        if (
+            "no quedan usernames pendientes" in normalized
+            or "no hay cuentas validas para ejecutar el filtrado" in normalized
+        ):
+            self._set_leads_filter_running(False)
+            self._append_leads_execution_log(normalized_line)
+            return
+
+        if self._leads_filter_running:
+            is_noise = (
+                stripped.startswith("[gui]")
+                or stripped.startswith("[DBG]")
+                or _MENU_OPTION_LINE_RE.match(stripped)
+                or _CLI_HINT_LINE_RE.match(stripped)
+                or _DECORATIVE_LINE_RE.match(stripped)
+            )
+            if not is_noise:
+                self._append_leads_execution_log(normalized_line)
 
     def _consume_autoresponder_line(self, line: str) -> None:
         stripped = line.strip()
@@ -1740,6 +2663,7 @@ class MainWindow(QMainWindow):
 
         for raw_line in text.splitlines():
             self._consume_execution_line(raw_line)
+            self._consume_leads_filter_line(raw_line)
             self._consume_autoresponder_line(raw_line)
             self._consume_accounts_operation_line(raw_line)
             self._append_menu_activity_log(raw_line)
@@ -1777,19 +2701,37 @@ class MainWindow(QMainWindow):
             f"is_menu={request_obj.is_menu} detected_options_count={len(request_obj.menu_options)}"
         )
         self._last_prompt_value.setText(prompt_text or "(no prompt)")
+
         self._set_execution_mode(False)
+        if self._accounts_alias_manual_mode and self._is_accounts_alias_text_prompt(prompt_text):
+            self._pending_request_is_primary_menu = False
+            self._set_accounts_users_preview("")
+            self._menu_title_label.setVisible(False)
+            self._menu_prompt_label.setVisible(False)
+            self._clear_menu_buttons()
+            self._set_page(self.PAGE_MENU)
+            self._set_live_input_enabled(True, prompt=prompt_text, sensitive=request_obj.sensitive)
+            return
         if request_obj.is_menu and request_obj.menu_options:
             self._dbg("calling_render_buttons=True")
             self._render_menu_request(request_obj, is_preview=False)
             if self._pending_request is request_obj:
-                live_prompt = prompt_text
                 if self._is_accounts_alias_selector_menu(request_obj.menu_options):
-                    live_prompt = self._accounts_aliases_prompt()
-                self._set_live_input_enabled(True, prompt=live_prompt, sensitive=False)
+                    self._set_live_input_enabled(False, prompt="")
+                else:
+                    self._set_live_input_enabled(True, prompt=prompt_text, sensitive=False)
             return
 
         self._pending_request_is_primary_menu = False
         self._dbg("calling_render_buttons=False")
+        if self._is_accounts_alias_text_prompt(prompt_text):
+            self._set_accounts_users_preview("")
+            self._menu_title_label.setVisible(False)
+            self._menu_prompt_label.setVisible(False)
+            self._clear_menu_buttons()
+            self._set_page(self.PAGE_MENU)
+            self._set_live_input_enabled(True, prompt=prompt_text, sensitive=request_obj.sensitive)
+            return
         self._render_text_request(request_obj)
         self._set_live_input_enabled(True, prompt=prompt_text, sensitive=request_obj.sensitive)
 
@@ -1803,12 +2745,18 @@ class MainWindow(QMainWindow):
         self._set_execution_mode(False)
 
         if is_primary:
+            self._accounts_alias_select_value = ""
+            self._accounts_alias_back_value = ""
+            self._accounts_alias_manual_mode = False
+            self._set_accounts_users_preview("")
+            self._set_leads_live_card_visible(False)
             self._section_log_scope = None
             self._set_menu_activity_visible(False)
             self._pending_request_is_primary_menu = True
             self._primary_option_values.update(primary_mapping)
             self._update_primary_button_visibility()
             self._clear_menu_buttons()
+            self._menu_title_label.setVisible(True)
             self._menu_title_label.setText("Menu principal")
             self._menu_prompt_label.setText("Selecciona una seccion desde el sidebar.")
             self._refresh_menu_activity_log()
@@ -1827,17 +2775,45 @@ class MainWindow(QMainWindow):
         self._pending_request_is_primary_menu = False
         self._queued_primary_key = None
         self._set_menu_activity_visible(False)
-        self._menu_title_label.setText(request.menu_title or "Submenu")
+        leads_context = self._active_sidebar_key == "leads"
+        self._set_leads_live_card_visible(leads_context)
+        if self._is_accounts_alias_selector_menu(request.menu_options):
+            self._render_accounts_alias_selector_view(request)
+            return
+        self._accounts_alias_select_value = ""
+        self._accounts_alias_back_value = ""
+        self._accounts_alias_manual_mode = False
         cleaned_prompt = _strip_cli_hints(request.prompt or "Selecciona una opcion:")
         rendered_prompt = cleaned_prompt or "Selecciona una opcion:"
-        if self._is_accounts_alias_selector_menu(request.menu_options):
-            rendered_prompt = self._accounts_aliases_prompt()
+        accounts_users_menu = (
+            self._active_sidebar_key == "accounts"
+            and self._is_accounts_management_menu(request.menu_options)
+        )
+        if accounts_users_menu:
+            self._menu_title_label.setVisible(False)
+            self._menu_title_label.setText("")
+            self._menu_prompt_label.setVisible(True)
+        else:
+            self._menu_title_label.setVisible(True)
+            self._menu_prompt_label.setVisible(True)
+            self._menu_title_label.setText(request.menu_title or "Submenu")
+        if accounts_users_menu:
+            rendered_prompt = "Opcion:"
+            alias = self._resolve_selected_accounts_alias(request)
+            self._set_accounts_users_preview(self._accounts_alias_users_text(alias))
+        else:
+            self._set_accounts_users_preview("")
         self._menu_prompt_label.setText(rendered_prompt)
+        if leads_context:
+            self._menu_title_label.setText("Filtrado de leads")
+            self._update_leads_live_prompt(rendered_prompt)
         self._rebuild_menu_buttons(request.menu_options)
         self._set_page(self.PAGE_MENU)
         if self._active_sidebar_key in self._SECTION_LOG_KEYS:
             self._section_log_scope = self._active_sidebar_key
         self._refresh_menu_activity_log()
+        if leads_context:
+            self._set_menu_activity_visible(False)
         self._set_live_input_enabled(True, prompt=rendered_prompt, sensitive=False)
 
     def _derive_primary_mapping(self, options: list[MenuOption]) -> dict[str, str]:
@@ -1898,6 +2874,21 @@ class MainWindow(QMainWindow):
         )
         has_back = any("volver" in line for line in normalized)
         return has_select_alias and has_back
+
+    def _is_accounts_alias_text_prompt(self, prompt: str) -> bool:
+        if self._active_sidebar_key != "accounts":
+            return False
+        normalized = _normalized_label(prompt or "")
+        if "alias" not in normalized:
+            return False
+        tokens = (
+            "grupo",
+            "cuenta",
+            "default",
+            "vacio",
+            "vac o",
+        )
+        return any(token in normalized for token in tokens)
 
     @staticmethod
     def _menu_label_for_value(options: list[MenuOption], value: str) -> str:
@@ -2144,10 +3135,6 @@ class MainWindow(QMainWindow):
         if any(token in normalized for token in success_tokens):
             self._record_accounts_result("success", usernames)
 
-    def _accounts_aliases_prompt(self) -> str:
-        aliases = self._load_accounts_aliases()
-        return "Alias disponibles: " + ", ".join(aliases)
-
     def _load_accounts_aliases(self) -> list[str]:
         records: list[dict[str, Any]] = []
         try:
@@ -2177,11 +3164,176 @@ class MainWindow(QMainWindow):
             aliases.add(alias)
         return sorted(aliases)
 
+    def _load_account_usernames_for_alias(self, alias: str) -> list[str]:
+        records: list[dict[str, Any]] = []
+        try:
+            module = import_module("accounts")
+            list_callable = getattr(module, "list_all", None)
+            if callable(list_callable):
+                payload = list_callable()
+                if isinstance(payload, list):
+                    records = [item for item in payload if isinstance(item, dict)]
+        except Exception:
+            records = []
+
+        if not records:
+            payload = self._read_json(self._root_dir / "data" / "accounts.json", [])
+            if isinstance(payload, list):
+                records = [item for item in payload if isinstance(item, dict)]
+
+        target_alias = str(alias or "").strip().lower()
+        usernames: list[str] = []
+        for item in records:
+            item_alias = str(item.get("alias") or "default").strip().lower()
+            if item_alias != target_alias:
+                continue
+            username = str(item.get("username") or "").strip().lstrip("@")
+            if username:
+                usernames.append(username)
+        return usernames
+
+    def _resolve_leads_alias_value(self, raw_value: str) -> str:
+        value = str(raw_value or "").strip()
+        if not value:
+            return self._leads_account_alias
+        aliases = self._load_accounts_aliases()
+        if value.isdigit():
+            idx = int(value)
+            if 1 <= idx <= len(aliases):
+                return aliases[idx - 1]
+        for alias in aliases:
+            if alias.lower() == value.lower():
+                return alias
+        return value
+
+    @staticmethod
+    def _extract_manual_account_count(raw_value: str, max_accounts: int) -> Optional[int]:
+        value = str(raw_value or "").strip()
+        if not value:
+            return None
+        indexes: set[int] = set()
+        for chunk in value.split(","):
+            part = chunk.strip()
+            if not part.isdigit():
+                continue
+            idx = int(part)
+            if idx <= 0:
+                continue
+            if max_accounts > 0 and idx > max_accounts:
+                continue
+            indexes.add(idx)
+        if not indexes:
+            return None
+        return len(indexes)
+
+    def _is_leads_accounts_selection_menu(self, options: list[MenuOption]) -> bool:
+        if not options:
+            return False
+        normalized = [_normalized_label(option.label or "") for option in options]
+        has_all = any("usar todas las cuentas del alias" in line for line in normalized)
+        has_manual = any("seleccionar cuentas manualmente" in line for line in normalized)
+        return has_all and has_manual
+
+    def _capture_leads_setup_input(self, request: InputRequest, value: str) -> None:
+        if self._active_sidebar_key != "leads":
+            return
+        if request.is_menu and self._pending_request_is_primary_menu:
+            return
+        prompt_text = _strip_cli_hints(request.prompt or "")
+        prompt_norm = _normalized_label(prompt_text)
+        clean_value = str(value or "").strip()
+
+        visible_value = "***" if request.sensitive and clean_value else clean_value
+        self._append_leads_live_submission(prompt_text, visible_value)
+
+        if "alias nombre para guardar leads filtrados" in prompt_norm:
+            self._leads_export_alias = clean_value or "leads_filtrados"
+            self._update_leads_metrics_view()
+            return
+
+        if "alias para correr el filtrado" in prompt_norm:
+            alias_value = self._resolve_leads_alias_value(clean_value)
+            self._leads_account_alias = alias_value or "-"
+            self._leads_account_usernames = self._load_account_usernames_for_alias(alias_value)
+            self._leads_accounts_planned = None
+            self._leads_waiting_manual_accounts = False
+            self._update_leads_metrics_view()
+            return
+
+        if request.is_menu and self._is_leads_accounts_selection_menu(request.menu_options):
+            if clean_value == "1":
+                self._leads_accounts_planned = len(self._leads_account_usernames)
+                self._leads_waiting_manual_accounts = False
+            elif clean_value == "2":
+                self._leads_accounts_planned = None
+                self._leads_waiting_manual_accounts = True
+            self._update_leads_metrics_view()
+            return
+
+        if "indices de cuentas" in prompt_norm:
+            manual_count = self._extract_manual_account_count(
+                clean_value, len(self._leads_account_usernames)
+            )
+            if manual_count is not None:
+                self._leads_accounts_planned = manual_count
+            self._leads_waiting_manual_accounts = False
+            self._update_leads_metrics_view()
+
+    def _show_leads_completion_dialog(self) -> None:
+        if self._leads_completion_announced:
+            return
+        self._leads_completion_announced = True
+
+        alias = self._leads_export_alias or "leads_filtrados"
+        total = self._leads_processed_count
+        qualified = self._leads_qualified_count
+        discarded = self._leads_discarded_count
+
+        dialog = QDialog(self)
+        dialog.setObjectName("LeadsSummaryDialog")
+        dialog.setWindowTitle("Filtrado completado")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(520)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Filtrado finalizado con éxito")
+        title.setObjectName("LeadsSummaryTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        body = QLabel(
+            f"Total filtradas: {total}\n"
+            f"Calificadas: {qualified}\n"
+            f"Descartadas: {discarded}\n"
+            f"Alias de guardado: {alias}"
+        )
+        body.setObjectName("LeadsSummaryBody")
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignCenter)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setObjectName("PrimaryButton")
+        close_button.clicked.connect(dialog.accept)
+
+        layout.addWidget(title)
+        layout.addWidget(body)
+        layout.addWidget(close_button, 0, Qt.AlignCenter)
+        dialog.exec()
+
     def _render_text_request(self, request: InputRequest) -> None:
         self._set_execution_mode(False)
+        self._set_accounts_users_preview("")
         cleaned_prompt = _strip_cli_hints(request.prompt or "Ingresa un valor:")
-        self._menu_title_label.setText("Input")
+        leads_context = self._active_sidebar_key == "leads"
+        self._set_leads_live_card_visible(leads_context)
+        self._menu_title_label.setVisible(True)
+        self._menu_title_label.setText("Filtrado de leads" if leads_context else "Input")
+        self._menu_prompt_label.setVisible(True)
         self._menu_prompt_label.setText(cleaned_prompt or "Ingresa un valor:")
+        if leads_context:
+            self._update_leads_live_prompt(cleaned_prompt)
         self._clear_menu_buttons()
         self._menu_options_layout.takeAt(0)
         self._menu_options_layout.addStretch(1)
@@ -2205,7 +3357,9 @@ class MainWindow(QMainWindow):
         self._menu_options_layout.takeAt(0)
 
         for option in options:
-            clean_label = _strip_cli_hints((option.label or "").strip()) or f"Option {option.value}"
+            clean_label = (
+                _strip_cli_hints((option.label or "").strip()) or f"Option {option.value}"
+            )
             button = QPushButton(clean_label)
             button.setObjectName("MenuOptionButton")
             button.setMinimumHeight(52)
@@ -2287,8 +3441,14 @@ class MainWindow(QMainWindow):
         )
         if request is not None:
             self._maybe_start_accounts_operation(request, value)
+            self._capture_leads_setup_input(request, value)
             self._capture_autoresponder_delay_input(request, value)
             self._scope_section_logs_for_submission(request, value)
+            if request.is_menu and self._pending_request_is_primary_menu:
+                selected_key = self._primary_key_for_value(value)
+                if selected_key == "exit":
+                    self._shutdown_requested_from_primary_exit = True
+                    self._append_log("[gui] Exit requested from main menu.\n")
         accepted = self._io_adapter.fulfill_input(value, request_id=request_id)
         self._dbg(f"fulfill_input_accepted={accepted}")
         if not accepted:
@@ -2300,6 +3460,13 @@ class MainWindow(QMainWindow):
             self._live_input_field.clear()
             return
 
+        if not request.is_menu and self._active_sidebar_key == "accounts":
+            prompt_norm = _normalized_label(_strip_cli_hints(request.prompt or ""))
+            alias_value = str(value).strip()
+            if "alias" in prompt_norm and "grupo" in prompt_norm and alias_value:
+                self._selected_accounts_alias = alias_value
+            if self._accounts_alias_manual_mode:
+                self._accounts_alias_manual_mode = False
         self._pending_request = None
         self._pending_request_is_primary_menu = False
         self._set_status("Running")
@@ -2319,9 +3486,13 @@ class MainWindow(QMainWindow):
         self._finish_accounts_operation()
         self._set_campaign_running(False)
         self._set_autoresponder_running(False)
+        self._set_leads_filter_running(False)
+        self._set_leads_live_card_visible(False)
         self._set_execution_mode(False)
         self._set_live_input_enabled(False, prompt="")
         self._append_log(f"[gui] backend finished with code {exit_code}.\n")
+        if self._shutdown_requested_from_primary_exit and not self._shutdown_started:
+            QTimer.singleShot(0, lambda: self.shutdown_application(reason="main-menu-exit"))
 
     @Slot(str)
     def _on_backend_failed(self, traceback_text: str) -> None:
@@ -2333,10 +3504,14 @@ class MainWindow(QMainWindow):
         self._finish_accounts_operation()
         self._set_campaign_running(False)
         self._set_autoresponder_running(False)
+        self._set_leads_filter_running(False)
+        self._set_leads_live_card_visible(False)
         self._set_execution_mode(False)
         self._set_live_input_enabled(False, prompt="")
         self._append_log("[gui] backend crashed.\n")
         self._append_log(traceback_text)
+        if self._shutdown_requested_from_primary_exit and not self._shutdown_started:
+            QTimer.singleShot(0, lambda: self.shutdown_application(reason="backend-crash-after-exit"))
 
     def _toggle_log_panel(self) -> None:
         self._log_expanded = not self._log_expanded
@@ -2647,6 +3822,95 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
         return not thread.is_alive()
 
+    def _stop_ui_timers(self) -> None:
+        if hasattr(self, "_dashboard_timer") and self._dashboard_timer.isActive():
+            self._dashboard_timer.stop()
+        if hasattr(self, "_exec_clock_timer") and self._exec_clock_timer.isActive():
+            self._exec_clock_timer.stop()
+
+    def _shutdown_playwright_runtimes(self) -> None:
+        try:
+            whatsapp = import_module("whatsapp")
+        except Exception as exc:
+            self._append_log(f"[gui] Playwright runtime import failed during shutdown: {exc}\n")
+            return
+
+        runner = getattr(whatsapp, "_MESSAGE_RUNNER", None)
+        if runner is not None and hasattr(runner, "stop"):
+            try:
+                runner.stop()
+            except Exception as exc:
+                self._append_log(f"[gui] Failed stopping WhatsApp runner: {exc}\n")
+
+        shutdown_runtime = getattr(whatsapp, "_shutdown_playwright_runtime", None)
+        if callable(shutdown_runtime):
+            try:
+                shutdown_runtime()
+            except Exception as exc:
+                self._append_log(f"[gui] Failed stopping Playwright runtime: {exc}\n")
+
+    def _terminate_active_subprocesses(self) -> None:
+        active = getattr(subprocess, "_active", None)
+        if not isinstance(active, list) or not active:
+            return
+
+        for proc in list(active):
+            try:
+                if proc.poll() is not None:
+                    continue
+                self._append_log(f"[gui] Stopping child process pid={proc.pid}\n")
+                proc.terminate()
+                proc.wait(timeout=2.0)
+                if proc.poll() is None:
+                    self._append_log(f"[gui] Forcing child process kill pid={proc.pid}\n")
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+            except Exception as exc:
+                self._append_log(f"[gui] Failed stopping child process: {exc}\n")
+
+    def _flush_logging_streams(self) -> None:
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception as exc:
+                self._append_log(f"[gui] Failed flushing stream: {exc}\n")
+        logging.shutdown()
+
+    def shutdown_application(self, *, reason: str) -> bool:
+        if self._shutdown_started:
+            return True
+
+        self._shutdown_started = True
+        self._closing = True
+        self._shutdown_reason = reason
+        self._set_status("Stopping")
+        self._append_log(f"[gui] shutdown requested ({reason}).\n")
+
+        # 1) Señal de stop a threads y bucles de input.
+        self._request_backend_stop()
+        # 2) Stop de event loops/timers UI.
+        self._stop_ui_timers()
+        # 3) Cierre de runtimes/contextos Playwright conocidos.
+        self._shutdown_playwright_runtimes()
+        # 4) Terminación de subprocess activos conocidos.
+        self._terminate_active_subprocesses()
+
+        joined = self._join_backend_thread(timeout_seconds=10.0)
+        if not joined:
+            self._append_log("[gui] Backend thread did not stop before timeout.\n")
+
+        # 5) Flush/close de logging streams.
+        self._flush_logging_streams()
+        # 6) Cierre GUI.
+        self.hide()
+        app = QApplication.instance()
+        if app is not None:
+            app.exit(0)
+
+        if self.backend_exit_code is None:
+            self.backend_exit_code = 0
+        return joined
+
     def dragEnterEvent(self, event) -> None:  # type: ignore[override]
         mime = event.mimeData()
         if mime and mime.hasUrls():
@@ -2682,26 +3946,8 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self._closing:
-            event.accept()
-            return
-        self._closing = True
-
-        self._set_status("Stopping")
-        self._request_backend_stop()
-
-        joined = self._join_backend_thread(timeout_seconds=8.0)
-        if not joined:
-            self._closing = False
-            QMessageBox.warning(
-                self,
-                "Backend still running",
-                "The backend thread did not stop in time.\n"
-                "Finish active flow from the menu and close again.",
-            )
-            event.ignore()
-            return
-
+        self.shutdown_application(reason="window-close")
+        event.accept()
         super().closeEvent(event)
 
 

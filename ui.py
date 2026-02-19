@@ -203,6 +203,15 @@ def style_text(text: str, *, color: str | None = None, bold: bool = False) -> st
 
 
 def clear_console() -> None:
+    stdin_tty = False
+    stdout_tty = False
+    with contextlib.suppress(Exception):
+        stdin_tty = bool(sys.stdin.isatty())
+    with contextlib.suppress(Exception):
+        stdout_tty = bool(sys.stdout.isatty())
+    # In windowed GUI/EXE there is no real console; running "cls" spawns cmd.exe.
+    if not (stdin_tty or stdout_tty):
+        return
     try:
         os.system("cls" if os.name == "nt" else "clear")
     except Exception:
