@@ -7,6 +7,14 @@ import importlib
 import os
 import time
 
+from runtime_parity import (
+    bootstrap_runtime_env,
+    format_runtime_preflight,
+    run_runtime_preflight,
+)
+
+bootstrap_runtime_env("owner")
+
 from config import SETTINGS
 from storage import sent_totals_today
 from ui import (
@@ -135,6 +143,7 @@ except Exception as e:
     stats_engine = None
     warn(f"Módulo no disponible o con error: src.analytics.stats_engine ({e})")
 whatsapp = _safe_import("whatsapp")
+_RUNTIME_PREFLIGHT_DONE = False
 
 
 def _counts():
@@ -210,6 +219,22 @@ def current_menu_option_labels() -> list[str]:
 
 
 def menu():
+    global _RUNTIME_PREFLIGHT_DONE
+    if not _RUNTIME_PREFLIGHT_DONE:
+        runtime_mode = "client" if SETTINGS.client_distribution else "owner"
+        preflight = run_runtime_preflight(
+            runtime_mode,
+            strict=False,
+            sync_connected=True,
+        )
+        print(format_runtime_preflight(preflight))
+        if int(preflight.get("critical_count", 0)) > 0:
+            raise RuntimeError(
+                "Runtime preflight failed with critical issues. "
+                f"Report: {preflight.get('report_path')}"
+            )
+        _RUNTIME_PREFLIGHT_DONE = True
+
     if licensekit and hasattr(licensekit, "enforce_startup_validation"):
         licensekit.enforce_startup_validation()
     

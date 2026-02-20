@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from io_adapter import IOAdapter
 from main_window import MainWindow
+from runtime_parity import bootstrap_runtime_env
 
 ExecutionMode = Literal["owner", "client"]
 
@@ -229,6 +230,7 @@ def launch_gui_app(
     mode: Optional[str] = None,
 ) -> int:
     resolved_mode = _resolve_mode(mode)
+    bootstrap_runtime_env(resolved_mode)
     resolved_entrypoint = _resolve_backend_entrypoint(resolved_mode, backend_entrypoint)
 
     app = QApplication.instance() or QApplication(sys.argv)

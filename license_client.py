@@ -18,6 +18,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from runtime_parity import (
+    bootstrap_runtime_env,
+    format_runtime_preflight,
+    run_runtime_preflight,
+)
+
 
 def _initial_app_root() -> Path:
     """Devuelve una única raíz de datos para CLI y EXE."""
@@ -40,11 +46,14 @@ def _initial_app_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-os.environ["APP_DATA_ROOT"] = str(_initial_app_root())
+os.environ.setdefault("APP_DATA_ROOT", str(_initial_app_root()))
+bootstrap_runtime_env("client", app_root_hint=_initial_app_root(), force=True)
 
 def _get_app_root() -> Path:
     """Determina el directorio raiz del bundle/ejecutable."""
-
+    current = (os.environ.get("APP_DATA_ROOT") or "").strip()
+    if current:
+        return Path(current).expanduser()
     return _initial_app_root()
 
 
@@ -605,9 +614,10 @@ def _prepare_client_environment(record: Dict[str, str]) -> None:
     app_root = _get_app_root()
     os.environ.setdefault("CLIENT_DISTRIBUTION", "1")
     os.environ["LICENSE_ALREADY_VALIDATED"] = "1"
-    os.environ.setdefault("APP_DATA_ROOT", str(app_root))
+    os.environ["APP_DATA_ROOT"] = str(app_root)
     os.environ.pop("CLIENT_SESSIONS_ROOT", None)
     os.environ.pop("CLIENT_ALIAS", None)
+    bootstrap_runtime_env("client", app_root_hint=app_root, force=True)
 
 
 def _client_integrity_marker_path() -> Path:
@@ -768,6 +778,7 @@ def _load_sessions_on_boot() -> Tuple[int, int, List[str]]:
     global _DEBUG_ROOT_PRINTED
 
     sessions_dir = _resolve_sessions_dir()
+    profiles_root = Path(os.environ.get("PROFILES_DIR") or (_get_app_root() / "profiles"))
     found_files = list(_iter_session_files(sessions_dir))
     print(f"📦 Sesiones detectadas en '{sessions_dir.name}': {len(found_files)}")
     try:
@@ -868,6 +879,16 @@ def _load_sessions_on_boot() -> Tuple[int, int, List[str]]:
             print(f"⚠️ Sesión de @{username} inválida, por favor volvé a iniciar sesión.")
             continue
 
+        storage_state = profiles_root / username / "storage_state.json"
+        if not storage_state.exists():
+            errors += 1
+            mark_connected(username, False)
+            print(
+                f"⚠️ Sesión de @{username} sin storage_state Playwright "
+                f"({storage_state}). Requiere relogin."
+            )
+            continue
+
         mark_connected(username, True)
         try:
             account["connected"] = True
@@ -929,6 +950,18 @@ def launch_with_license() -> None:
         _prepare_client_environment(record)
         config.refresh_settings()
         _load_sessions_on_boot()
+        preflight = run_runtime_preflight(
+            "client",
+            strict=False,
+            sync_connected=True,
+        )
+        print(format_runtime_preflight(preflight))
+        if int(preflight.get("critical_count", 0)) > 0:
+            _print_error(
+                "Preflight runtime falló con errores críticos. "
+                f"Revisa: {preflight.get('report_path')}"
+            )
+            sys.exit(2)
 
         _print_section("Licencia validada", color=Fore.GREEN)
         client = record.get("client_name", "Cliente")
@@ -978,6 +1011,18 @@ def launch_with_license() -> None:
     _prepare_client_environment(record)
     config.refresh_settings()
     _load_sessions_on_boot()
+    preflight = run_runtime_preflight(
+        "client",
+        strict=False,
+        sync_connected=True,
+    )
+    print(format_runtime_preflight(preflight))
+    if int(preflight.get("critical_count", 0)) > 0:
+        _print_error(
+            "Preflight runtime falló con errores críticos. "
+            f"Revisa: {preflight.get('report_path')}"
+        )
+        sys.exit(2)
 
     _print_section("Licencia validada", color=Fore.GREEN)
     client = record.get("client_name", "Cliente")

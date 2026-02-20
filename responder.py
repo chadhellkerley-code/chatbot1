@@ -111,6 +111,9 @@ ACTIVE_ALIAS: str | None = None
 MAX_SYSTEM_PROMPT_CHARS = 50000
 _AUTORESPONDER_STUB_WARNED = False
 _OPENAI_REPLY_FALLBACK = "Gracias por tu mensaje. Como te puedo ayudar?"
+_OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+_OPENROUTER_DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+_OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -121,6 +124,107 @@ def _env_enabled(name: str, default: bool = False) -> bool:
 
 
 _AUTORESPONDER_VERBOSE_TECH_LOGS = _env_enabled("AUTORESPONDER_VERBOSE_TECH_LOGS", False)
+
+
+def _read_env_value(env_values: Dict[str, str], key: str, default: str = "") -> str:
+    raw = env_values.get(key)
+    if raw is None or not str(raw).strip():
+        raw = os.getenv(key, "")
+    value = str(raw or "").strip()
+    if value:
+        return value
+    return default
+
+
+def _resolve_ai_api_key(env_values: Optional[Dict[str, str]] = None) -> str:
+    values = env_values or read_env_local()
+    openai_key = (
+        values.get("OPENAI_API_KEY")
+        or SETTINGS.openai_api_key
+        or os.getenv("OPENAI_API_KEY")
+        or ""
+    )
+    openai_key = str(openai_key).strip()
+    if openai_key:
+        return openai_key
+    return _read_env_value(values, "OPENROUTER_API_KEY")
+
+
+def _is_openrouter_key(api_key: str) -> bool:
+    key = (api_key or "").strip().lower()
+    return key.startswith("sk-or-") or key.startswith("or-v1-")
+
+
+def _resolve_ai_base_url(
+    api_key: str,
+    *,
+    env_values: Optional[Dict[str, str]] = None,
+) -> str:
+    values = env_values or read_env_local()
+    explicit_base = _read_env_value(values, "OPENAI_BASE_URL")
+    if explicit_base:
+        return explicit_base
+
+    openrouter_key = _read_env_value(values, "OPENROUTER_API_KEY")
+    is_openrouter = _is_openrouter_key(api_key) or (
+        bool(openrouter_key) and openrouter_key == api_key
+    )
+    if not is_openrouter:
+        return ""
+    return _read_env_value(
+        values,
+        "OPENROUTER_BASE_URL",
+        default=_OPENROUTER_DEFAULT_BASE_URL,
+    )
+
+
+def _resolve_ai_model(
+    api_key: str,
+    *,
+    env_values: Optional[Dict[str, str]] = None,
+) -> str:
+    values = env_values or read_env_local()
+    explicit_model = _read_env_value(values, "OPENAI_MODEL")
+    if explicit_model:
+        return explicit_model
+
+    openrouter_model = _read_env_value(values, "OPENROUTER_MODEL")
+    openrouter_key = _read_env_value(values, "OPENROUTER_API_KEY")
+    is_openrouter = _is_openrouter_key(api_key) or (
+        bool(openrouter_key) and openrouter_key == api_key
+    )
+    if is_openrouter:
+        return openrouter_model or _OPENROUTER_DEFAULT_MODEL
+    return _OPENAI_DEFAULT_MODEL
+
+
+def _resolve_ai_runtime(api_key: str) -> tuple[str, str]:
+    values = read_env_local()
+    model = _resolve_ai_model(api_key, env_values=values)
+    base_url = _resolve_ai_base_url(api_key, env_values=values)
+    provider = "OpenRouter" if base_url and "openrouter.ai" in base_url.lower() else "OpenAI"
+    return provider, model
+
+
+def _build_openai_client(api_key: str) -> object:
+    from openai import OpenAI
+
+    values = read_env_local()
+    base_url = _resolve_ai_base_url(api_key, env_values=values)
+    kwargs: Dict[str, object] = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+        if "openrouter.ai" in base_url.lower():
+            default_headers: Dict[str, str] = {}
+            referer = _read_env_value(values, "OPENROUTER_HTTP_REFERER")
+            title = _read_env_value(values, "OPENROUTER_X_TITLE")
+            if referer:
+                default_headers["HTTP-Referer"] = referer
+            if title:
+                default_headers["X-Title"] = title
+            if default_headers:
+                kwargs["default_headers"] = default_headers
+    return OpenAI(**kwargs)
 
 
 def _extract_openai_text(response: object) -> str:
@@ -155,24 +259,32 @@ def _openai_generate_text(
     *,
     system_prompt: str,
     user_content: str,
-    model: str = "gpt-4o-mini",
+    model: str = _OPENAI_DEFAULT_MODEL,
     temperature: float = 0.2,
     max_output_tokens: int = 180,
 ) -> str:
     responses_api = getattr(client, "responses", None)
     if responses_api is not None and hasattr(responses_api, "create"):
-        response = responses_api.create(
-            model=model,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-        )
-        text = _extract_openai_text(response)
-        if text:
-            return text
+        try:
+            response = responses_api.create(
+                model=model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+            text = _extract_openai_text(response)
+            if text:
+                return text
+        except Exception as exc:
+            if _AUTORESPONDER_VERBOSE_TECH_LOGS:
+                logger.info(
+                    "Responses API no disponible para modelo '%s': %s. Fallback a chat.completions.",
+                    model,
+                    exc,
+                )
 
     chat_api = getattr(client, "chat", None)
     completions_api = getattr(chat_api, "completions", None) if chat_api is not None else None
@@ -1272,22 +1384,16 @@ def _followup_decision(
     prompt_text = prompt_text.strip()
     if not prompt_text or not api_key:
         return None
-    try:  # pragma: no cover - depende de dependencia externa
-        from openai import OpenAI
+    try:
+        client = _build_openai_client(api_key)
     except Exception as exc:
         logger.warning(
-            "No se pudo importar OpenAI para seguimiento: %s", exc, exc_info=False
-        )
-        return None
-    try:  # pragma: no cover - depende de credenciales externas
-        client = OpenAI(api_key=api_key)
-    except Exception as exc:
-        logger.warning(
-            "No se pudo inicializar OpenAI para seguimiento: %s",
+            "No se pudo inicializar cliente IA para seguimiento: %s",
             exc,
             exc_info=False,
         )
         return None
+    model = _resolve_ai_model(api_key)
 
     system_prompt = (
         "Sos un asistente que decide si enviar un mensaje de seguimiento en Instagram. "
@@ -1311,7 +1417,7 @@ def _followup_decision(
             client,
             system_prompt=system_prompt,
             user_content=user_content,
-            model="gpt-4o-mini",
+            model=model,
             temperature=0.0,
             max_output_tokens=240,
         ).strip()
@@ -1383,6 +1489,7 @@ def _process_followups(
         )
         return
     now_ts = time.time()
+    followups_sent_this_cycle = 0
     max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     for thread in threads:
         if STOP_EVENT.is_set():
@@ -1603,7 +1710,8 @@ def _process_followups(
             reason,
         )
         
-        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+        if followups_sent_this_cycle > 0:
+            _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
         try:
             message_id = client.send_message(thread, message_text)
         except Exception as exc:  # pragma: no cover - depende de SDK externo
@@ -1633,6 +1741,7 @@ def _process_followups(
             is_followup=True,
             followup_stage=stage_int,
         )
+        followups_sent_this_cycle += 1
         _update_conversation_state(
             user,
             thread_id,
@@ -2085,14 +2194,13 @@ def _ensure_session(username: str) -> bool:
 def _gen_response_legacy(api_key: str, system_prompt: str, convo_text: str) -> str:
     return _OPENAI_REPLY_FALLBACK
     try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
+        client = _build_openai_client(api_key)
+        model = _resolve_ai_model(api_key)
         output = _openai_generate_text(
             client,
             system_prompt=system_prompt,
             user_content=convo_text,
-            model="gpt-4o-mini",
+            model=model,
             temperature=0.6,
             max_output_tokens=180,
         )
@@ -2104,14 +2212,13 @@ def _gen_response_legacy(api_key: str, system_prompt: str, convo_text: str) -> s
 
 def _gen_response(api_key: str, system_prompt: str, convo_text: str) -> str:
     try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
+        client = _build_openai_client(api_key)
+        model = _resolve_ai_model(api_key)
         output = _openai_generate_text(
             client,
             system_prompt=system_prompt,
             user_content=convo_text,
-            model="gpt-4o-mini",
+            model=model,
             temperature=0.6,
             max_output_tokens=180,
         )
@@ -2239,7 +2346,7 @@ def _persist_system_prompt(prompt: str, alias: str | None = None) -> str:
 
 def _load_preferences() -> tuple[str, str]:
     env_values = read_env_local()
-    api_key = env_values.get("OPENAI_API_KEY") or SETTINGS.openai_api_key or ""
+    api_key = _resolve_ai_api_key(env_values)
     config_values = read_app_config()
     prompt = _read_system_prompt_from_file() or config_values.get(PROMPT_KEY, "") or ""
     prompt = _normalize_system_prompt_text(prompt) or DEFAULT_PROMPT
@@ -3161,24 +3268,16 @@ def _google_calendar_lead_qualifies(
         return True
     if not api_key:
         return True
-    try:  # pragma: no cover - depende de dependencia externa
-        from openai import OpenAI
-    except Exception as exc:  # pragma: no cover - entorno sin openai
-        logger.warning(
-            "No se pudo importar OpenAI para evaluar Google Calendar: %s",
-            exc,
-            exc_info=False,
-        )
-        return True
-    try:  # pragma: no cover - depende de credenciales externas
-        client = OpenAI(api_key=api_key)
+    try:
+        client = _build_openai_client(api_key)
     except Exception as exc:
         logger.warning(
-            "No se pudo inicializar OpenAI para evaluar Google Calendar: %s",
+            "No se pudo inicializar cliente IA para evaluar Google Calendar: %s",
             exc,
             exc_info=False,
         )
         return True
+    model = _resolve_ai_model(api_key)
 
     system_prompt = (
         prompt_text
@@ -3198,7 +3297,7 @@ def _google_calendar_lead_qualifies(
             client,
             system_prompt=system_prompt,
             user_content=user_content,
-            model="gpt-4o-mini",
+            model=model,
             temperature=0,
             max_output_tokens=20,
         ).strip().lower()
@@ -3310,22 +3409,16 @@ def _gohighlevel_lead_qualifies(
         return True
     if not api_key:
         return True
-    try:  # pragma: no cover - depende de dependencia externa
-        from openai import OpenAI
-    except Exception as exc:  # pragma: no cover - entorno sin openai
-        logger.warning(
-            "No se pudo importar OpenAI para evaluar GoHighLevel: %s", exc, exc_info=False
-        )
-        return True
-    try:  # pragma: no cover - depende de credenciales externas
-        client = OpenAI(api_key=api_key)
+    try:
+        client = _build_openai_client(api_key)
     except Exception as exc:
         logger.warning(
-            "No se pudo inicializar OpenAI para evaluar GoHighLevel: %s",
+            "No se pudo inicializar cliente IA para evaluar GoHighLevel: %s",
             exc,
             exc_info=False,
         )
         return True
+    model = _resolve_ai_model(api_key)
 
     system_prompt = (
         prompt_text
@@ -3344,7 +3437,7 @@ def _gohighlevel_lead_qualifies(
             client,
             system_prompt=system_prompt,
             user_content=user_content,
-            model="gpt-4o-mini",
+            model=model,
             temperature=0,
             max_output_tokens=20,
         ).strip().lower()
@@ -4142,8 +4235,14 @@ def _google_calendar_menu() -> None:
 def _configure_api_key() -> None:
     banner()
     current_key, _ = _load_preferences()
+    current_provider, current_model = (
+        _resolve_ai_runtime(current_key) if current_key else ("(sin definir)", _OPENAI_DEFAULT_MODEL)
+    )
     print(style_text("Configurar OPENAI_API_KEY", color=Fore.CYAN, bold=True))
     print(f"Actual: {(_mask_key(current_key) or '(sin definir)')}")
+    print(f"Proveedor detectado: {current_provider}")
+    print(f"Modelo actual: {current_model}")
+    print("Tip: para usar OpenRouter como principal, deja OPENAI_API_KEY vacia y define OPENROUTER_API_KEY.")
     print()
     new_key = ask("Nueva API Key (vaca�o para cancelar): ").strip()
     if not new_key:
@@ -4275,14 +4374,17 @@ def autoresponder_prompt_length() -> int:
 def _print_menu_header() -> None:
     banner()
     api_key, prompt = _load_preferences()
+    provider, model = _resolve_ai_runtime(api_key) if api_key else ("(sin definir)", _OPENAI_DEFAULT_MODEL)
     status = (
         style_text(f"Estado: activo para {ACTIVE_ALIAS}", color=Fore.GREEN, bold=True)
         if ACTIVE_ALIAS
         else style_text("Estado: inactivo", color=Fore.YELLOW, bold=True)
     )
-    print(style_text("Auto-responder con OpenAI", color=Fore.CYAN, bold=True))
+    print(style_text("Auto-responder con IA", color=Fore.CYAN, bold=True))
     print(full_line(color=Fore.BLUE))
     print(f"API Key: {_mask_key(api_key) or '(sin definir)'}")
+    print(f"Proveedor: {provider}")
+    print(f"Modelo: {model}")
     print(f"System prompt: {_preview_prompt(prompt)}")
     print(status)
     print(_followup_summary_line())
@@ -4347,11 +4449,38 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
         pass
     logger.warning("Incidente con @%s en auto-responder: %s", user, exc, exc_info=False)
 
-    while True:
-        choice = ask("- Continuar sin esta cuenta (C) / Reintentar (R) / Pausar (P)? ").strip().lower()
-        if choice in {"c", "r", "p"}:
-            break
-        warn("Elige� C, R o P.")
+    auto_policy_raw = str(
+        os.getenv("AUTORESPONDER_ACCOUNT_ISSUE_POLICY", "keep") or "keep"
+    ).strip().lower()
+    auto_choice = ""
+    if auto_policy_raw in {"c", "r", "p", "k"}:
+        auto_choice = auto_policy_raw
+    elif auto_policy_raw in {"continue", "skip", "skip_account"}:
+        auto_choice = "c"
+    elif auto_policy_raw in {"retry", "reintentar"}:
+        auto_choice = "r"
+    elif auto_policy_raw in {"pause", "pausar"}:
+        auto_choice = "p"
+    elif auto_policy_raw in {"keep", "keep_account"}:
+        auto_choice = "k"
+
+    if auto_choice:
+        choice = auto_choice
+        logger.info(
+            "Auto-policy de account issue aplicada para @%s: %s",
+            user,
+            choice,
+        )
+    else:
+        while True:
+            choice = ask("- Continuar sin esta cuenta (C) / Reintentar (R) / Pausar (P) / Mantener en ciclo (K)? ").strip().lower()
+            if choice in {"c", "r", "p", "k"}:
+                break
+            warn("Elige� C, R, P o K.")
+
+    if choice == "k":
+        warn(f"Se mantiene @{user} en el ciclo y se reintentara en la siguiente vuelta.")
+        return
 
     if choice == "c":
         if user in active:
@@ -4370,7 +4499,7 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
             ok(f"Sesia�n renovada para @{user}")
             return
         warn("La sesia�n sigue fallando. Intenta� nuevamente o elega� otra opcia�n.")
-        choice = ask("- Reintentar (R) / Continuar sin la cuenta (C) / Pausar (P)? ").strip().lower()
+        choice = ask("- Reintentar (R) / Continuar sin la cuenta (C) / Pausar (P) / Mantener en ciclo (K)? ").strip().lower()
         if choice == "c":
             if user in active:
                 active.remove(user)
@@ -4379,6 +4508,9 @@ def _handle_account_issue(user: str, exc: Exception, active: List[str]) -> None:
             return
         if choice == "p":
             request_stop("pausa solicitada desde mena� del bot")
+            return
+        if choice == "k":
+            warn(f"Se mantiene @{user} en el ciclo y se reintentara en la siguiente vuelta.")
             return
 
 
@@ -4959,121 +5091,117 @@ def _process_inbox(
     # FASE 1 — ABRIR INBOX (UNA SOLA VEZ)
     client._open_inbox()
     print(style_text(f"Cuenta {user} | Inbox cargado", color=Fore.CYAN))
-    
+
     state.setdefault(user, {})
     max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
-    now = time.time()
-
+    total_threads = max(1, int(threads_limit or 1))
+    messages_sent_this_scan = 0
     page = client._ensure_page()
-    rows = None
-    selected_selector = ""
-    for selector in client._row_selector_candidates():
+
+    def _safe_return_to_inbox(*, force: bool = False) -> None:
         try:
-            candidate = page.locator(selector)
-            if candidate.count() > 0:
-                rows = candidate
-                selected_selector = selector
-                break
+            if not force:
+                current_url = getattr(page, "url", "") or ""
+                # En vista /direct/t/ podemos abrir el siguiente thread desde el panel lateral
+                # sin pagar un "back" por cada iteracion.
+                if "/direct/t/" in current_url:
+                    return
+            client.return_to_inbox()
         except Exception:
-            continue
-    if rows is None:
-        print(style_text(f"[Barrido] Sin chats visibles para @{user}", color=Fore.YELLOW))
+            pass
+
+    def _thread_source():
+        # Escaneamos más candidatos que el objetivo para tolerar filas inválidas o fallos
+        # de apertura sin perder el objetivo real de threads a trabajar.
+        discovery_target = min(5000, max(total_threads * 4, total_threads + 30))
+        iter_method = getattr(client, "iter_threads", None)
+        if callable(iter_method):
+            return iter_method(amount=discovery_target, filter_unread=False)
+        return client.list_threads(amount=discovery_target, filter_unread=False)
+
+    try:
+        thread_iterable = _thread_source()
+    except Exception as exc:
         logger.warning(
-            "No threads visibles para @%s: ver screenshot/html en storage/logs (dm_debug_...)",
+            "No se pudieron listar threads para @%s: %s",
             user,
+            exc,
+            exc_info=not settings.quiet,
         )
+        print(style_text(f"[Barrido] Error listando chats para @{user}", color=Fore.YELLOW))
         try:
-            client.debug_dump_inbox("no_threads_found")
+            client.debug_dump_inbox("list_threads_error")
         except Exception:
             pass
         return
 
-    inbox_panel, _method, _selector, _panel_meta = client._get_inbox_panel(page, rows=rows)
-    client._scroll_panel_to_top(inbox_panel)
-
-    total_threads = max(1, int(threads_limit or 1))
     processed_threads = 0
-    seen_thread_ids: set[str] = set()
+    discovered_count = 0
+    candidate_count = 0
+    stream_error: Optional[Exception] = None
 
+    thread_iterator = iter(thread_iterable)
     while processed_threads < total_threads:
         if STOP_EVENT.is_set():
             break
-
-        thread: Optional[ThreadLike] = None
         try:
-            total_rows = rows.count()
-        except Exception:
-            total_rows = 0
-
-        for row_idx in range(total_rows):
-            row = rows.nth(row_idx)
-            if not client._row_is_valid(row, selector=selected_selector):
-                continue
-            lines = client._row_lines(row)
-            title = (lines[0] if lines else "unknown").strip()
-            if not title:
-                continue
-            stable_id = f"{client.username}:{title}"
-            if stable_id in seen_thread_ids:
-                continue
-            thread = ThreadLike(
-                id=stable_id,
-                pk=stable_id,
-                users=[UserLike(pk=title, id=title, username=title)],
-                title=title,
-                source_index=row_idx,
-            )
-            client._thread_cache[stable_id] = thread
-            client._thread_cache_meta[stable_id] = {
-                "title": title,
-                "idx": row_idx,
-                "selector": selected_selector,
-            }
-            seen_thread_ids.add(stable_id)
+            thread = next(thread_iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            stream_error = exc
             break
 
-        if thread is None:
-            moved = client._scroll_panel_down(inbox_panel)
-            if not moved:
-                break
+        candidate_count += 1
+        discovered_count = candidate_count
+        now = time.time()
+        time_str = datetime.now().strftime('%H:%M')
+
+        # Paso 4/5: CLICK THREAD REAL + VALIDACIÓN (Ocurre dentro de get_messages)
+        pre_open_key = _get_conversation_key(user, str(thread.id))
+        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
+            print(
+                style_text(
+                    f"[TRACE_ID PRE_OPEN] candidate={candidate_count} id={thread.id} pk={getattr(thread, 'pk', None)} title={getattr(thread, 'title', '')} source_index={getattr(thread, 'source_index', None)} url={getattr(page, 'url', '')} key={pre_open_key}",
+                    color=Fore.WHITE,
+                )
+            )
+        messages = client.get_messages(thread, amount=10)
+
+        if not messages:
+            # Retry único con return forzado para cubrir fallos transitorios de foco/UI.
+            _safe_return_to_inbox(force=True)
             try:
-                page.wait_for_timeout(120)
+                messages = client.get_messages(thread, amount=10)
             except Exception:
-                pass
+                messages = []
+
+        if not messages:
+            logger.info(
+                "PlaywrightDM hook account=@%s thread_id=%s decision=skip_open_failed candidate=%s",
+                user,
+                getattr(thread, "id", ""),
+                candidate_count,
+            )
             continue
 
         processed_threads += 1
         idx = processed_threads
-        time_str = datetime.now().strftime('%H:%M')
-        print(style_text(f"Cuenta @{user} | Thread {idx}/{total_threads}", color=Fore.CYAN, bold=True))
-
-        # Paso 4/5: CLICK THREAD REAL + VALIDACIÓN (Ocurre dentro de get_messages)
-        pre_open_key = _get_conversation_key(user, str(thread.id))
-        print(
-            style_text(
-                f"[TRACE_ID PRE_OPEN] id={thread.id} pk={getattr(thread, 'pk', None)} title={getattr(thread, 'title', '')} source_index={getattr(thread, 'source_index', None)} url={getattr(page, 'url', '')} key={pre_open_key}",
-                color=Fore.WHITE,
-            )
-        )
-        messages = client.get_messages(thread, amount=10)
-
-        if not messages:
-            # try_open_thread devolvió False -> Ignorar fila (Nota o UI)
-            continue
-
-        print(style_text(f"Thread {idx}/{total_threads} | Thread abierto OK", color=Fore.GREEN))
+        print(style_text(f"Thread {idx}/{total_threads}", color=Fore.CYAN, bold=True))
+        print(style_text("abierto", color=Fore.GREEN))
 
         thread_id = str(thread.id)
         recipient_username = getattr(thread, "title", "unknown")
         msg_fingerprint = ", ".join(
             f"{getattr(m, 'id', '')}@{getattr(m, 'timestamp', '')}" for m in messages[:2]
         )
-        print(
-            style_text(
-                f"[TRACE_ID PRE_SNAPSHOT] id={thread.id} pk={getattr(thread, 'pk', None)} key={_get_conversation_key(user, thread_id)} msg_count={len(messages)} sample={msg_fingerprint}",
-                color=Fore.WHITE,
+        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
+            print(
+                style_text(
+                    f"[TRACE_ID PRE_SNAPSHOT] id={thread.id} pk={getattr(thread, 'pk', None)} key={_get_conversation_key(user, thread_id)} msg_count={len(messages)} sample={msg_fingerprint}",
+                    color=Fore.WHITE,
+                )
             )
-        )
 
         # Paso 6/7: CAPTURAR + PERSISTIR EN MEMORIA (OBLIGATORIO)
         msgs_snapshot = [
@@ -5092,19 +5220,20 @@ def _process_inbox(
             "captured_at_epoch": time.time(),
             "messages": msgs_snapshot
         })
-        print(style_text(f"Thread {idx}/{total_threads} | Contexto capturado ({len(messages)} mensajes)", color=Fore.GREEN))
-        print(style_text(f"Thread {idx}/{total_threads} | Persistido en memoria", color=Fore.GREEN))
+        print(style_text(f"capturando contexto ({len(messages)} mensajes)", color=Fore.GREEN))
+        print(style_text("persistiendo memoria", color=Fore.GREEN))
 
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
-            print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (no permitido) | {time_str}", color=Fore.YELLOW))
+            print(style_text(f"accion=IGNORAR (no permitido) ({time_str})", color=Fore.YELLOW))
             # Regresar al inbox para el siguiente candidato
-            client.return_to_inbox()
+            _safe_return_to_inbox()
             continue
 
         # Paso 8: LEYENDO MEMORIA Y DECIDIENDO
-        print(style_text(f"Thread {idx}/{total_threads} | Leyendo memoria", color=Fore.WHITE))
+        print(style_text("leyendo memoria", color=Fore.WHITE))
         last = _latest_message(messages)
         if not last:
+            _safe_return_to_inbox()
             continue
         last_seen_id = None
         last_id = getattr(last, "id", None)
@@ -5117,6 +5246,7 @@ def _process_inbox(
                 thread_id,
                 last_seen_id,
             )
+            _safe_return_to_inbox()
             continue
         last_id_str = str(last_id)
         sender_id = getattr(last, "user_id", None)
@@ -5145,6 +5275,7 @@ def _process_inbox(
                 last_id_str,
                 last_seen_id,
             )
+            _safe_return_to_inbox()
             continue
         if not inbound:
             logger.info(
@@ -5154,16 +5285,18 @@ def _process_inbox(
                 last_id_str,
                 last_seen_id,
             )
+            _safe_return_to_inbox()
             continue
         last_ts = _message_timestamp(last)
         if max_age_seconds:
             if last_ts is None or (now - last_ts) > max_age_seconds:
+                _safe_return_to_inbox()
                 continue
 
         conv_state = _get_conversation_state(user, thread_id)
         last_seen_id = conv_state.get("last_message_id_seen")
         if last_seen_id is not None and str(last_seen_id) == last_id_str:
-            print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR (ya visto) | {datetime.now().strftime('%H:%M')}", color=Fore.YELLOW))
+            print(style_text(f"accion=IGNORAR (ya visto) ({datetime.now().strftime('%H:%M')})", color=Fore.YELLOW))
             logger.info(
                 "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=skip_seen",
                 user,
@@ -5171,6 +5304,7 @@ def _process_inbox(
                 last_id_str,
                 last_seen_id,
             )
+            _safe_return_to_inbox()
             continue
 
         recipient_username = None
@@ -5219,6 +5353,7 @@ def _process_inbox(
             
             if status == "No interesado":
                 _update_conversation_state(user, thread_id, {"stage": _STAGE_CLOSED})
+                _safe_return_to_inbox()
                 continue
         
         phone_numbers = _extract_phone_numbers(last.text or "")
@@ -5258,7 +5393,7 @@ def _process_inbox(
             )
             now_time_str = datetime.now().strftime("%H:%M")
             if not can_send:
-                print(style_text(f"Thread {idx}/{total_threads} | Acción=IGNORAR | {now_time_str}", color=Fore.YELLOW))
+                print(style_text(f"accion=IGNORAR ({now_time_str})", color=Fore.YELLOW))
                 logger.info(
                     "Omitiendo envío para @%s → @%s: %s",
                     user,
@@ -5268,11 +5403,12 @@ def _process_inbox(
                 if last_id:
                     state[user][thread_id] = last_id
                 save_auto_state(state)
+                _safe_return_to_inbox()
                 continue
 
             action_label = "RESPONDER" if stage != _STAGE_FOLLOWUP else "FOLLOWUP"
             stats.record_reply_attempt(user)
-            print(style_text(f"Thread {idx}/{total_threads} | Acción={action_label} | {now_time_str}", color=Fore.GREEN))
+            print(style_text(f"accion={action_label} ({now_time_str})", color=Fore.GREEN))
             logger.info(
                 "Decision responder @%s thread=%s stage=%s reason=%s",
                 user,
@@ -5281,19 +5417,31 @@ def _process_inbox(
                 reason,
             )
             
-            _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+            if messages_sent_this_scan > 0:
+                _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
             
             message_id = client.send_message(thread, reply)
             if not message_id:
+                index = stats.record_response_error(user)
                 logger.warning(
                     "Envio no verificado para @%s -> @%s (thread %s)",
                     user,
                     recipient_username,
                     thread_id,
                 )
+                print(
+                    style_text(
+                        f"respuesta no verificada a {_format_handle(recipient_username)}",
+                        color=Fore.YELLOW,
+                    )
+                )
+                _print_response_summary(index, user, recipient_username, False)
+                _safe_return_to_inbox()
                 continue
 
             _record_message_sent(user, thread_id, reply, str(message_id), recipient_username, is_followup=False)
+            messages_sent_this_scan += 1
+            print(style_text("persistiendo memoria", color=Fore.GREEN))
             
             if calendar_message:
                 calendar_id = client.send_message(thread, calendar_message)
@@ -5321,16 +5469,44 @@ def _process_inbox(
         
         index = stats.record_success(user)
         logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
-        print(
-            style_text(
-                f"Thread {idx}/{total_threads} | Respondido a {_format_handle(recipient_username)}",
-                color=Fore.GREEN,
-            )
-        )
+        print(style_text(f"respondido a {_format_handle(recipient_username)}", color=Fore.GREEN))
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
 
         # Paso 9: Volver al inbox view (sin reload)
-        client.return_to_inbox()
+        _safe_return_to_inbox()
+    if discovered_count <= 0:
+        print(style_text(f"[Barrido] Sin chats visibles para @{user}", color=Fore.YELLOW))
+        logger.warning(
+            "No threads visibles para @%s: ver screenshot/html en storage/logs (dm_debug_...)",
+            user,
+        )
+        try:
+            client.debug_dump_inbox("no_threads_found")
+        except Exception:
+            pass
+        return
+
+    if stream_error is not None:
+        logger.warning(
+            "Error iterando threads para @%s después de %d candidatos: %s",
+            user,
+            discovered_count,
+            stream_error,
+            exc_info=not settings.quiet,
+        )
+        print(style_text(f"[Barrido] Error listando chats para @{user}", color=Fore.YELLOW))
+        try:
+            client.debug_dump_inbox("list_threads_error")
+        except Exception:
+            pass
+
+    if processed_threads < total_threads and not STOP_EVENT.is_set():
+        print(
+            style_text(
+                f"[Barrido] @{user}: se trabajaron {processed_threads} threads (objetivo {total_threads}, candidatos {candidate_count})",
+                color=Fore.YELLOW,
+            )
+        )
 
     print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
     print(style_text(f"TRACE_CYCLE AFTER_SCAN user=@{user} now={time.time()} stop_event={STOP_EVENT.is_set()}", color=Fore.WHITE))
@@ -5374,7 +5550,7 @@ def _activate_bot() -> None:
     global ACTIVE_ALIAS
     api_key, system_prompt = _load_preferences()
     if not api_key:
-        warn("Configura OPENAI_API_KEY antes de activar el bot.")
+        warn("Configura OPENAI_API_KEY o OPENROUTER_API_KEY antes de activar el bot.")
         press_enter()
         return
 
@@ -5735,6 +5911,44 @@ _FOLLOWUP_STAGE_SCHEDULE_HINT = re.compile(
     re.IGNORECASE,
 )
 
+_FOLLOWUP_SNIPPET_AGE_RE = re.compile(
+    r"(\d+)\s*(seg(?:undo)?s?|sec(?:ond)?s?|s|min(?:uto)?s?|m|hora?s?|h|hr?s?|dia?s?|d|sem(?:ana)?s?|week?s?|w)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_followup_snippet_age_seconds(snippet: str) -> Optional[float]:
+    text = _normalize_text_for_match(str(snippet or ""))
+    if not text:
+        return None
+    if "anteayer" in text:
+        return 172800.0
+    if "ayer" in text or "yesterday" in text:
+        return 86400.0
+    if "ahora" in text or "just now" in text:
+        return 0.0
+    match = _FOLLOWUP_SNIPPET_AGE_RE.search(text)
+    if not match:
+        return None
+    try:
+        value = max(0, int(match.group(1)))
+    except Exception:
+        return None
+    unit = (match.group(2) or "").strip().lower()
+    if not unit:
+        return None
+    if unit.startswith(("seg", "sec")) or unit == "s":
+        return float(value)
+    if unit.startswith("min") or unit == "m":
+        return float(value * 60)
+    if unit.startswith(("hora", "hr")) or unit == "h":
+        return float(value * 3600)
+    if unit.startswith("dia") or unit == "d":
+        return float(value * 86400)
+    if unit.startswith(("sem", "week")) or unit == "w":
+        return float(value * 7 * 86400)
+    return None
+
 
 def _infer_followup_business_stage(messages: List[object], client_user_id: object) -> int:
     inbound_messages = [
@@ -5805,8 +6019,9 @@ def _process_followups_extended(
     updated_history = False
     updated_state = False
 
+    discovery_target = min(5000, max(int(threads_limit or 1) * 4, int(threads_limit or 1) + 30))
     try:
-        threads = client.list_threads(amount=threads_limit, filter_unread=False)
+        threads = client.list_threads(amount=discovery_target, filter_unread=False)
     except Exception as exc:
         logger.debug(
             "No se pudieron obtener hilos para seguimiento de @%s: %s",
@@ -5843,6 +6058,15 @@ def _process_followups_extended(
                 }
             )
             continue
+        thread_snippet = str(getattr(thread, "snippet", "") or "").strip()
+        if not thread_snippet:
+            try:
+                cache_meta = getattr(client, "_thread_cache_meta", {}) or {}
+                meta_entry = cache_meta.get(str(thread_id), {}) if isinstance(cache_meta, dict) else {}
+                if isinstance(meta_entry, dict):
+                    thread_snippet = str(meta_entry.get("snippet") or "").strip()
+            except Exception:
+                thread_snippet = ""
         unread_count = getattr(thread, "unread_count", None)
         try:
             unread_int = int(unread_count)
@@ -5873,6 +6097,13 @@ def _process_followups_extended(
                     recipient_id = pk
                     recipient_username = getattr(participant, "username", pk)
                     break
+        if not recipient_id:
+            fallback_title = str(getattr(thread, "title", "") or "").strip()
+            fallback_norm = _normalize_username(fallback_title)
+            self_norm = _normalize_username(str(client.user_id))
+            if fallback_norm and fallback_norm not in {account_norm, self_norm, "unknown"}:
+                recipient_id = fallback_title
+                recipient_username = fallback_title
         if not recipient_id:
             _append_message_log(
                 {
@@ -5944,27 +6175,54 @@ def _process_followups_extended(
             )
             continue
 
+        conv_key = f"{account_norm}|{thread_id}"
+        engine_state = _get_conversation_state(user, thread_id)
+        last_sent_at = engine_state.get("last_message_sent_at")
+        last_received_at = engine_state.get("last_message_received_at")
+        history_entry = history.get(conv_key, {}) if isinstance(history, dict) else {}
+
+        def _safe_float_ts(value):
+            try:
+                ts_value = float(value)
+            except Exception:
+                return None
+            return ts_value if ts_value > 0 else None
+
+        state_last_sent_ts = _safe_float_ts(last_sent_at)
+        history_last_sent_ts = (
+            _safe_float_ts(history_entry.get("last_sent_ts"))
+            if isinstance(history_entry, dict)
+            else None
+        )
+
         last_outbound_ts = max(outbound_ts_values)
         last_inbound_ts = max(inbound_ts_values) if inbound_ts_values else None
-        if last_inbound_ts and last_inbound_ts > last_outbound_ts:
-            _append_message_log(
-                {
-                    "action": "followup_skip",
-                    "reason": "skip_latest_is_inbound_or_lead_replied",
-                    "account": user,
-                    "thread_id": str(thread_id),
-                    "lead": recipient_username or str(recipient_id),
-                }
-            )
-            continue
 
         fallback_suspected = False
+        snippet_age_seconds = _parse_followup_snippet_age_seconds(thread_snippet)
         has_much_older_ts = any((now_ts - ts) > 600 for ts in all_ts_values)
         if abs(now_ts - last_outbound_ts) < 120 and has_much_older_ts:
             fallback_suspected = True
             older_outbound_ts = [ts for ts in outbound_ts_values if ts < (now_ts - 120)]
             if older_outbound_ts:
                 last_outbound_ts = max(older_outbound_ts)
+        if last_outbound_ts and now_ts - last_outbound_ts < 60:
+            if snippet_age_seconds is not None and snippet_age_seconds >= 60:
+                inferred_ts = now_ts - float(snippet_age_seconds)
+                if inferred_ts > 0:
+                    last_outbound_ts = inferred_ts
+                    fallback_suspected = True
+        if last_outbound_ts and now_ts - last_outbound_ts < 60:
+            replacement_candidates = [ts for ts in (state_last_sent_ts, history_last_sent_ts) if ts]
+            replacement_candidates.extend(ts for ts in outbound_ts_values if ts < (now_ts - 120))
+            if snippet_age_seconds is not None and snippet_age_seconds >= 60:
+                inferred_ts = now_ts - float(snippet_age_seconds)
+                if inferred_ts > 0:
+                    replacement_candidates.append(inferred_ts)
+            replacement_candidates = [ts for ts in replacement_candidates if ts < (now_ts - 60)]
+            if replacement_candidates:
+                last_outbound_ts = max(replacement_candidates)
+                fallback_suspected = True
         if last_outbound_ts and now_ts - last_outbound_ts < 60:
             _append_message_log(
                 {
@@ -5974,6 +6232,19 @@ def _process_followups_extended(
                     "thread_id": str(thread_id),
                     "lead": recipient_username or str(recipient_id),
                     "fallback_suspected": fallback_suspected,
+                    "snippet_age_seconds": int(snippet_age_seconds) if snippet_age_seconds is not None else None,
+                    "snippet": (thread_snippet[:80] if thread_snippet else ""),
+                }
+            )
+            continue
+        if last_inbound_ts and last_inbound_ts > last_outbound_ts:
+            _append_message_log(
+                {
+                    "action": "followup_skip",
+                    "reason": "skip_latest_is_inbound_or_lead_replied",
+                    "account": user,
+                    "thread_id": str(thread_id),
+                    "lead": recipient_username or str(recipient_id),
                 }
             )
             continue
@@ -5987,9 +6258,6 @@ def _process_followups_extended(
         if has_inbound and last_inbound_ts and now_ts - last_inbound_ts < 60:
             continue
 
-        engine_state = _get_conversation_state(user, thread_id)
-        last_sent_at = engine_state.get("last_message_sent_at")
-        last_received_at = engine_state.get("last_message_received_at")
         if last_received_at and last_sent_at and last_received_at > last_sent_at:
             _append_message_log(
                 {
@@ -6014,7 +6282,6 @@ def _process_followups_extended(
             )
             continue
 
-        conv_key = f"{account_norm}|{thread_id}"
         convs = conv_state.setdefault("conversations", {})
         conv_record = convs.get(conv_key)
         if not isinstance(conv_record, dict):
@@ -6259,7 +6526,8 @@ def _process_followups_extended(
         if stats is not None:
             stats.record_followup_attempt(user)
 
-        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+        if fu_sent > 0:
+            _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
 
         try:
             message_id = client.send_message(thread, message_text)
