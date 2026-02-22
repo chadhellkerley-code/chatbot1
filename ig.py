@@ -741,6 +741,9 @@ def _build_template_entry(name: str, text: str) -> dict[str, str]:
 
 
 def _select_saved_templates() -> list[dict[str, str]]:
+    if STOP_EVENT.is_set():
+        reset_stop_event()
+        return []
     saved = load_templates()
     if not saved:
         warn("No hay plantillas guardadas.")
@@ -750,6 +753,9 @@ def _select_saved_templates() -> list[dict[str, str]]:
         preview = _template_preview(item.get("text", ""))
         print(f" {idx}) {item.get('name', '')} - {preview}")
     raw = ask("Selecciona plantillas (1,2 o nombre; Enter para cancelar): ").strip()
+    if STOP_EVENT.is_set():
+        reset_stop_event()
+        return []
     if not raw:
         return []
     selections = [part.strip() for part in raw.split(",") if part.strip()]
@@ -1418,7 +1424,13 @@ def _build_accounts_for_alias(alias: str, *, overnight: bool = False) -> list[Di
         print()
 
     if low_profile_accounts and not overnight:
+        if STOP_EVENT.is_set():
+            reset_stop_event()
+            return []
         choice = ask("Aplicar limites conservadores automaticamente? (S/n): ").strip().lower()
+        if STOP_EVENT.is_set():
+            reset_stop_event()
+            return []
         if choice in {"n", "no"}:
             for acct in verified:
                 if acct.get("low_profile"):
@@ -1432,8 +1444,20 @@ def _build_accounts_for_alias(alias: str, *, overnight: bool = False) -> list[Di
 def _schedule_inputs(
     settings, concurrency_override: Optional[int]
 ) -> Optional[tuple[int, int, int, int, list[dict[str, str]]]]:
+    def _stop_requested() -> bool:
+        if STOP_EVENT.is_set():
+            reset_stop_event()
+            return True
+        return False
+
+    if _stop_requested():
+        return None
     alias = ask("Alias/grupo: ").strip() or "default"
+    if _stop_requested():
+        return None
     listname = ask("Nombre de la lista (text/leads/<nombre>.txt): ").strip()
+    if _stop_requested():
+        return None
 
     per_acc_default = max(1, settings.max_per_account)
     per_acc_input = ask_int(
@@ -1441,6 +1465,8 @@ def _schedule_inputs(
         1,
         default=per_acc_default,
     )
+    if _stop_requested():
+        return None
     if per_acc_input < 1:
         warn("La cantidad mínima por cuenta es 1. Se ajusta a 1.")
     per_acc = max(1, per_acc_input)
@@ -1454,6 +1480,8 @@ def _schedule_inputs(
             1,
             default=settings.max_concurrency,
         )
+    if _stop_requested():
+        return None
     if concurr_input < 1:
         warn("La concurrencia mínima es 1. Se ajusta a 1.")
     concurr = max(1, concurr_input)
@@ -1464,6 +1492,8 @@ def _schedule_inputs(
         1,
         default=dmin_default,
     )
+    if _stop_requested():
+        return None
     if dmin_input < 10:
         warn("El delay mínimo recomendado es 10s. Se ajusta automáticamente.")
     delay_min = max(10, dmin_input)
@@ -1474,19 +1504,29 @@ def _schedule_inputs(
         delay_min,
         default=dmax_default,
     )
+    if _stop_requested():
+        return None
     if dmax_input < delay_min:
         warn("Delay máximo ajustado al mínimo indicado.")
     delay_max = max(delay_min, dmax_input)
 
     templates: list[dict[str, str]] = []
     use_saved = ask("Usar plantillas guardadas? (s/N): ").strip().lower()
+    if _stop_requested():
+        return None
     if use_saved == "s":
         templates = _select_saved_templates()
+        if _stop_requested():
+            return None
     if not templates:
         print("Escribi plantillas (una por linea). Linea vacia para terminar:")
         manual_lines: list[str] = []
         while True:
+            if _stop_requested():
+                return None
             s = ask("")
+            if _stop_requested():
+                return None
             if not s:
                 break
             manual_lines.append(s)

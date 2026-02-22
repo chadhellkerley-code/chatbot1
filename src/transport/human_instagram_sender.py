@@ -33,9 +33,11 @@ DIALOG_SELECTOR = "div[role='dialog']"
 SEARCH_INPUTS = (
     "div[role='dialog'] input[placeholder*='Search']",
     "div[role='dialog'] input[placeholder*='Buscar']",
+    "div[role='dialog'] input[placeholder*='Busca']",
     "div[role='dialog'] input[name='queryBox']",
     "input[placeholder='Search...']",
-    "input[placeholder='Search']"
+    "input[placeholder='Search']",
+    "input[placeholder*='Busca']",
 )
 NEW_MESSAGE_BUTTONS = (
     "div[role='button']:has-text('Send message')",
@@ -311,9 +313,35 @@ class HumanInstagramSender:
             pass
 
     async def _dialog_ready(self, page: Page) -> bool:
-        return await page.locator(", ".join(SEARCH_INPUTS)).count() > 0
+        search_selectors = ", ".join(SEARCH_INPUTS)
+        try:
+            if await page.locator(search_selectors).count() > 0:
+                return True
+        except Exception:
+            pass
+        try:
+            dialog = page.locator(DIALOG_SELECTOR)
+            if await dialog.count() > 0:
+                # Fallback: el modal puede renderizar antes que el input de búsqueda.
+                if await dialog.locator("input[name='queryBox'], button:has-text('Chat'), div[role='button']:has-text('Chat')").count() > 0:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    async def _wait_dialog_ready(self, page: Page, timeout_ms: int = 6000) -> bool:
+        deadline = time.time() + (max(0, timeout_ms) / 1000.0)
+        while time.time() < deadline:
+            if await self._dialog_ready(page):
+                return True
+            try:
+                await page.wait_for_timeout(250)
+            except Exception:
+                pass
+        return await self._dialog_ready(page)
 
     async def _open_new_message_dialog(self, page: Page) -> bool:
+        dialog_selectors = ", ".join((DIALOG_SELECTOR, *SEARCH_INPUTS))
         _dm_log("DIRECT_NEW_NAV_START", target=DIRECT_NEW, url=page.url if page else "")
         t0 = time.time()
         try:
@@ -321,7 +349,11 @@ class HumanInstagramSender:
         except PwTimeoutError:
             pass
         _dm_log("DIRECT_NEW_NAV_DONE", url=page.url if page else "", elapsed_ms=int((time.time() - t0) * 1000))
-        ready = await self._dialog_ready(page)
+        try:
+            await page.wait_for_selector(dialog_selectors, timeout=6_000)
+        except Exception:
+            pass
+        ready = await self._wait_dialog_ready(page, timeout_ms=6_000)
         _dm_log("DIRECT_NEW_DIALOG_READY", ready=ready, url=page.url if page else "")
         if ready:
             return True
@@ -345,10 +377,10 @@ class HumanInstagramSender:
             await target.click()
             _dm_log("DIRECT_NEW_BUTTON_CLICKED", url=page.url if page else "")
             try:
-                await page.wait_for_selector(f"{DIALOG_SELECTOR}, {SEARCH_INPUTS}", timeout=15_000)
+                await page.wait_for_selector(dialog_selectors, timeout=15_000)
             except Exception:
                 pass
-        ready = await self._dialog_ready(page)
+        ready = await self._wait_dialog_ready(page, timeout_ms=8_000)
         _dm_log("DIRECT_NEW_DIALOG_READY", ready=ready, url=page.url if page else "")
         return ready
 
@@ -1274,6 +1306,23 @@ class HumanInstagramSender:
                         screenshot=snap,
                         dialog_html=dialog_html,
                     )
+                    # Si direct/new dejó la vista en inbox, restauramos el perfil antes de seguir.
+                    try:
+                        current_url = (page.url or "").lower()
+                        if not current_url.startswith(profile_url.lower()):
+                            _dm_log(
+                                "PROFILE_RECOVERY_RESTORE_PROFILE",
+                                from_url=page.url if page else "",
+                                to_url=profile_url,
+                            )
+                            await page.goto(profile_url, wait_until="domcontentloaded", timeout=45_000)
+                            await self._sleep(1, 2)
+                    except Exception as exc_restore:
+                        _dm_log(
+                            "PROFILE_RECOVERY_RESTORE_PROFILE_FAIL",
+                            url=page.url if page else "",
+                            error=repr(exc_restore),
+                        )
 
                 # Profile overflow menu (3 dots): some accounts only expose DM from here.
                 menu_checked = False
@@ -1369,6 +1418,29 @@ class HumanInstagramSender:
                     screenshot=snap,
                     main_html=main_html,
                 )
+                try:
+                    _dm_log("PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_START", url=page.url if page else "")
+                    recovered_method = await _send_via_direct_new()
+                    _dm_log(
+                        "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_OK",
+                        method=recovered_method,
+                        url=page.url if page else "",
+                    )
+                    return recovered_method
+                except Exception as exc_recover:
+                    snap_recover = await _debug_screenshot(page, "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_FAIL", tag="recover")
+                    dialog_html = await _debug_dump_outer_html(
+                        page.locator("[role='dialog']"),
+                        "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_FAIL",
+                        tag="dialog",
+                    )
+                    _dm_log(
+                        "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_FAIL",
+                        url=page.url if page else "",
+                        error=repr(exc_recover),
+                        screenshot=snap_recover,
+                        dialog_html=dialog_html,
+                    )
                 raise RuntimeError("No aparecio la caja de texto del chat tras clickear 'Enviar mensaje'.")
 
             return await self._type_and_send(page, text)

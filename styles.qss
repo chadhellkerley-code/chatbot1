@@ -143,13 +143,78 @@ QLabel#MetricValue {
 }
 
 QScrollArea#SubmenuScroll {
-    background-color: #1f2937;
-    border: 1px solid #2f3d52;
-    border-radius: 6px;
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#SubmenuScroll QWidget#qt_scrollarea_viewport {
+    background: transparent;
+    border: none;
 }
 
 QWidget#SubmenuScrollContent {
-    background-color: #1f2937;
+    background: transparent;
+    border: none;
+}
+
+QFrame#SendSetupCard {
+    background-color: #1a2333;
+    border: 1px solid #2f3d52;
+    border-radius: 8px;
+}
+
+QFrame#SendSetupFieldCard {
+    background-color: #111b2b;
+    border: 1px solid #2b3a51;
+    border-radius: 8px;
+}
+
+QComboBox#SendSetupCombo,
+QSpinBox#SendSetupSpin {
+    background-color: #0f1728;
+    border: 1px solid #34465f;
+    border-radius: 6px;
+    color: #e8edf7;
+    padding: 6px 8px;
+}
+
+QComboBox#SendSetupCombo::drop-down {
+    border: none;
+    width: 24px;
+}
+
+QComboBox#SendSetupCombo QAbstractItemView {
+    background-color: #111827;
+    border: 1px solid #34465f;
+    color: #e8edf7;
+    selection-background-color: #2563eb;
+}
+
+QWidget#SendLoadingOverlay {
+    background-color: rgba(3, 7, 18, 180);
+}
+
+QFrame#SendLoadingCard {
+    background-color: #121b2b;
+    border: 1px solid #2f3d52;
+    border-radius: 10px;
+}
+
+QProgressBar#SendLoadingSpinner {
+    background-color: #0f1728;
+    border: 1px solid #34465f;
+    border-radius: 6px;
+}
+
+QProgressBar#SendLoadingSpinner::chunk {
+    background-color: #2563eb;
+    border-radius: 4px;
+}
+
+QLabel#SendLoadingLabel {
+    color: #e8edf7;
+    font-size: 14px;
+    font-weight: 700;
 }
 
 QPushButton#PrimaryButton {

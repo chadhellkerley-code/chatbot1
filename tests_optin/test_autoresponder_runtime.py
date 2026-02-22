@@ -282,6 +282,84 @@ def test_inbox_small_scan_is_fast_and_delay_only_between_messages(monkeypatch):
     assert stats.responded == 5
 
 
+def test_inbox_skips_thread_when_no_new_inbound_after_last_outbound(monkeypatch):
+    responder.reset_stop_event()
+    rows = [_FakeRow(thread_id="t1", title="lead1")]
+    now = time.time()
+
+    class _ScenarioInboxClient(_FakeInboxClient):
+        def get_messages(self, thread, amount: int = 10):
+            self.get_messages_calls += 1
+            return [
+                _msg(f"out-{thread.id}", "me", "ultimo mensaje bot", now),
+                _msg(f"in-{thread.id}", f"lead-{thread.id}", "mensaje viejo lead", now - 120),
+            ]
+
+    client = _ScenarioInboxClient(rows)
+    delay_calls: list[str] = []
+    _patch_inbox_dependencies(monkeypatch, can_send=True, delay_calls=delay_calls)
+    stats = responder.BotStats(alias="alias")
+
+    responder._process_inbox(
+        client=client,
+        user="tester",
+        state={},
+        api_key="x",
+        system_prompt="p",
+        stats=stats,
+        delay_min=0,
+        delay_max=0,
+        max_age_days=7,
+        allowed_thread_ids=None,
+        threads_limit=1,
+    )
+
+    assert client.list_threads_calls >= 1
+    assert client.get_messages_calls >= 1
+    assert len(client.sent_messages) == 0
+    assert stats.responded == 0
+
+
+def test_inbox_skips_when_outbound_wins_same_timestamp(monkeypatch):
+    responder.reset_stop_event()
+    rows = [_FakeRow(thread_id="t2", title="lead2")]
+    now = time.time()
+
+    class _ScenarioInboxClient(_FakeInboxClient):
+        def get_messages(self, thread, amount: int = 10):
+            self.get_messages_calls += 1
+            # Mismo timestamp para ambos: la posicion del batch (mas arriba = mas nuevo)
+            # debe hacer que gane el outbound y se omita respuesta.
+            return [
+                _msg(f"out-{thread.id}", "me", "outbound reciente", now),
+                _msg(f"in-{thread.id}", f"lead-{thread.id}", "inbound en empate", now),
+            ]
+
+    client = _ScenarioInboxClient(rows)
+    delay_calls: list[str] = []
+    _patch_inbox_dependencies(monkeypatch, can_send=True, delay_calls=delay_calls)
+    stats = responder.BotStats(alias="alias")
+
+    responder._process_inbox(
+        client=client,
+        user="tester",
+        state={},
+        api_key="x",
+        system_prompt="p",
+        stats=stats,
+        delay_min=0,
+        delay_max=0,
+        max_age_days=7,
+        allowed_thread_ids=None,
+        threads_limit=1,
+    )
+
+    assert client.list_threads_calls >= 1
+    assert client.get_messages_calls >= 1
+    assert len(client.sent_messages) == 0
+    assert stats.responded == 0
+
+
 def test_inbox_500_threads_reaches_target_with_bulk_reseed(monkeypatch):
     responder.reset_stop_event()
     rows = [_FakeRow(thread_id="seed-1", title="seed1"), _FakeRow(thread_id="seed-2", title="seed2")]
@@ -522,3 +600,107 @@ def test_followup_does_not_invent_timestamp_when_message_timestamp_is_missing(mo
     assert len(client.sent_messages) == 0
     skip_reasons = [entry.get("reason") for entry in logs if entry.get("action") == "followup_skip"]
     assert "skip_no_outbound_messages" in skip_reasons
+
+
+def test_gen_response_retries_when_first_output_is_invalid(monkeypatch):
+    calls: list[str] = []
+    outputs = iter(
+        [
+            '{"enviar": true, "mensaje": "x"}',
+            "Perfecto, te cuento en breve como funciona y vemos si te sirve.",
+        ]
+    )
+    monkeypatch.setattr(responder, "_build_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(responder, "_resolve_ai_model", lambda _api_key: "fake-model")
+
+    def _fake_generate(*_args, **_kwargs):
+        calls.append("call")
+        return next(outputs)
+
+    monkeypatch.setattr(responder, "_openai_generate_text", _fake_generate)
+
+    result = responder._gen_response(
+        api_key="k",
+        system_prompt="Responder como closer",
+        convo_text="ELLOS: Hola, me interesa",
+        memory_context="stage_actual=active",
+    )
+
+    assert len(calls) == 2
+    assert result.startswith("Perfecto")
+
+
+def test_followup_decision_retries_until_valid_json(monkeypatch):
+    calls: list[str] = []
+    outputs = iter(
+        [
+            "dale, enviemos seguimiento",
+            '{"enviar": true, "mensaje": "Seguimos en contacto, te sirve hablar mañana?", "etapa": 3}',
+        ]
+    )
+    monkeypatch.setattr(responder, "_build_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(responder, "_resolve_ai_model", lambda _api_key: "fake-model")
+
+    def _fake_generate(*_args, **_kwargs):
+        calls.append("call")
+        return next(outputs)
+
+    monkeypatch.setattr(responder, "_openai_generate_text", _fake_generate)
+
+    decision = responder._followup_decision(
+        api_key="k",
+        prompt_text="Solo seguir si hay interes real.",
+        conversation="YO: Hola\nELLOS: Si, me interesa",
+        metadata={
+            "intento_followup_siguiente": 3,
+            "etapa_negocio": 2,
+            "horas_objetivo": 24,
+        },
+    )
+
+    assert len(calls) == 2
+    assert decision == ("Seguimos en contacto, te sirve hablar mañana?", 3)
+
+
+def test_resolve_system_prompt_for_user_prefers_specific_over_global(monkeypatch):
+    prompts = {
+        "leadx": "PROMPT_USUARIO",
+        "ventas": "PROMPT_ALIAS",
+        "all": "PROMPT_ALL",
+        "default": "PROMPT_DEFAULT",
+    }
+
+    monkeypatch.setattr(
+        responder,
+        "_read_system_prompt_from_file",
+        lambda alias=None: prompts.get(str(alias or "default").strip().lower()),
+    )
+    monkeypatch.setattr(responder, "get_account", lambda _username: {"alias": "ventas"})
+
+    resolved = responder._resolve_system_prompt_for_user(
+        "leadx",
+        active_alias="ALL",
+        fallback_prompt="PROMPT_FALLBACK",
+    )
+
+    assert resolved == "PROMPT_USUARIO"
+
+
+def test_followup_prefers_account_alias_when_active_alias_is_all(monkeypatch):
+    entries = {
+        "all": {"enabled": True, "accounts": [], "prompt": "global"},
+        "ventas": {"enabled": True, "accounts": [], "prompt": "alias"},
+    }
+
+    monkeypatch.setattr(responder, "ACTIVE_ALIAS", "ALL")
+    monkeypatch.setattr(responder, "get_account", lambda _username: {"alias": "ventas"})
+    monkeypatch.setattr(
+        responder,
+        "_get_followup_entry",
+        lambda alias: entries.get(str(alias).strip().lower(), {}),
+    )
+
+    alias, entry = responder._followup_enabled_entry_for("leadx")
+
+    assert alias == "ventas"
+    assert entry.get("prompt") == "alias"

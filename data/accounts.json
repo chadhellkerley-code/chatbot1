@@ -19,9 +19,13 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "Hd47ky37b0n",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:37Z"
+    "profile_edit_count": 2,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture"
+    ],
+    "first_seen": "2026-02-12T18:40:37Z",
+    "last_profile_edit": "2026-02-19T10:16:49Z"
   },
   {
     "username": "bea.romero__",
@@ -52,7 +56,7 @@
     "first_seen": "2026-02-12T18:40:38Z"
   },
   {
-    "username": "kamiladah84s",
+    "username": "cam.martti",
     "alias": "1",
     "active": true,
     "connected": true,
@@ -61,12 +65,17 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "Jx47ky38j0",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-12T18:40:38Z",
+    "last_profile_edit": "2026-02-19T10:17:23Z"
   },
   {
-    "username": "samanerajabi07w",
+    "username": "martinkerley",
     "alias": "1",
     "active": true,
     "connected": true,
@@ -75,12 +84,17 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "Gx47jf47b9",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-12T18:40:38Z",
+    "last_profile_edit": "2026-02-19T10:18:15Z"
   },
   {
-    "username": "jamshid86s",
+    "username": "mateoo.zennit",
     "alias": "1",
     "active": true,
     "connected": true,
@@ -89,12 +103,17 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "Hx36jf37b0j",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-12T18:40:38Z",
+    "last_profile_edit": "2026-02-19T10:18:52Z"
   },
   {
-    "username": "Javidforogh97z",
+    "username": "matii.dolss",
     "alias": "1",
     "active": true,
     "connected": true,
@@ -103,9 +122,14 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "Gs38jt4Ub9",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-12T18:40:38Z",
+    "last_profile_edit": "2026-02-19T10:19:27Z"
   },
   {
     "username": "Martin.Andess",
@@ -117,9 +141,13 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "8319jgdd",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
+    "profile_edit_count": 2,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture"
+    ],
+    "first_seen": "2026-02-12T18:40:38Z",
+    "last_profile_edit": "2026-02-19T10:19:55Z"
   },
   {
     "username": "mati.jaiime",
@@ -131,23 +159,13 @@
     "proxy_pass": "1s15vnfnuxl3",
     "proxy_sticky_minutes": 10,
     "password": "4592jgdd",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
-  },
-  {
-    "username": "Josefina.Martizz",
-    "alias": "1",
-    "active": true,
-    "connected": true,
-    "proxy_url": "http://168.235.150.138:5422",
-    "proxy_user": "gjwlsoxf",
-    "proxy_pass": "1s15vnfnuxl3",
-    "proxy_sticky_minutes": 10,
-    "password": "hdydg8626",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-12T18:40:38Z"
+    "profile_edit_count": 2,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture"
+    ],
+    "first_seen": "2026-02-12T18:40:38Z",
+    "last_profile_edit": "2026-02-19T10:20:24Z"
   },
   {
     "username": "matiid.life1",
@@ -178,297 +196,348 @@
     "first_seen": "2026-02-12T19:35:03Z"
   },
   {
-    "username": "RufaidaBloomfh",
-    "alias": "robert",
+    "username": "nova.57d925d2xo177306",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://72.1.179.184:6578",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "vhYY4V",
+    "connected": true,
+    "password": "nova.kz5.530z8pro986081",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:51Z"
+    "first_seen": "2026-02-19T23:25:53Z"
   },
   {
-    "username": "SabeenSkdv",
-    "alias": "robert",
+    "username": "matiiddlife",
+    "alias": "5dm",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://72.1.129.111:7504",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "YuJGD8",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:51Z"
+    "connected": true,
+    "password": "spark.zhf.541e2x597379",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:38Z",
+    "last_profile_edit": "2026-02-21T19:20:27Z"
   },
   {
-    "username": "Yolandosalind",
-    "alias": "robert",
+    "username": "mist.jlm.022n2zz299326",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://78.31.204.116:6640",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "ZsuMHQ",
+    "connected": true,
+    "password": "flame.4bb284.9zz681150",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:52Z"
+    "first_seen": "2026-02-20T00:11:38Z"
   },
   {
-    "username": "JadeMoondf",
-    "alias": "robert",
+    "username": "shade.l56.626t9xx638422",
+    "alias": "no funciona",
     "active": true,
     "connected": false,
-    "proxy_url": "http://168.235.149.3:5787",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "bmbyCD",
+    "password": "code.a5a43e1cool147363",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:53Z"
+    "first_seen": "2026-02-20T00:11:39Z"
   },
   {
-    "username": "Amelinaorence",
-    "alias": "robert",
+    "username": "surge.qun796f5ox959000",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://69.30.74.91:5801",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "hKJuTk",
+    "connected": true,
+    "password": "blink.k3x.451w1vip058337",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:53Z"
+    "first_seen": "2026-02-20T00:11:40Z"
   },
   {
-    "username": "Brunhildeliette",
-    "alias": "robert",
+    "username": "bolt.kc408x0pro456909",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://45.89.248.78:5951",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "vL7UFb",
+    "connected": true,
+    "password": "twist.63m.062d9xx512688",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:54Z"
+    "first_seen": "2026-02-20T00:11:40Z"
   },
   {
-    "username": "MayaLuxedg",
-    "alias": "robert",
+    "username": "chill.o1q.063g5cool617503",
+    "alias": "no funciona",
     "active": true,
     "connected": false,
-    "proxy_url": "http://45.38.227.182:6725",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "Y3ZJnr",
+    "password": "code.q7t994e4xxx345212",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:54Z"
+    "first_seen": "2026-02-20T00:11:41Z"
   },
   {
-    "username": "DesdenaEloise",
-    "alias": "robert",
+    "username": "mattmdlife1",
+    "alias": "5dm",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://45.45.203.74:8075",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "Ayq78Z",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:55Z"
+    "connected": true,
+    "password": "mist.dik962l2ox820944",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:41Z",
+    "last_profile_edit": "2026-02-21T19:20:53Z"
   },
   {
-    "username": "Fiammetosalind",
-    "alias": "robert",
+    "username": "maatmdlife1",
+    "alias": "5dm",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://45.38.245.160:6805",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "fSTFz9",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:56Z"
+    "connected": true,
+    "password": "wave.4wg.660x5xxx232919",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:42Z",
+    "last_profile_edit": "2026-02-21T19:21:25Z"
   },
   {
-    "username": "Hermioneiette",
-    "alias": "robert",
+    "username": "surge.jah.480o9zz271109",
+    "alias": "no funciona",
     "active": true,
     "connected": false,
-    "proxy_url": "http://72.1.129.46:7439",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "YXAdqq",
+    "password": "surge.65v.514r5pro734494",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:56Z"
+    "first_seen": "2026-02-20T00:11:42Z"
   },
   {
-    "username": "Katarinelestine",
-    "alias": "robert",
+    "username": "shade.d4z.293y0zz748813",
+    "alias": "no funciona",
     "active": true,
     "connected": false,
-    "proxy_url": "http://104.253.63.71:6350",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "2gHLQg",
+    "password": "storm.tzr033n9pro821005",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:57Z"
+    "first_seen": "2026-02-20T00:11:43Z"
   },
   {
-    "username": "LilithJuliettedg",
-    "alias": "robert",
+    "username": "mattmddlife1",
+    "alias": "5dm",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://130.180.255.26:9717",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "u29dYt",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:57Z"
+    "connected": true,
+    "password": "blink.68z.949n8xx590594",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:44Z",
+    "last_profile_edit": "2026-02-21T19:22:18Z"
   },
   {
-    "username": "NerinaEloisesf",
-    "alias": "robert",
+    "username": "nova.z7n.26r3x360967",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://208.66.79.223:5598",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "NSkKdb",
+    "connected": true,
+    "password": "dusk.ptv702y5xo230077",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:58Z"
+    "first_seen": "2026-02-20T00:11:44Z"
   },
   {
-    "username": "Olivettelarasf",
-    "alias": "robert",
+    "username": "nova.jt1.325hcool231537",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://9.142.17.184:6343",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "faG8dw",
+    "connected": true,
+    "password": "flame.z0l525b9xo281227",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:59Z"
+    "first_seen": "2026-02-20T00:11:45Z"
   },
   {
-    "username": "Petroneleleste",
-    "alias": "robert",
+    "username": "wave.4hr.726uox559563",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://138.226.61.135:6308",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "n8rrSR",
+    "connected": true,
+    "password": "spark.gns289q4xo921606",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:41:59Z"
+    "first_seen": "2026-02-20T00:11:45Z"
   },
   {
-    "username": "QuenbyJiette",
-    "alias": "robert",
+    "username": "pulse.rsk31c5zz734027",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://45.58.226.62:6734",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "Z2PEaa",
+    "connected": true,
+    "password": "byte.vt1531d5vip491574",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:42:00Z"
+    "first_seen": "2026-02-20T00:11:46Z"
   },
   {
-    "username": "SapphiraClarasf",
-    "alias": "robert",
+    "username": "echo.mea473q9ox352758",
+    "alias": "no funciona",
     "active": true,
     "connected": false,
-    "proxy_url": "http://192.53.64.7:5285",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "733ZY7",
+    "password": "nova.d9q178qxxx846084",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:42:01Z"
+    "first_seen": "2026-02-20T00:11:46Z"
   },
   {
-    "username": "IvyStonesf",
-    "alias": "robert",
+    "username": "matiiimdlife1",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://72.1.129.111:7504",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "WV2V8N",
-    "profile_edit_count": 0,
-    "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:42:01Z"
+    "connected": true,
+    "password": "drift.wdc429t6vip894921",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:47Z",
+    "last_profile_edit": "2026-02-21T19:22:48Z"
   },
   {
-    "username": "NoraLuxedg",
-    "alias": "robert",
+    "username": "flame.9pn920s9xo162308",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://45.45.203.250:8251",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "AwCX8S",
+    "connected": true,
+    "password": "zap.oq3232b9zz151616",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:42:02Z"
+    "first_seen": "2026-02-20T00:11:48Z"
   },
   {
-    "username": "n.esemoynak33",
-    "alias": "robert",
+    "username": "spark.ck4939l0vip746677",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://82.23.100.23:6250",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "OynakNese(m)@73700",
+    "connected": true,
+    "password": "flame.wsc013r8xo237080",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:42:02Z"
+    "first_seen": "2026-02-20T00:11:48Z"
   },
   {
-    "username": "fayza.kus69",
-    "alias": "robert",
+    "username": "fuse.nk6.298fox636707",
+    "alias": "rotas",
     "active": true,
-    "connected": false,
-    "proxy_url": "http://9.142.13.207:7363",
-    "proxy_user": "bosxdoew",
-    "proxy_pass": "zg6i4lre5zkj",
-    "proxy_sticky_minutes": 10,
-    "password": "KusFayza@85419",
+    "connected": true,
+    "password": "zap.mga581v8x488568",
     "profile_edit_count": 0,
     "profile_edit_types": [],
-    "first_seen": "2026-02-18T00:42:03Z"
+    "first_seen": "2026-02-20T00:11:49Z"
+  },
+  {
+    "username": "matiimdl",
+    "alias": "5dm",
+    "active": true,
+    "connected": true,
+    "password": "bolt.uxk.09xvip615829",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:49Z",
+    "last_profile_edit": "2026-02-21T19:23:42Z"
+  },
+  {
+    "username": "maatmdlife",
+    "alias": "5dm",
+    "active": true,
+    "connected": true,
+    "password": "drift.mwu319u6pro826610",
+    "profile_edit_count": 3,
+    "profile_edit_types": [
+      "bio",
+      "profile_picture",
+      "username"
+    ],
+    "first_seen": "2026-02-20T00:11:50Z",
+    "last_profile_edit": "2026-02-21T19:24:22Z"
+  },
+  {
+    "username": "nova.bu7.64v4xo752199",
+    "alias": "rotas",
+    "active": true,
+    "connected": true,
+    "password": "dusk.dpq.823d3x095521",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:50Z"
+  },
+  {
+    "username": "drift.tjt330q4xo707128",
+    "alias": "no funciona",
+    "active": true,
+    "connected": false,
+    "password": "neon.k37589t9pro846413",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:51Z"
+  },
+  {
+    "username": "twist.0c7.042n5xx458963",
+    "alias": "rotas",
+    "active": true,
+    "connected": true,
+    "password": "nova.k85.020q5xx775455",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:52Z"
+  },
+  {
+    "username": "glint.c4l.739jpro156492",
+    "alias": "no funciona",
+    "active": true,
+    "connected": false,
+    "password": "surge.dxh666y3vip631952",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:52Z"
+  },
+  {
+    "username": "nova.lbb.870s9cool656869",
+    "alias": "rotas",
+    "active": true,
+    "connected": true,
+    "password": "pixel.mio00m8pro283870",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:53Z"
+  },
+  {
+    "username": "blink.9iu.752l0ox465982",
+    "alias": "rotas",
+    "active": true,
+    "connected": true,
+    "password": "vibe.m69.171y0ox921743",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:53Z"
+  },
+  {
+    "username": "surge.58p.253p6xo103106",
+    "alias": "no funciona",
+    "active": true,
+    "connected": false,
+    "password": "dusk.y10.130a5ox985751",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:54Z"
+  },
+  {
+    "username": "byte.dht229f7ox833908",
+    "alias": "rotas",
+    "active": true,
+    "connected": true,
+    "password": "storm.m93.237c6xo717528",
+    "profile_edit_count": 0,
+    "profile_edit_types": [],
+    "first_seen": "2026-02-20T00:11:54Z"
   }
 ]

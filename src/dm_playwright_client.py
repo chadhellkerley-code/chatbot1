@@ -48,7 +48,7 @@ def _env_enabled(name: str, default: bool = False) -> bool:
 
 _DM_VERBOSE_PROBES = _env_enabled("AUTORESPONDER_DM_VERBOSE_PROBES", False)
 
-# Selectores mÃƒÂ­nimos necesarios (eliminadas constantes legacy de anchors)
+# Selectores mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nimos necesarios (eliminadas constantes legacy de anchors)
 ROW_SELECTOR = "div[role='button'][tabindex='0']"
 _MESSAGE_CONTAINER_SELECTORS = (
     "main",
@@ -94,17 +94,17 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 10
     return max(min_value, min(max_value, value))
 
 
-_DM_SCROLL_WAIT_MS = _env_int("AUTORESPONDER_DM_SCROLL_WAIT_MS", 180, min_value=50, max_value=2_500)
-_DM_SCROLL_ATTEMPTS = _env_int("AUTORESPONDER_DM_SCROLL_ATTEMPTS", 4, min_value=1, max_value=12)
+_DM_SCROLL_WAIT_MS = _env_int("AUTORESPONDER_DM_SCROLL_WAIT_MS", 90, min_value=50, max_value=2_500)
+_DM_SCROLL_ATTEMPTS = _env_int("AUTORESPONDER_DM_SCROLL_ATTEMPTS", 2, min_value=1, max_value=12)
 _DM_MESSAGE_HYDRATION_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_MESSAGE_HYDRATION_TIMEOUT_MS",
-    900,
+    500,
     min_value=200,
     max_value=5_000,
 )
 _DM_RETURN_INBOX_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_RETURN_INBOX_TIMEOUT_MS",
-    1200,
+    650,
     min_value=300,
     max_value=8_000,
 )
@@ -122,19 +122,19 @@ _DM_STAGNANT_MAX_LIMIT = _env_int(
 )
 _DM_API_WAIT_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_API_WAIT_TIMEOUT_MS",
-    1_500,
+    700,
     min_value=250,
     max_value=8_000,
 )
 _DM_THREAD_VISUAL_SYNC_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_THREAD_VISUAL_SYNC_TIMEOUT_MS",
-    6_000,
+    2_500,
     min_value=1_000,
     max_value=20_000,
 )
 _DM_THREAD_NETWORK_SYNC_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_THREAD_NETWORK_SYNC_TIMEOUT_MS",
-    5_000,
+    1_800,
     min_value=1_000,
     max_value=20_000,
 )
@@ -361,8 +361,13 @@ class PlaywrightDMClient:
         self._thread_cache_meta: dict[str, dict] = {}
         self._api_messages_by_thread: dict[str, dict[str, _APIMessageRecord]] = {}
         self._api_thread_last_seen: dict[str, float] = {}
+        self._thread_id_aliases: dict[str, set[str]] = {}
         self._response_listener_registered = False
         self._account_status_checked = False
+        self._last_thread_discovery_reason = "other"
+        self._last_thread_discovery_detail = "-"
+        self._last_thread_discovery_count = 0
+        self._last_thread_discovery_target = 0
 
     @staticmethod
     def storage_state_path(username: str) -> Path:
@@ -400,8 +405,13 @@ class PlaywrightDMClient:
             self._current_thread_id = None
             self._api_messages_by_thread = {}
             self._api_thread_last_seen = {}
+            self._thread_id_aliases = {}
             self._response_listener_registered = False
             self._account_status_checked = False
+            self._last_thread_discovery_reason = "other"
+            self._last_thread_discovery_detail = "closed"
+            self._last_thread_discovery_count = 0
+            self._last_thread_discovery_target = 0
 
     def get_my_username(self) -> str:
         return self.username
@@ -420,7 +430,94 @@ class PlaywrightDMClient:
         self._open_inbox()
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False) -> List[ThreadLike]:
-        return list(self.iter_threads(amount=amount, filter_unread=filter_unread))
+        for _attempt in range(3):
+            threads = list(self.iter_threads(amount=amount, filter_unread=filter_unread))
+            if threads:
+                return threads
+            page = self._ensure_page()
+            self._open_inbox()
+            try:
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
+        return []
+
+    def collect_threads(
+        self,
+        amount: int = 20,
+        filter_unread: bool = False,
+    ) -> tuple[List[ThreadLike], str, str]:
+        target = max(1, int(amount or 1))
+        max_attempts = 3
+        aggregated: List[ThreadLike] = []
+        seen_keys: set[str] = set()
+        reason = "other"
+        detail = "-"
+
+        def _dedup_key(thread: ThreadLike) -> str:
+            thread_id = str(getattr(thread, "id", "") or "").strip()
+            if thread_id and not thread_id.startswith("stable_"):
+                return f"id:{thread_id}"
+            link_thread_id = _extract_thread_id(str(getattr(thread, "link", "") or ""))
+            if link_thread_id:
+                return f"id:{link_thread_id}"
+            title_key = _normalize_key_source(str(getattr(thread, "title", "") or ""))
+            snippet_key = _normalize_key_source(str(getattr(thread, "snippet", "") or ""))
+            if title_key or snippet_key:
+                return f"stable:{title_key}|{snippet_key}"
+            if thread_id:
+                return f"id:{thread_id}"
+            return ""
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                discovered = list(self.iter_threads(amount=target, filter_unread=filter_unread))
+                reason = str(getattr(self, "_last_thread_discovery_reason", "") or "").strip() or "other"
+                detail = str(getattr(self, "_last_thread_discovery_detail", "") or "").strip() or "-"
+            except Exception as exc:
+                reason = "exception"
+                detail = type(exc).__name__
+                logger.warning(
+                    "PlaywrightDM collect_threads_error account=@%s target=%s attempt=%s error=%s",
+                    self.username,
+                    target,
+                    attempt,
+                    exc,
+                )
+                break
+
+            for thread in discovered:
+                key = _dedup_key(thread)
+                if key and key in seen_keys:
+                    continue
+                if key:
+                    seen_keys.add(key)
+                aggregated.append(thread)
+                if len(aggregated) >= target:
+                    break
+
+            if len(aggregated) >= target:
+                reason = "target_reached"
+                detail = f"attempt={attempt}"
+                break
+
+            retryable_reason = reason in {"rows_none", "stagnant_layout", "timeout", "other"}
+            if not retryable_reason or attempt >= max_attempts:
+                break
+            try:
+                self._open_inbox()
+                page = self._ensure_page()
+                page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+        if reason == "other":
+            reason = "target_reached" if len(aggregated) >= target else "no_more_threads"
+        self._last_thread_discovery_reason = reason
+        self._last_thread_discovery_detail = detail
+        self._last_thread_discovery_count = len(aggregated)
+        self._last_thread_discovery_target = target
+        return aggregated[:target], reason, detail
 
     def iter_threads(self, amount: int = 20, filter_unread: bool = False) -> Iterator[ThreadLike]:
         """
@@ -435,6 +532,13 @@ class PlaywrightDMClient:
         selector_candidates = self._row_selector_candidates()
         seen_thread_keys: set[str] = set()
         yielded = 0
+        discovery_reason = "other"
+        discovery_detail = "-"
+
+        def _set_discovery_exit(reason: str, detail: str = "-") -> None:
+            nonlocal discovery_reason, discovery_detail
+            discovery_reason = str(reason or "other")
+            discovery_detail = str(detail or "-")
 
         rows = None
         selected_selector = ""
@@ -453,150 +557,327 @@ class PlaywrightDMClient:
                     continue
             return None, ""
 
-        rows, selected_selector = _resolve_rows()
-        if rows is None:
-            return
-
-        inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
-        self._scroll_panel_to_top(inbox_panel)
-
-        if target >= 300:
-            max_scroll_passes = max(40, min(5000, target * 8))
-        else:
-            max_scroll_passes = max(25, min(2000, target * 6))
-        stagnant_limit = self._stagnation_limit(target)
-        if target >= 250:
-            stagnant_limit = max(stagnant_limit, min(90, 24 + (target // 12)))
-        stagnant_passes = 0
-
-        for _pass in range(max_scroll_passes):
-            if yielded >= target:
-                break
-
-            current_url = page.url or ""
-            if "/direct/inbox/" not in current_url:
-                if "/direct/t/" in current_url and self._has_thread_rows_visible(page):
-                    pass
-                else:
-                    self.return_to_inbox()
-                    current_url = page.url or ""
-                    if "/direct/inbox/" not in current_url:
-                        self._open_inbox()
-            if not self._has_thread_rows_visible(page):
-                self._open_inbox()
-                rows, selected_selector = _resolve_rows()
-                if rows is None:
-                    break
-                inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
-
-            if rows is None:
-                rows, selected_selector = _resolve_rows()
-                if rows is None:
-                    break
-                inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
-
-            before_count = yielded
+        def _rows_count(current_rows) -> int:
+            if current_rows is None:
+                return 0
             try:
-                total = rows.count()
+                return max(0, int(current_rows.count()))
             except Exception:
-                rows, selected_selector = _resolve_rows()
+                return 0
+
+        def _log_scroll_check(prev_height: float, new_height: float, rows_count: int) -> None:
+            if not _DM_VERBOSE_PROBES:
+                return
+            print(
+                style_text(
+                    f"SCROLL_CHECK prev_height={int(prev_height)} new_height={int(new_height)} rows={int(rows_count)}",
+                    color=Fore.WHITE,
+                )
+            )
+
+        def _apply_scroll_pattern(current_panel, current_rows, pattern: str) -> tuple[object, bool, bool]:
+            prev_metrics = self._panel_scroll_metrics(current_panel)
+            prev_top = float(prev_metrics.get("top", 0))
+            prev_height = float(prev_metrics.get("height", 0))
+            prev_rows = _rows_count(current_rows)
+
+            try:
+                if pattern == "element_end":
+                    if prev_rows > 0 and current_rows is not None:
+                        last_row = current_rows.nth(prev_rows - 1)
+                        try:
+                            last_row.scroll_into_view_if_needed()
+                        except Exception:
+                            pass
+                        try:
+                            last_row.evaluate(
+                                """(el) => {
+                                    if (!el || !el.scrollIntoView) return;
+                                    try { el.scrollIntoView({ block: "end", inline: "nearest" }); } catch (_) {}
+                                }"""
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        current_panel.evaluate(
+                            """(el) => {
+                                const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                                if (!node) return;
+                                const step = Math.max(300, Math.floor(Number(node.clientHeight || 600) * 0.9));
+                                try { node.scrollTop = Number(node.scrollTop || 0) + step; } catch (_) {}
+                            }"""
+                        )
+                elif pattern == "bottom_abs":
+                    current_panel.evaluate(
+                        """(el) => {
+                            const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                            if (!node) return;
+                            try { node.scrollTop = Number(node.scrollHeight || 0); } catch (_) {}
+                        }"""
+                    )
+                elif pattern == "bounce":
+                    current_panel.evaluate(
+                        """(el) => {
+                            const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                            if (!node) return;
+                            const height = Number(node.scrollHeight || 0);
+                            const client = Number(node.clientHeight || 0);
+                            const max = Math.max(0, height - client);
+                            const current = Number(node.scrollTop || 0);
+                            const up = Math.max(0, current - 200);
+                            try { node.scrollTop = up; } catch (_) {}
+                            try { node.scrollTop = max; } catch (_) {}
+                        }"""
+                    )
+                elif pattern == "wheel":
+                    dispatched = False
+                    try:
+                        dispatched = bool(
+                            current_panel.evaluate(
+                                """(el) => {
+                                    const node = el || document.scrollingElement || document.documentElement || document.body || null;
+                                    if (!node) return false;
+                                    try {
+                                        const evt = new WheelEvent("wheel", { deltaY: 1500, bubbles: true, cancelable: true });
+                                        return !!node.dispatchEvent(evt);
+                                    } catch (_) {
+                                        return false;
+                                    }
+                                }"""
+                            )
+                        )
+                    except Exception:
+                        dispatched = False
+                    if not dispatched:
+                        try:
+                            box = current_panel.bounding_box()
+                        except Exception:
+                            box = None
+                        if box:
+                            x = float(box.get("x") or 0.0) + max(16.0, min(float(box.get("width") or 0.0) - 16.0, 56.0))
+                            y = float(box.get("y") or 0.0) + max(16.0, min(float(box.get("height") or 0.0) - 16.0, 56.0))
+                            try:
+                                page.mouse.move(x, y)
+                            except Exception:
+                                pass
+                        try:
+                            page.mouse.wheel(0, 1600)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            self._wait_for_scroll_settle(page, extra_ms=80)
+            try:
+                page.wait_for_timeout(140)
+            except Exception:
+                pass
+
+            new_metrics = self._panel_scroll_metrics(current_panel)
+            new_top = float(new_metrics.get("top", 0))
+            new_height = float(new_metrics.get("height", 0))
+            new_rows = _rows_count(current_rows)
+            _log_scroll_check(prev_height, new_height, new_rows)
+
+            grew = (new_height > prev_height + 1) or (new_rows > prev_rows)
+            moved = new_top > prev_top + 1
+            return current_panel, grew, moved
+
+        try:
+            rows, selected_selector = _resolve_rows()
+            if rows is None:
+                deadline = time.time() + 8.0
+                while rows is None and time.time() < deadline:
+                    try:
+                        page.wait_for_timeout(200)
+                    except Exception:
+                        break
+                    rows, selected_selector = _resolve_rows()
                 if rows is None:
+                    _set_discovery_exit("rows_none", "initial_rows_not_found")
+                    return
+
+            inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
+            self._scroll_panel_to_top(inbox_panel)
+
+            if target >= 300:
+                max_scroll_passes = max(60, min(1600, target * 4))
+            else:
+                max_scroll_passes = max(18, min(80, target + 20))
+            stagnant_limit = self._stagnation_limit(target)
+            if target >= 250:
+                stagnant_limit = max(stagnant_limit, min(90, 24 + (target // 12)))
+            stagnant_passes = 0
+            confirmed_exhausted_passes = 0
+            confirmed_exhausted_limit = 2
+
+            for _pass in range(max_scroll_passes):
+                if yielded >= target:
+                    _set_discovery_exit("target_reached", "target_hit")
                     break
+
+                current_url = page.url or ""
+                if "/direct/inbox/" not in current_url:
+                    if "/direct/t/" in current_url and self._has_thread_rows_visible(page):
+                        pass
+                    else:
+                        self.return_to_inbox()
+                        current_url = page.url or ""
+                        if "/direct/inbox/" not in current_url:
+                            self._open_inbox()
+                if not self._has_thread_rows_visible(page):
+                    self._open_inbox()
+                    rows, selected_selector = _resolve_rows()
+                    if rows is None:
+                        _set_discovery_exit("rows_none", "rows_missing_after_reopen")
+                        break
+                    inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
+
+                if rows is None:
+                    rows, selected_selector = _resolve_rows()
+                    if rows is None:
+                        _set_discovery_exit("rows_none", "rows_missing_during_scan")
+                        break
+                    inbox_panel, _method, _selector, _panel_meta = self._get_inbox_panel(page, rows=rows)
+
+                before_count = yielded
                 try:
                     total = rows.count()
                 except Exception:
-                    total = 0
+                    rows, selected_selector = _resolve_rows()
+                    if rows is None:
+                        _set_discovery_exit("rows_none", "rows_missing_after_count_error")
+                        break
+                    try:
+                        total = rows.count()
+                    except Exception:
+                        total = 0
 
-            for idx in range(total):
+                for idx in range(total):
+                    if yielded >= target:
+                        _set_discovery_exit("target_reached", "target_hit")
+                        break
+
+                    row = rows.nth(idx)
+                    try:
+                        row_valid = self._row_is_valid(row, selector=selected_selector, fast=True)
+                    except TypeError:
+                        row_valid = self._row_is_valid(row, selector=selected_selector)
+                    if not row_valid:
+                        continue
+
+                    if filter_unread and _thread_unread_count(row) <= 0:
+                        continue
+
+                    lines = self._row_lines(row)
+                    title = (lines[0] if lines else "unknown").strip()
+                    if not title:
+                        continue
+                    snippet_parts = [(line or "").strip() for line in lines[1:4] if (line or "").strip()]
+                    snippet = " | ".join(snippet_parts)
+                    thread_key, key_source, _direct_link = self._resolve_thread_key(
+                        page,
+                        row,
+                        title=title,
+                        peer_username=title,
+                        snippet=snippet,
+                    )
+                    if not thread_key:
+                        fallback_seed = f"{self.username}|{title}|{snippet}|{idx}"
+                        fallback_hash = hashlib.sha1(
+                            fallback_seed.encode("utf-8", errors="ignore")
+                        ).hexdigest()[:16]
+                        thread_key = f"stable_{fallback_hash}"
+                        key_source = "scan_fallback"
+                    if thread_key in seen_thread_keys:
+                        continue
+                    seen_thread_keys.add(thread_key)
+
+                    thread = ThreadLike(
+                        id=thread_key,
+                        pk=thread_key,
+                        users=[UserLike(pk=title, id=title, username=title)],
+                        link=_direct_link,
+                        title=title,
+                        snippet=snippet,
+                        # El indice deja de ser confiable cuando hay scroll/virtualizacion;
+                        # forzamos apertura por cache/titulo para evitar clicks en fila incorrecta.
+                        source_index=idx,
+                    )
+                    self._thread_cache[thread_key] = thread
+                    self._thread_cache_meta[thread_key] = {
+                        "title": title,
+                        "snippet": snippet,
+                        "link": _direct_link,
+                        "idx": idx,
+                        "selector": selected_selector,
+                        "key_source": key_source,
+                    }
+                    yielded += 1
+                    yield thread
+
                 if yielded >= target:
+                    _set_discovery_exit("target_reached", "target_hit")
                     break
 
-                row = rows.nth(idx)
-                try:
-                    row_valid = self._row_is_valid(row, selector=selected_selector, fast=True)
-                except TypeError:
-                    row_valid = self._row_is_valid(row, selector=selected_selector)
-                if not row_valid:
-                    continue
+                added = yielded - before_count
+                before_scroll = self._panel_scroll_metrics(inbox_panel)
+                base_height = float(before_scroll.get("height", 0))
+                base_rows = _rows_count(rows)
 
-                if filter_unread and _thread_unread_count(row) <= 0:
-                    continue
+                grew_content = False
+                moved_position = False
+                scroll_patterns = ["element_end"]
+                if added <= 0:
+                    scroll_patterns.extend(["bottom_abs", "bounce", "wheel"])
+                for pattern in scroll_patterns:
+                    inbox_panel, grew_now, moved_now = _apply_scroll_pattern(inbox_panel, rows, pattern)
+                    grew_content = grew_content or grew_now
+                    moved_position = moved_position or moved_now
+                    if grew_content:
+                        break
 
-                lines = self._row_lines(row)
-                title = (lines[0] if lines else "unknown").strip()
-                if not title:
-                    continue
-                snippet_parts = [(line or "").strip() for line in lines[1:4] if (line or "").strip()]
-                snippet = " | ".join(snippet_parts)
-                thread_key, key_source, _direct_link = self._resolve_thread_key(
-                    page,
-                    row,
-                    title=title,
-                    peer_username=title,
-                    snippet=snippet,
-                )
-                if not thread_key:
-                    fallback_seed = f"{self.username}|{title}|{snippet}|{idx}"
-                    fallback_hash = hashlib.sha1(
-                        fallback_seed.encode("utf-8", errors="ignore")
-                    ).hexdigest()[:16]
-                    thread_key = f"stable_{fallback_hash}"
-                    key_source = "scan_fallback"
-                if thread_key in seen_thread_keys:
-                    continue
-                seen_thread_keys.add(thread_key)
+                after_scroll = self._panel_scroll_metrics(inbox_panel)
+                final_height = float(after_scroll.get("height", 0))
+                final_rows = _rows_count(rows)
+                no_height_growth = final_height <= base_height + 1
+                no_rows_growth = final_rows <= base_rows
+                exhausted_this_pass = no_height_growth and no_rows_growth
 
-                thread = ThreadLike(
-                    id=thread_key,
-                    pk=thread_key,
-                    users=[UserLike(pk=title, id=title, username=title)],
-                    title=title,
-                    snippet=snippet,
-                    # El indice deja de ser confiable cuando hay scroll/virtualizacion;
-                    # forzamos apertura por cache/titulo para evitar clicks en fila incorrecta.
-                    source_index=idx,
-                )
-                self._thread_cache[thread_key] = thread
-                self._thread_cache_meta[thread_key] = {
-                    "title": title,
-                    "snippet": snippet,
-                    "idx": idx,
-                    "selector": selected_selector,
-                    "key_source": key_source,
-                }
-                yielded += 1
-                yield thread
+                if exhausted_this_pass and added <= 0:
+                    confirmed_exhausted_passes += 1
+                else:
+                    confirmed_exhausted_passes = 0
+                if confirmed_exhausted_passes >= confirmed_exhausted_limit:
+                    _set_discovery_exit("no_more_threads", "confirmed_scroll_exhausted")
+                    break
 
-            if yielded >= target:
-                break
+                if added > 0:
+                    stagnant_passes = 0
+                else:
+                    stagnant_passes += 1
+                if stagnant_passes >= stagnant_limit:
+                    _set_discovery_exit("stagnant_layout", f"stagnant_passes={stagnant_passes}")
+                    break
 
-            before_scroll = self._panel_scroll_metrics(inbox_panel)
-            moved = self._scroll_panel_down(inbox_panel)
-            if not moved:
-                break
-
-            added = yielded - before_count
-            try:
-                total_after_scroll = rows.count()
-            except Exception:
-                total_after_scroll = total
-            after_scroll = self._panel_scroll_metrics(inbox_panel)
-            scroll_top_unchanged = float((after_scroll or {}).get("top", 0)) <= float((before_scroll or {}).get("top", 0)) + 1
-            scroll_height_not_increased = float((after_scroll or {}).get("height", 0)) <= float((before_scroll or {}).get("height", 0))
-            no_new_rows_detected = int(total_after_scroll) <= int(total)
-            if added <= 0 and scroll_top_unchanged and scroll_height_not_increased and no_new_rows_detected:
-                stagnant_passes += 1
-            else:
-                stagnant_passes = 0
-            if stagnant_passes >= stagnant_limit:
-                break
-
-            self._wait_for_scroll_settle(page)
+            if discovery_reason == "other":
+                if yielded >= target:
+                    _set_discovery_exit("target_reached", "target_hit")
+                else:
+                    _set_discovery_exit("timeout", f"max_scroll_passes={max_scroll_passes}")
+        except Exception as exc:
+            _set_discovery_exit("exception", type(exc).__name__)
+            raise
+        finally:
+            self._last_thread_discovery_reason = discovery_reason
+            self._last_thread_discovery_detail = discovery_detail
+            self._last_thread_discovery_count = yielded
+            self._last_thread_discovery_target = target
 
         if _DM_VERBOSE_PROBES:
             print(
                 style_text(
-                    f"[Probe] iter_threads target={target} discovered={yielded}",
+                    f"[Probe] iter_threads target={target} discovered={yielded} reason={self._last_thread_discovery_reason} detail={self._last_thread_discovery_detail}",
                     color=Fore.WHITE,
                 )
             )
@@ -612,7 +893,7 @@ class PlaywrightDMClient:
             return False
         return self._open_thread(thread)
 
-    # LEGACY: FunciÃƒÂ³n deshabilitada - ya no se usa (reemplazada por click-first scan)
+    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_anchors(...)
 
     def _row_lines(self, row) -> List[str]:
@@ -776,12 +1057,12 @@ class PlaywrightDMClient:
                 loc = page.locator(selector)
                 if loc.count() > 0:
                     if _DM_VERBOSE_PROBES:
-                        print(style_text(f"[Probe] _get_inbox_panel encontrÃƒÂ³ '{selector}'", color=Fore.WHITE))
+                        print(style_text(f"[Probe] _get_inbox_panel encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ '{selector}'", color=Fore.WHITE))
                     return loc.first, "selector", selector, {"count": loc.count()}
             except Exception:
                 continue
         if _DM_VERBOSE_PROBES:
-            print(style_text("[Probe] _get_inbox_panel no encontrÃƒÂ³ nada, usando page", color=Fore.YELLOW))
+            print(style_text("[Probe] _get_inbox_panel no encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ nada, usando page", color=Fore.YELLOW))
         return page, "page", "", {"count": 1}
 
     def _stagnation_limit(self, target: int) -> int:
@@ -945,7 +1226,7 @@ class PlaywrightDMClient:
 
     def _row_is_valid(self, row, *, selector: str | None = None, fast: bool = False) -> bool:
         """
-        ValidaciÃƒÂ³n mÃƒÂ­nima pre-click.
+        ValidaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nima pre-click.
         El filtrado real ocurre POST-CLICK en _open_thread.
         """
         try:
@@ -953,7 +1234,7 @@ class PlaywrightDMClient:
             if not lines:
                 return False
 
-            # Filtros de exclusiÃƒÂ³n de UI bÃƒÂ¡sica (incluye Notas)
+            # Filtros de exclusiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de UI bÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡sica (incluye Notas)
             first_line = lines[0].lower()
             if first_line in {
                 "primary",
@@ -983,7 +1264,13 @@ class PlaywrightDMClient:
                     for token in _NOTE_PHRASES:
                         if token in compact:
                             return False
-                return True
+                    # Menos estricto: cualquier fila no-nota/no-control con texto real
+                    # se procesa y la validacion definitiva ocurre al abrir el thread.
+                    first_line = (lines[0] or "").strip().lower() if lines else ""
+                    has_chat_like_shape = len(lines) >= 2 or len(first_line) >= 3
+                    if has_chat_like_shape:
+                        return True
+                return False
 
             note_reason = self._note_reason(row)
             if note_reason:
@@ -995,7 +1282,7 @@ class PlaywrightDMClient:
                 )
                 return False
 
-            # Descartar botones internos (avatar/nota) por tamaÃƒÂ±o.
+            # Descartar botones internos (avatar/nota) por tamaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±o.
             if not self._row_has_thread_dimensions(row):
                 logger.info(
                     "PlaywrightDM row_discard reason=small_button selector=%s first_line=%s",
@@ -1027,7 +1314,7 @@ class PlaywrightDMClient:
             "nuevo mensaje",
             "new message",
             "icono de comilla angular",
-            "desde el corazÃƒÂ³n",
+            "desde el corazÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
             "solicitudes",
             "requests",
         )
@@ -1145,7 +1432,7 @@ class PlaywrightDMClient:
                 return True
             if any(token in full for token in (" ahora", " now", " ayer", " yesterday")):
                 return True
-            if " Ã‚Â· " in full and ("tÃƒÂº:" in full or "tu:" in full or "you:" in full):
+            if ("tu:" in full or "you:" in full) and any(tok in full for tok in ("min", " h", " hr", " ayer", " now", "unread", "sin leer")):
                 return True
 
         return False
@@ -1165,7 +1452,7 @@ class PlaywrightDMClient:
                 continue
         return valid
 
-    # LEGACY: FunciÃƒÂ³n deshabilitada - ya no se usa (reemplazada por click-first scan)
+    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_rows(...) -> List[ThreadLike]
 
 
@@ -1325,7 +1612,7 @@ class PlaywrightDMClient:
             composer.fill(text)
             composer.press("Enter")
         except Exception as e:
-            logger.warning("PlaywrightDM no pudo completar acciones de envÃƒÂ­o thread=%s @%s", thread.id, self.username)
+            logger.warning("PlaywrightDM no pudo completar acciones de envÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o thread=%s @%s", thread.id, self.username)
             return None
 
         message_id = self._verify_sent(thread, text)
@@ -1413,6 +1700,7 @@ class PlaywrightDMClient:
         self._ingest_api_payload(payload, source_url=url)
 
     def _ingest_api_payload(self, payload: Any, *, source_url: str = "") -> tuple[int, int]:
+        self._register_payload_thread_aliases(payload)
         parsed, missing_timestamp = _extract_api_messages_from_payload(
             payload,
             self_user_id=self.user_id,
@@ -1441,7 +1729,7 @@ class PlaywrightDMClient:
         bucket = self._api_messages_by_thread.setdefault(thread_id, {})
         existing = bucket.get(item_id)
         if existing is not None:
-            # Conservar el mejor contenido si la misma key llega mÃƒÂºltiples veces.
+            # Conservar el mejor contenido si la misma key llega mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltiples veces.
             merged = _APIMessageRecord(
                 thread_id=thread_id,
                 sender_id=message.sender_id or existing.sender_id,
@@ -1485,19 +1773,58 @@ class PlaywrightDMClient:
             self._api_messages_by_thread.pop(thread_id, None)
             self._api_thread_last_seen.pop(thread_id, None)
 
+    def _register_thread_aliases(self, *thread_ids: str) -> None:
+        normalized: list[str] = []
+        for candidate in thread_ids:
+            value = str(candidate or "").strip()
+            if value and value not in normalized:
+                normalized.append(value)
+        if len(normalized) < 2:
+            return
+        for source in normalized:
+            bucket = self._thread_id_aliases.setdefault(source, set())
+            for target in normalized:
+                if target != source:
+                    bucket.add(target)
+
+    def _register_payload_thread_aliases(self, payload: Any) -> None:
+        for alias_pair in _extract_payload_thread_alias_pairs(payload):
+            self._register_thread_aliases(*alias_pair)
+
+    def _expand_thread_ids(self, thread_ids: list[str]) -> list[str]:
+        queue: list[str] = []
+        seen: set[str] = set()
+        for candidate in thread_ids:
+            value = str(candidate or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            queue.append(value)
+        idx = 0
+        while idx < len(queue):
+            source = queue[idx]
+            idx += 1
+            for alias in self._thread_id_aliases.get(source, set()):
+                value = str(alias or "").strip()
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                queue.append(value)
+        return queue
+
     def _thread_cache_keys(self, thread: ThreadLike, page: Page) -> list[str]:
-        keys: list[str] = []
+        base_keys: list[str] = []
         for candidate in (
             getattr(thread, "id", None),
             getattr(thread, "pk", None),
-            self._current_thread_id,
+            getattr(self, "_current_thread_id", None),
             _extract_thread_id(getattr(thread, "link", "") or ""),
             _extract_thread_id(getattr(page, "url", "") or ""),
         ):
             value = str(candidate or "").strip()
-            if value and value not in keys:
-                keys.append(value)
-        return keys
+            if value and value not in base_keys:
+                base_keys.append(value)
+        return self._expand_thread_ids(base_keys)
 
     def _expected_thread_ids(
         self,
@@ -1510,18 +1837,21 @@ class PlaywrightDMClient:
         for candidate in (
             getattr(thread, "id", None),
             getattr(thread, "pk", None),
-            self._current_thread_id,
-            post_thread_id,
+            _extract_thread_id(getattr(thread, "link", "") or ""),
             _extract_thread_id(click_href),
         ):
             value = str(candidate or "").strip()
             if value and value not in ids:
                 ids.append(value)
+        post_value = str(post_thread_id or "").strip()
+        has_real_hint = any(value and not value.startswith("stable_") for value in ids)
+        if post_value and (not ids or not has_real_hint):
+            ids.append(post_value)
         return ids
 
     def _snapshot_api_counts(self, thread_ids: list[str]) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for thread_id in thread_ids:
+        for thread_id in self._expand_thread_ids(thread_ids):
             key = str(thread_id or "").strip()
             if not key:
                 continue
@@ -1534,13 +1864,24 @@ class PlaywrightDMClient:
         *,
         baseline_counts: dict[str, int],
     ) -> tuple[bool, str]:
-        for thread_id in thread_ids:
+        for thread_id in self._expand_thread_ids(thread_ids):
             key = str(thread_id or "").strip()
             if not key:
+                continue
+            if key not in baseline_counts:
                 continue
             current = len(self._api_messages_by_thread.get(key, {}))
             baseline = int(baseline_counts.get(key, 0))
             if current > baseline and current > 0:
+                return True, key
+        return False, ""
+
+    def _thread_has_cached_api_messages(self, thread_ids: list[str]) -> tuple[bool, str]:
+        for thread_id in self._expand_thread_ids(thread_ids):
+            key = str(thread_id or "").strip()
+            if not key:
+                continue
+            if len(self._api_messages_by_thread.get(key, {})) > 0:
                 return True, key
         return False, ""
 
@@ -1610,7 +1951,7 @@ class PlaywrightDMClient:
         baseline_counts: dict[str, int],
         timeout_ms: int,
     ) -> tuple[bool, str]:
-        expected = [tid for tid in expected_thread_ids if str(tid or "").strip()]
+        expected = self._expand_thread_ids(expected_thread_ids)
         if not expected:
             return False, ""
 
@@ -1645,13 +1986,22 @@ class PlaywrightDMClient:
                 payload = response.json()
             except Exception:
                 return False
-            payload_thread_ids = _payload_thread_ids(payload, self_user_id=self.user_id)
-            for thread_id in expected:
-                if thread_id in payload_thread_ids:
-                    matched_payload = payload
-                    matched_url = url
-                    matched_thread_id = thread_id
-                    return True
+            try:
+                self._ingest_api_payload(payload, source_url=url)
+            except Exception:
+                return False
+            payload_thread_ids = self._expand_thread_ids(
+                list(_payload_thread_ids(payload, self_user_id=self.user_id))
+            )
+            if not payload_thread_ids:
+                return False
+            dynamic_expected = set(self._expand_thread_ids(expected_thread_ids))
+            intersection = dynamic_expected.intersection(payload_thread_ids)
+            if intersection:
+                matched_payload = payload
+                matched_url = url
+                matched_thread_id = sorted(intersection, key=len, reverse=True)[0]
+                return True
             return False
 
         try:
@@ -1661,16 +2011,18 @@ class PlaywrightDMClient:
             pass
 
         if matched_payload is not None:
-            self._ingest_api_payload(matched_payload, source_url=matched_url)
+            expected = self._expand_thread_ids(expected_thread_ids)
             has_cached, cached_thread_id = self._thread_has_new_api_messages(
                 expected,
                 baseline_counts=baseline_counts,
             )
             if has_cached:
                 return True, cached_thread_id or matched_thread_id
+            return True, matched_thread_id
 
         deadline = time.time() + max(0.0, float(timeout_value) / 1000.0)
         while time.time() < deadline:
+            expected = self._expand_thread_ids(expected_thread_ids)
             has_cached, cached_thread_id = self._thread_has_new_api_messages(
                 expected,
                 baseline_counts=baseline_counts,
@@ -1681,6 +2033,11 @@ class PlaywrightDMClient:
                 page.wait_for_timeout(80)
             except Exception:
                 break
+        has_any_cached, any_cached_thread_id = self._thread_has_cached_api_messages(
+            list(baseline_counts.keys())
+        )
+        if has_any_cached:
+            return True, any_cached_thread_id
         return False, matched_thread_id
 
     def _get_api_messages_for_thread(
@@ -1790,7 +2147,7 @@ class PlaywrightDMClient:
                 continue
 
         if not found_container and not rows_ready:
-            # Si ninguno es visible de inmediato, esperar brevemente al mÃƒÂ¡s probable
+            # Si ninguno es visible de inmediato, esperar brevemente al mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡s probable
             try:
                 page.wait_for_selector("div[role='main'], main, div[role='navigation']", timeout=10_000)
                 # Re-chequear
@@ -1854,7 +2211,7 @@ class PlaywrightDMClient:
                 for idx in range(dialog_count):
                     try:
                         dialog = dialogs.nth(idx)
-                        # Buscar botÃƒÂ³n de cierre dentro del dialog
+                        # Buscar botÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de cierre dentro del dialog
                         close_selectors = [
                             "button[aria-label='Cerrar']",
                             "button[aria-label='Close']",
@@ -1926,14 +2283,14 @@ class PlaywrightDMClient:
             except Exception:
                 continue
         
-        # CRÃƒÂTICO: Siempre re-chequear login inputs al final (no depender del chequeo inicial)
-        # porque pueden aparecer despuÃƒÂ©s de cerrar otros overlays
+        # CRÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂTICO: Siempre re-chequear login inputs al final (no depender del chequeo inicial)
+        # porque pueden aparecer despuÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©s de cerrar otros overlays
         try:
             has_login_after_close = page.locator("input[name='username'], input[name='password']").count() > 0
             if has_login_after_close:
                 raise RuntimeError(
                     f"Overlay de login detectado y no se pudo cerrar para @{self.username}. "
-                    "SesiÃƒÂ³n posiblemente invÃƒÂ¡lida."
+                    "SesiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n posiblemente invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lida."
                 )
         except RuntimeError:
             raise
@@ -1942,7 +2299,7 @@ class PlaywrightDMClient:
 
     def return_to_inbox(self) -> None:
         """
-        Vuelve a la vista del inbox sin recargar la pÃƒÂ¡gina si es posible.
+        Vuelve a la vista del inbox sin recargar la pÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡gina si es posible.
         """
         page = self._ensure_page()
         current_url = page.url or ""
@@ -1980,7 +2337,7 @@ class PlaywrightDMClient:
         current_url = page.url or ""
         if not self._is_in_direct_workspace(page):
             self._open_inbox()
-        elif "/direct/t/" in current_url and not self._has_thread_rows_visible(page):
+        elif "/direct/t/" in current_url:
             self.return_to_inbox()
 
         # 2. Intentar clickear por indice usando el selector cacheado del scan
@@ -1988,65 +2345,137 @@ class PlaywrightDMClient:
         if thread.source_index != -1:
             meta = self._thread_cache_meta.get(thread.id, {})
             row_selector = meta.get("selector") or THREAD_ROW_SELECTOR
-            try:
-                rows = page.locator(row_selector)
-                row_count = rows.count()
-                if row_count > thread.source_index:
-                    row = rows.nth(thread.source_index)
-                    row_preview = self._row_preview(row)
-                    try:
-                        row_valid = self._row_is_valid(row, selector=row_selector, fast=True)
-                    except TypeError:
-                        row_valid = self._row_is_valid(row, selector=row_selector)
-                    if not row_valid:
-                        logger.error(
-                            "PlaywrightDM open_thread_invalid_row account=@%s thread_id=%s selector=%s idx=%s row=%s",
-                            self.username,
-                            thread.id,
-                            row_selector,
-                            thread.source_index,
-                            row_preview,
-                        )
-                    else:
-                        pre_url = page.url or ""
-                        baseline_counts = self._snapshot_api_counts(
-                            self._expected_thread_ids(thread, click_href="")
-                        )
-                        clicked, click_href = self._click_row_target(
-                            row,
-                            selector=row_selector,
-                            idx=thread.source_index,
-                        )
-                        if clicked and self._validate_open_state(
-                            thread,
-                            pre_url=pre_url,
-                            selector=row_selector,
-                            idx=thread.source_index,
-                            row_preview=row_preview,
-                            click_href=click_href,
-                            baseline_counts=baseline_counts,
-                        ):
-                            return True
-                        if not self._is_in_direct_workspace(page):
-                            self.return_to_inbox()
-                else:
-                    logger.error(
-                        "PlaywrightDM open_thread_missing_row account=@%s thread_id=%s selector=%s idx=%s row_count=%s",
-                        self.username,
-                        thread.id,
-                        row_selector,
-                        thread.source_index,
-                        row_count,
-                    )
-            except Exception as exc:
-                logger.error(
-                    "PlaywrightDM open_thread_click_error account=@%s thread_id=%s selector=%s idx=%s error=%s",
+            thread_link_id = _extract_thread_id(str(getattr(thread, "link", "") or ""))
+            meta_link_id = _extract_thread_id(str(meta.get("link") or ""))
+            has_real_identity = (
+                not str(getattr(thread, "id", "") or "").startswith("stable_")
+                or bool(thread_link_id)
+                or bool(meta_link_id)
+            )
+            if not has_real_identity:
+                logger.info(
+                    "PlaywrightDM open_thread_skip_index_unstable_identity account=@%s thread_id=%s selector=%s idx=%s title=%s",
                     self.username,
                     thread.id,
                     row_selector,
                     thread.source_index,
-                    exc,
+                    meta.get("title") or getattr(thread, "title", ""),
                 )
+            else:
+                try:
+                    rows = page.locator(row_selector)
+                    row_count = rows.count()
+                    if row_count > thread.source_index:
+                        row = rows.nth(thread.source_index)
+                        row_preview = self._row_preview(row)
+                        try:
+                            row_valid = self._row_is_valid(row, selector=row_selector, fast=True)
+                        except TypeError:
+                            row_valid = self._row_is_valid(row, selector=row_selector)
+                        if not row_valid:
+                            logger.error(
+                                "PlaywrightDM open_thread_invalid_row account=@%s thread_id=%s selector=%s idx=%s row=%s",
+                                self.username,
+                                thread.id,
+                                row_selector,
+                                thread.source_index,
+                                row_preview,
+                            )
+                        else:
+                            row_lines = self._row_lines(row)
+                            row_title = (row_lines[0] if row_lines else "").strip()
+                            row_snippet = " | ".join(
+                                (line or "").strip() for line in row_lines[1:4] if (line or "").strip()
+                            )
+                            expected_for_click = list(self._expected_thread_ids(thread, click_href=""))
+                            meta_link_id = _extract_thread_id(str(meta.get("link") or ""))
+                            if meta_link_id and meta_link_id not in expected_for_click:
+                                expected_for_click.append(meta_link_id)
+                            row_thread_key, _row_key_source, row_link = self._resolve_thread_key(
+                                page,
+                                row,
+                                title=row_title,
+                                peer_username=row_title,
+                                snippet=row_snippet,
+                            )
+                            meta_title_norm = _normalize_key_source(
+                                str(meta.get("title") or getattr(thread, "title", "") or "")
+                            )
+                            row_title_norm = _normalize_key_source(row_title)
+                            title_matches = (
+                                not meta_title_norm
+                                or (
+                                    bool(row_title_norm)
+                                    and (
+                                        row_title_norm == meta_title_norm
+                                        or row_title_norm in meta_title_norm
+                                        or meta_title_norm in row_title_norm
+                                    )
+                                )
+                            )
+                            expected_ids = set(self._expand_thread_ids(expected_for_click))
+                            row_ids = set(
+                                self._expand_thread_ids(
+                                    [row_thread_key, _extract_thread_id(row_link)]
+                                )
+                            )
+                            id_matches = (not expected_ids) or (not row_ids) or bool(
+                                expected_ids.intersection(row_ids)
+                            )
+                            if not title_matches or not id_matches:
+                                logger.info(
+                                    "PlaywrightDM open_thread_skip_stale_index account=@%s thread_id=%s selector=%s idx=%s expected_ids=%s row_ids=%s expected_title=%s row_title=%s row=%s",
+                                    self.username,
+                                    thread.id,
+                                    row_selector,
+                                    thread.source_index,
+                                    sorted(expected_ids),
+                                    sorted(row_ids),
+                                    meta.get("title") or "",
+                                    row_title,
+                                    row_preview,
+                                )
+                            else:
+                                pre_url = page.url or ""
+                                baseline_counts = self._snapshot_api_counts(
+                                    expected_for_click
+                                )
+                                clicked, click_href = self._click_row_target(
+                                    row,
+                                    selector=row_selector,
+                                    idx=thread.source_index,
+                                )
+                                if clicked and self._validate_open_state(
+                                    thread,
+                                    pre_url=pre_url,
+                                    selector=row_selector,
+                                    idx=thread.source_index,
+                                    row_preview=row_preview,
+                                    click_href=click_href,
+                                    baseline_counts=baseline_counts,
+                                ):
+                                    return True
+                                if not self._is_in_direct_workspace(page):
+                                    self.return_to_inbox()
+                    else:
+                        logger.error(
+                            "PlaywrightDM open_thread_missing_row account=@%s thread_id=%s selector=%s idx=%s row_count=%s",
+                            self.username,
+                            thread.id,
+                            row_selector,
+                            thread.source_index,
+                            row_count,
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "PlaywrightDM open_thread_click_error account=@%s thread_id=%s selector=%s idx=%s error=%s",
+                        self.username,
+                        thread.id,
+                        row_selector,
+                        thread.source_index,
+                        exc,
+                    )
+            
         if self._open_thread_by_cache(thread):
             return True
 
@@ -2061,6 +2490,7 @@ class PlaywrightDMClient:
     def _click_row_target(self, row, *, selector: str, idx: int) -> tuple[bool, str]:
         click_target = row
         click_href = ""
+        used_anchor_target = False
         page = self._ensure_page()
         self._dismiss_transient_overlay(page)
         try:
@@ -2071,9 +2501,12 @@ class PlaywrightDMClient:
             click_href = _normalize_direct_link(href)
         else:
             try:
-                anchor = row.locator("a[href*='/direct/t/']").first
-                if anchor.count() > 0:
+                anchors = row.locator("a[href*='/direct/t/']")
+                anchor_count = anchors.count()
+                if anchor_count == 1:
+                    anchor = anchors.first
                     click_target = anchor
+                    used_anchor_target = True
                     href = (anchor.get_attribute("href") or "").strip()
                     if "/direct/t/" in href:
                         click_href = _normalize_direct_link(href)
@@ -2091,11 +2524,12 @@ class PlaywrightDMClient:
                 box = click_target.bounding_box()
             except Exception:
                 box = None
-            if box:
+            if box and used_anchor_target:
                 width = float(box.get("width") or 0.0)
                 height = float(box.get("height") or 0.0)
                 if width > 0 and height > 0:
-                    safe_x = max(8.0, min(width - 8.0, width * 0.82))
+                    # Prefer a left/center click to avoid hitting per-row action buttons.
+                    safe_x = max(8.0, min(width - 8.0, width * 0.35))
                     safe_y = max(8.0, min(height - 8.0, height * 0.5))
                     click_target.click(timeout=3000, position={"x": safe_x, "y": safe_y})
                     return True, click_href
@@ -2226,7 +2660,10 @@ class PlaywrightDMClient:
             )
             return False
 
-        resolved_thread_id = post_thread_id or str(network_thread_id or "").strip()
+        network_thread_id = str(network_thread_id or "").strip()
+        if post_thread_id and network_thread_id and post_thread_id != network_thread_id:
+            self._register_thread_aliases(post_thread_id, network_thread_id)
+        resolved_thread_id = network_thread_id or post_thread_id
         print(
             style_text(
                 f"[TRACE_ID SYNC BEFORE] pre_url={pre_url} post_url={post_url} post_thread_id={post_thread_id} id={thread.id} pk={thread.pk} flags=url_is_thread:{url_is_thread},composer_visible:{composer_visible},message_panel_visible:{message_panel_visible},thread_id_changed:{thread_id_changed}",
@@ -2255,6 +2692,10 @@ class PlaywrightDMClient:
         if real_id == thread.id:
             return
         old_id = thread.id
+        self._register_thread_aliases(old_id, real_id)
+        link_thread_id = _extract_thread_id(getattr(thread, "link", "") or "")
+        if link_thread_id:
+            self._register_thread_aliases(link_thread_id, real_id)
         thread.id = real_id
         thread.pk = real_id
         if old_id in self._thread_cache:
@@ -2283,7 +2724,7 @@ class PlaywrightDMClient:
                 continue
         return container.locator(_MESSAGE_NODE_SELECTORS[0])
 
-    # LEGACY: FunciÃƒÂ³n deshabilitada - ya no se usa (usaba _THREAD_ANCHOR_SELECTORS eliminadas)
+    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (usaba _THREAD_ANCHOR_SELECTORS eliminadas)
     # def _select_thread_anchor(...)
 
     def _locator_first_attribute(self, locator, attr_name: str, *, timeout_ms: int = 300) -> str:
@@ -2336,7 +2777,7 @@ class PlaywrightDMClient:
 
     def _log_navigation_state(self, label: str) -> None:
         """
-        Probe de diagnÃƒÂ³stico para saber exactamente donde estamos y quÃƒÂ© vemos.
+        Probe de diagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico para saber exactamente donde estamos y quÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© vemos.
         """
         try:
             if self._page is None:
@@ -2406,7 +2847,8 @@ class PlaywrightDMClient:
 
         title = (meta.get("title") or "").strip()
         peer = (meta.get("peer_username") or "").strip()
-        candidates = [title, peer]
+        thread_title = str(getattr(thread, "title", "") or "").strip()
+        candidates = [title, peer, thread_title]
         candidates = [c for c in candidates if c]
         if not candidates:
             logger.error(
@@ -2415,6 +2857,13 @@ class PlaywrightDMClient:
                 thread.id,
             )
             return False
+        candidate_norms = {_normalize_key_source(item) for item in candidates}
+        candidate_norms.discard("")
+        expected_for_click = list(self._expected_thread_ids(thread, click_href=""))
+        meta_link_id = _extract_thread_id(str(meta.get("link") or ""))
+        if meta_link_id and meta_link_id not in expected_for_click:
+            expected_for_click.append(meta_link_id)
+        expected_thread_ids = set(self._expand_thread_ids(expected_for_click))
 
         current_url = page.url or ""
         if not self._is_in_direct_workspace(page):
@@ -2478,18 +2927,53 @@ class PlaywrightDMClient:
                 if not row_valid:
                     continue
                 try:
-                    text_value = (row.inner_text() or "").lower()
+                    row_lines = self._row_lines(row)
                 except Exception:
                     continue
+                row_title = (row_lines[0] if row_lines else "").strip()
+                row_snippet = " | ".join(
+                    (line or "").strip() for line in row_lines[1:4] if (line or "").strip()
+                )
+                row_title_norm = _normalize_key_source(row_title)
+                text_norm = _normalize_key_source(" ".join(line for line in row_lines if line))
+                row_thread_key, _row_key_source, row_link = self._resolve_thread_key(
+                    page,
+                    row,
+                    title=row_title,
+                    peer_username=row_title,
+                    snippet=row_snippet,
+                )
+                row_ids = set(
+                    self._expand_thread_ids([row_thread_key, _extract_thread_id(row_link)])
+                )
                 scanned += 1
-                if not any(c.lower() in text_value for c in candidates):
+                id_match = bool(expected_thread_ids and row_ids and expected_thread_ids.intersection(row_ids))
+                title_match = (
+                    bool(row_title_norm)
+                    and bool(candidate_norms)
+                    and any(
+                        row_title_norm == candidate
+                        or row_title_norm in candidate
+                        or candidate in row_title_norm
+                        for candidate in candidate_norms
+                    )
+                )
+                text_match = (
+                    bool(text_norm)
+                    and bool(candidate_norms)
+                    and any(
+                        len(candidate) >= 3 and candidate in text_norm
+                        for candidate in candidate_norms
+                    )
+                )
+                if not id_match and not title_match and not text_match:
                     continue
 
                 matched_in_pass = True
                 row_preview = self._row_preview(row)
                 pre_url = page.url or ""
                 baseline_counts = self._snapshot_api_counts(
-                    self._expected_thread_ids(thread, click_href="")
+                    expected_for_click
                 )
                 clicked, click_href = self._click_row_target(
                     row,
@@ -2646,7 +3130,7 @@ class PlaywrightDMClient:
             logger.info("PlaywrightDM debug_dump reason=%s url=%s", reason, page.url)
         except Exception:
             pass
-        # Selectores mÃƒÂ­nimos para debugging
+        # Selectores mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nimos para debugging
         debug_selectors = (
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
@@ -2676,7 +3160,9 @@ class PlaywrightDMClient:
 
 
 _DM_RESPONSE_URL_HINTS = (
+    "/api/graphql",
     "/api/graphql/",
+    "/graphql/query",
     "/api/v1/direct_v2/",
     "/api/v1/direct/",
     "/direct_v2/",
@@ -2721,9 +3207,11 @@ def _is_message_api_url(url: str) -> bool:
     lowered = str(url or "").strip().lower()
     if not lowered:
         return False
-    if "/api/graphql/" in lowered:
+    if "/api/graphql" in lowered:
         return True
-    return any(hint in lowered for hint in _DM_RESPONSE_URL_HINTS if hint != "/api/graphql/")
+    if "/graphql/query" in lowered:
+        return True
+    return any(hint in lowered for hint in _DM_RESPONSE_URL_HINTS if hint not in {"/api/graphql/", "/api/graphql"})
 
 
 def _extract_api_messages_from_payload(
@@ -2734,12 +3222,16 @@ def _extract_api_messages_from_payload(
     messages: list[_APIMessageRecord] = []
     missing_timestamp: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    self_user_ids = {str(self_user_id or "").strip()}
+    self_user_ids.update(_extract_payload_self_user_ids(payload))
+    self_user_ids.discard("")
 
     for node, context_thread_id in _iter_payload_nodes(payload):
         parsed, missing = _extract_api_message_from_node(
             node,
             context_thread_id=context_thread_id,
             self_user_id=self_user_id,
+            self_user_ids=self_user_ids,
         )
         if parsed is not None:
             dedup_key = (parsed.thread_id, parsed.item_id)
@@ -2763,7 +3255,34 @@ def _payload_thread_ids(payload: Any, *, self_user_id: str) -> set[str]:
         thread_id = str(item.get("thread_id") or "").strip()
         if thread_id:
             ids.add(thread_id)
+    for alias_pair in _extract_payload_thread_alias_pairs(payload):
+        for alias in alias_pair:
+            value = str(alias or "").strip()
+            if value:
+                ids.add(value)
     return ids
+
+
+def _extract_payload_thread_alias_pairs(payload: Any) -> set[tuple[str, str]]:
+    alias_pairs: set[tuple[str, str]] = set()
+    for node, _context_thread_id in _iter_payload_nodes(payload):
+        thread_id = _coerce_str(node.get("thread_id") or node.get("thread_v2_id") or node.get("thread_pk"))
+        thread_key = _coerce_str(node.get("thread_key"))
+        if thread_id and thread_key and thread_id != thread_key:
+            alias_pairs.add((thread_id, thread_key))
+
+        nested_thread = node.get("thread")
+        if isinstance(nested_thread, dict):
+            nested_thread_id = _coerce_str(
+                nested_thread.get("thread_id")
+                or nested_thread.get("thread_v2_id")
+                or nested_thread.get("thread_pk")
+                or nested_thread.get("id")
+            )
+            nested_thread_key = _coerce_str(nested_thread.get("thread_key"))
+            if nested_thread_id and nested_thread_key and nested_thread_id != nested_thread_key:
+                alias_pairs.add((nested_thread_id, nested_thread_key))
+    return alias_pairs
 
 
 def _iter_payload_nodes(payload: Any) -> Iterator[tuple[dict[str, Any], str]]:
@@ -2790,6 +3309,7 @@ def _extract_api_message_from_node(
     *,
     context_thread_id: str,
     self_user_id: str,
+    self_user_ids: set[str],
 ) -> tuple[Optional[_APIMessageRecord], Optional[dict[str, str]]]:
     thread_id = _extract_thread_id_from_node(node) or str(context_thread_id or "").strip()
     sender_id = _extract_sender_id_from_node(node)
@@ -2819,10 +3339,17 @@ def _extract_api_message_from_node(
             }
         return None, None
 
-    direction = _resolve_direction_from_node(node, sender_id=sender_id, self_user_id=self_user_id)
+    direction = _resolve_direction_from_node(
+        node,
+        sender_id=sender_id,
+        self_user_id=self_user_id,
+        self_user_ids=self_user_ids,
+    )
     normalized_sender_id = sender_id
+    if direction == "outbound":
+        normalized_sender_id = str(self_user_id or "").strip() or normalized_sender_id
     if not normalized_sender_id:
-        normalized_sender_id = self_user_id if direction == "outbound" else "peer"
+        normalized_sender_id = "peer"
     normalized_item_id = item_id
     if not normalized_item_id:
         seed = f"{thread_id}|{normalized_sender_id}|{timestamp}|{text}".encode(
@@ -2949,6 +3476,7 @@ def _resolve_direction_from_node(
     *,
     sender_id: str,
     self_user_id: str,
+    self_user_ids: Optional[set[str]] = None,
 ) -> str:
     raw_direction = _coerce_str(
         node.get("direction")
@@ -2966,9 +3494,29 @@ def _resolve_direction_from_node(
         if isinstance(value, bool):
             return "outbound" if value else "inbound"
 
-    if sender_id and self_user_id and str(sender_id) == str(self_user_id):
+    aliases = {str(self_user_id or "").strip()}
+    if self_user_ids:
+        aliases.update(str(value or "").strip() for value in self_user_ids)
+    aliases.discard("")
+    if sender_id and str(sender_id).strip() in aliases:
         return "outbound"
     return "inbound"
+
+
+def _extract_payload_self_user_ids(payload: Any) -> set[str]:
+    ids: set[str] = set()
+    for node, _context_thread_id in _iter_payload_nodes(payload):
+        viewer = node.get("viewer")
+        if isinstance(viewer, dict):
+            for key in ("interop_messaging_user_fbid", "id", "pk", "user_id", "viewer_id"):
+                value = _coerce_str(viewer.get(key))
+                if value:
+                    ids.add(value)
+        for key in ("viewer_id", "viewer_fbid", "viewer_pk", "viewer_user_id"):
+            value = _coerce_str(node.get(key))
+            if value:
+                ids.add(value)
+    return ids
 
 
 def _coerce_str(value: Any) -> str:
@@ -3065,7 +3613,7 @@ def _thread_unread_count(node) -> int:
     if any(token in aria for token in _UNREAD_HINTS):
         return 1
 
-    # BÃƒÂºsqueda de badge por aria-label
+    # BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºsqueda de badge por aria-label
     try:
         badge = node.locator("span[aria-label*='unread'], span[aria-label*='sin leer'], span[aria-label*='no leido']")
         if badge.count():
@@ -3073,8 +3621,8 @@ def _thread_unread_count(node) -> int:
     except Exception:
         pass
 
-    # BÃƒÂºsqueda por "punto azul" (visual) - Instagram suele usar un div/span con fondo azul
-    # El color rgb(0, 149, 246) es el azul caracterÃƒÂ­stico de Instagram
+    # BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºsqueda por "punto azul" (visual) - Instagram suele usar un div/span con fondo azul
+    # El color rgb(0, 149, 246) es el azul caracterÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­stico de Instagram
     try:
         blue_dot = node.locator("div[style*='background-color: rgb(0, 149, 246)'], span[style*='background-color: rgb(0, 149, 246)']")
         if blue_dot.count() > 0:

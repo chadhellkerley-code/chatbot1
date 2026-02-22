@@ -1,9 +1,9 @@
 {
   "conversations": {
-    "matiid.life1|17848566815817461": {
+    "matiid.life1|104373560963709": {
       "account": "matiid.life1",
-      "thread_id": "17848566815817461",
-      "recipient_username": "Agustín Rondinelli | Ventas",
+      "thread_id": "104373560963709",
+      "recipient_username": "Activo",
       "stage": "initial",
       "messages_sent": [],
       "last_message_sent_at": null,
@@ -12,978 +12,78 @@
       "last_message_sender": null,
       "followup_stage": 0,
       "last_followup_sent_at": null,
-      "created_at": 1771026864.5381033,
-      "updated_at": 1771123010.6089594,
-      "last_interaction_at": 1771122995.047571,
+      "created_at": 1771593022.1121871,
+      "updated_at": 1771598354.189558,
+      "last_interaction_at": 1771598341.1685805,
       "source": "playwright",
-      "captured_at_epoch": 1771123010.600943,
+      "captured_at_epoch": 1771598354.1865644,
       "messages": [
         {
-          "message_id": "acc9519b4208",
+          "message_id": "bfd80aba8776",
           "direction": "outbound",
           "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
-          "timestamp_epoch": 1771123010.3929207
+          "timestamp_epoch": 1771598354.0185153
         },
         {
-          "message_id": "772df6d21195",
-          "direction": "inbound",
-          "text": "?\n?",
-          "timestamp_epoch": 1771123009.7608514
-        },
-        {
-          "message_id": "6f1927889e36",
-          "direction": "inbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771123009.2007868
-        },
-        {
-          "message_id": "d522f1a5cea1",
-          "direction": "outbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771123008.896752
-        }
-      ]
-    },
-    "matiid.life1|106172010783111": {
-      "account": "matiid.life1",
-      "thread_id": "106172010783111",
-      "recipient_username": "PATRICIO OLIVERA | Avatares & UGC AI sin grabar",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026869.1913528,
-      "updated_at": 1771029229.7993839,
-      "last_interaction_at": 1771029214.2506847,
-      "source": "playwright",
-      "captured_at_epoch": 1771029229.797383,
-      "messages": [
-        {
-          "message_id": "2dcf50819db9",
-          "direction": "outbound",
-          "text": "holaa que tal\nholaa que tal",
-          "timestamp_epoch": 1771029229.69736
-        }
-      ]
-    },
-    "matiid.life1|115449416514707": {
-      "account": "matiid.life1",
-      "thread_id": "115449416514707",
-      "recipient_username": "J♊",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026874.1482878,
-      "updated_at": 1771029235.0788207,
-      "last_interaction_at": 1771029214.2506847,
-      "source": "playwright",
-      "captured_at_epoch": 1771029235.0768209,
-      "messages": [
-        {
-          "message_id": "7d9102c38d5e",
-          "direction": "outbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771029235.0060632
-        }
-      ]
-    },
-    "matiid.life1|105472174188816": {
-      "account": "matiid.life1",
-      "thread_id": "105472174188816",
-      "recipient_username": "ALDMUZ",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026878.5609117,
-      "updated_at": 1771029239.6723316,
-      "last_interaction_at": 1771029214.2506847,
-      "source": "playwright",
-      "captured_at_epoch": 1771029239.6703308,
-      "messages": [
-        {
-          "message_id": "6e0e32af93d0",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771029239.6144936
-        }
-      ]
-    },
-    "mati.diazlife3|111178753608048": {
-      "account": "mati.diazlife3",
-      "thread_id": "111178753608048",
-      "recipient_username": "Mau Mau - venta de importados",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026972.9059875,
-      "updated_at": 1771029537.2552738,
-      "last_interaction_at": 1771029531.4147918,
-      "source": "playwright",
-      "captured_at_epoch": 1771029537.2532747,
-      "messages": [
-        {
-          "message_id": "ae5974e742a5",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771029537.1552486
-        }
-      ]
-    },
-    "mati.diazlife3|115932619800058": {
-      "account": "mati.diazlife3",
-      "thread_id": "115932619800058",
-      "recipient_username": "Paula Trapani",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026977.3847215,
-      "updated_at": 1771029541.8320425,
-      "last_interaction_at": 1771029531.4147918,
-      "source": "playwright",
-      "captured_at_epoch": 1771029541.8300395,
-      "messages": [
-        {
-          "message_id": "a5a8030d1931",
-          "direction": "outbound",
-          "text": "holaa que tal\nholaa que tal",
-          "timestamp_epoch": 1771029541.7707446
-        }
-      ]
-    },
-    "mati.diazlife3|17847428199585781": {
-      "account": "mati.diazlife3",
-      "thread_id": "17847428199585781",
-      "recipient_username": "santino_lucero",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026982.4730263,
-      "updated_at": 1771029546.6310215,
-      "last_interaction_at": 1771029531.4147918,
-      "source": "playwright",
-      "captured_at_epoch": 1771029546.629294,
-      "messages": [
-        {
-          "message_id": "1725ffb0eee3",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771029546.5555537
-        }
-      ]
-    },
-    "mati.diazlife3|17844396900454382": {
-      "account": "mati.diazlife3",
-      "thread_id": "17844396900454382",
-      "recipient_username": "🅶🅰🅱🆈 🅲🅰🆂🅰🅼🅰🆂🆂🅰 | Imperio Digital",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771026987.3274689,
-      "updated_at": 1771029551.1719756,
-      "last_interaction_at": 1771029531.4147918,
-      "source": "playwright",
-      "captured_at_epoch": 1771029551.1699789,
-      "messages": [
-        {
-          "message_id": "7477c1c94b53",
-          "direction": "outbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771029551.0949583
-        }
-      ]
-    },
-    "mati.diazlife3|106917130706540": {
-      "account": "mati.diazlife3",
-      "thread_id": "106917130706540",
-      "recipient_username": "João Paulo Vasquez Alva",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771029429.517206,
-      "updated_at": 1771029555.6680472,
-      "last_interaction_at": 1771029531.4147918,
-      "source": "playwright",
-      "captured_at_epoch": 1771029555.6680472,
-      "messages": [
-        {
-          "message_id": "f119d1da3482",
-          "direction": "outbound",
-          "text": "holaa que tal\nholaa que tal",
-          "timestamp_epoch": 1771029555.6146688
-        }
-      ]
-    },
-    "mati.diazlife3|17842408427645477": {
-      "account": "mati.diazlife3",
-      "thread_id": "17842408427645477",
-      "recipient_username": "Jhoan Mouses",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771029434.0925403,
-      "updated_at": 1771029560.155381,
-      "last_interaction_at": 1771029531.4147918,
-      "source": "playwright",
-      "captured_at_epoch": 1771029560.1543796,
-      "messages": [
-        {
-          "message_id": "d124f355e605",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771029560.0966842
-        }
-      ]
-    },
-    "matidiazlife|17846253386673734": {
-      "account": "matidiazlife",
-      "thread_id": "17846253386673734",
-      "recipient_username": "ammbarc__",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": 1771034209.6425385,
-      "last_message_id_seen": "5fba3f71c984",
-      "last_message_sender": "lead",
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033787.8275042,
-      "updated_at": 1771034209.7155578,
-      "last_interaction_at": 1771034198.2791946,
-      "source": "playwright",
-      "captured_at_epoch": 1771034209.003165,
-      "messages": [
-        {
-          "message_id": "5fba3f71c984",
-          "direction": "inbound",
-          "text": "osea en lo q yo mas me manejo ahora es marketing digamos\nosea en lo q yo mas me manejo ahora es marketing digamos",
-          "timestamp_epoch": 1771034208.9040146
-        },
-        {
-          "message_id": "be6e5ee11b66",
-          "direction": "inbound",
-          "text": "como seria esoo?\ncomo seria esoo?",
-          "timestamp_epoch": 1771034208.7725515
-        },
-        {
-          "message_id": "52416846da92",
-          "direction": "outbound",
-          "text": "",
-          "timestamp_epoch": 1771034208.6393726
-        },
-        {
-          "message_id": "282c66dfc153",
-          "direction": "outbound",
-          "text": "",
-          "timestamp_epoch": 1771034208.4870894
-        },
-        {
-          "message_id": "585b5cd78b85",
-          "direction": "outbound",
-          "text": "Ver transcripción",
-          "timestamp_epoch": 1771034208.3399644
-        },
-        {
-          "message_id": "d9f8b6977c50",
-          "direction": "inbound",
-          "text": "🙌🏻🙌🏻",
-          "timestamp_epoch": 1771034208.1599483
-        },
-        {
-          "message_id": "8acf0798cab7",
-          "direction": "inbound",
-          "text": "graciass posta por el consejo!!!\ngraciass posta por el consejo!!!",
-          "timestamp_epoch": 1771034207.84987
-        },
-        {
-          "message_id": "39b95384ff3f",
-          "direction": "inbound",
-          "text": "a mi me parecee tambien lo mismoo\na mi me parecee tambien lo mismoo",
-          "timestamp_epoch": 1771034207.7348402
-        },
-        {
-          "message_id": "c6d88e461cb2",
-          "direction": "inbound",
-          "text": "claroo si\nclaroo si",
-          "timestamp_epoch": 1771034207.6258104
-        },
-        {
-          "message_id": "7fe872e66ab4",
-          "direction": "outbound",
-          "text": "",
-          "timestamp_epoch": 1771034207.341739
-        }
-      ]
-    },
-    "matidiazlife|17842134357345557": {
-      "account": "matidiazlife",
-      "thread_id": "17842134357345557",
-      "recipient_username": "narchito",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033845.026507,
-      "updated_at": 1771070077.9615602,
-      "last_interaction_at": 1771070056.7469676,
-      "source": "playwright",
-      "captured_at_epoch": 1771070077.9615602,
-      "messages": [
-        {
-          "message_id": "a770d113be6d",
-          "direction": "outbound",
-          "text": "",
-          "timestamp_epoch": 1771070077.895605
-        },
-        {
-          "message_id": "4fe6f7275ab9",
-          "direction": "outbound",
-          "text": "",
-          "timestamp_epoch": 1771070077.790463
-        },
-        {
-          "message_id": "2ba65c20fc1f",
-          "direction": "outbound",
-          "text": "Ver transcripción",
-          "timestamp_epoch": 1771070077.6956756
-        },
-        {
-          "message_id": "1dcb0cbb8595",
-          "direction": "inbound",
-          "text": "",
-          "timestamp_epoch": 1771070077.6106362
-        },
-        {
-          "message_id": "f81308766d0d",
-          "direction": "inbound",
-          "text": "matidiazlife",
-          "timestamp_epoch": 1771070077.5154023
-        }
-      ]
-    },
-    "matidiazlife|17843745135172423": {
-      "account": "matidiazlife",
-      "thread_id": "17843745135172423",
-      "recipient_username": "JHORDY BENEL | NETWORKER",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": 1771033849.8040679,
-      "last_message_id_seen": "0dea3df52220",
-      "last_message_sender": "lead",
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033849.7930586,
-      "updated_at": 1771033849.814055,
-      "last_interaction_at": 1771033777.2825642,
-      "source": "playwright",
-      "captured_at_epoch": 1771033849.79106,
-      "messages": [
-        {
-          "message_id": "0dea3df52220",
-          "direction": "inbound",
-          "text": "Buenas noches\nBuenas noches",
-          "timestamp_epoch": 1771033849.7332003
-        },
-        {
-          "message_id": "3410dad28419",
-          "direction": "outbound",
-          "text": "buenas noches!!\nbuenas noches!!",
-          "timestamp_epoch": 1771033849.650361
-        }
-      ]
-    },
-    "matidiazlife|110548620339612": {
-      "account": "matidiazlife",
-      "thread_id": "110548620339612",
-      "recipient_username": "Gaston",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033922.8280177,
-      "updated_at": 1771070082.6542244,
-      "last_interaction_at": 1771070056.7469676,
-      "source": "playwright",
-      "captured_at_epoch": 1771070082.6542244,
-      "messages": [
-        {
-          "message_id": "a0232943351b",
-          "direction": "outbound",
-          "text": "Te queria hacer una pregunta\nTe queria hacer una pregunta",
-          "timestamp_epoch": 1771070082.5982196
-        }
-      ]
-    },
-    "matidiazlife|124836728907314": {
-      "account": "matidiazlife",
-      "thread_id": "124836728907314",
-      "recipient_username": "MIGUEL INIESTA VIDAL",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033927.4000816,
-      "updated_at": 1771055226.6278117,
-      "last_interaction_at": 1771055205.7461994,
-      "source": "playwright",
-      "captured_at_epoch": 1771055226.6268096,
-      "messages": [
-        {
-          "message_id": "b9aa408b6695",
-          "direction": "outbound",
-          "text": "holaaa\nholaaa",
-          "timestamp_epoch": 1771055226.5612297
-        }
-      ]
-    },
-    "matidiazlife|17843585196024813": {
-      "account": "matidiazlife",
-      "thread_id": "17843585196024813",
-      "recipient_username": "YESENIA SATURNO | 🔥Mentora de Ventas High Ticket 💰",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033932.2828898,
-      "updated_at": 1771043416.4424996,
-      "last_interaction_at": 1771043395.09969,
-      "source": "playwright",
-      "captured_at_epoch": 1771043416.4404998,
-      "messages": [
-        {
-          "message_id": "4f0499dd2efd",
-          "direction": "outbound",
-          "text": "como estas?\ncomo estas?",
-          "timestamp_epoch": 1771043416.3822713
-        }
-      ]
-    },
-    "matidiazlife|111007260289981": {
-      "account": "matidiazlife",
-      "thread_id": "111007260289981",
-      "recipient_username": "Evelyn Angeles Matamala Vera",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033937.0332887,
-      "updated_at": 1771037223.5215316,
-      "last_interaction_at": 1771037196.5982783,
-      "source": "playwright",
-      "captured_at_epoch": 1771037223.5215316,
-      "messages": [
-        {
-          "message_id": "337e8dcd6d51",
-          "direction": "outbound",
-          "text": "como estas?\ncomo estas?",
-          "timestamp_epoch": 1771037223.4628747
-        }
-      ]
-    },
-    "matidiazlife|105705591055065": {
-      "account": "matidiazlife",
-      "thread_id": "105705591055065",
-      "recipient_username": "Joel Bonanno",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033942.3750212,
-      "updated_at": 1771033942.3750212,
-      "last_interaction_at": 1771033777.2825642,
-      "source": "playwright",
-      "captured_at_epoch": 1771033942.3730218,
-      "messages": [
-        {
-          "message_id": "a735c43b6c5d",
-          "direction": "outbound",
-          "text": "como estas?\ncomo estas?",
-          "timestamp_epoch": 1771033942.3164124
-        }
-      ]
-    },
-    "matidiazlife|112636436794270": {
-      "account": "matidiazlife",
-      "thread_id": "112636436794270",
-      "recipient_username": "Damian Durán",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033947.6623425,
-      "updated_at": 1771033947.6623425,
-      "last_interaction_at": 1771033777.2825642,
-      "source": "playwright",
-      "captured_at_epoch": 1771033947.6603427,
-      "messages": [
-        {
-          "message_id": "b4c0bd39c5f9",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771033947.5909536
-        }
-      ]
-    },
-    "matidiazlife|17846113935614130": {
-      "account": "matidiazlife",
-      "thread_id": "17846113935614130",
-      "recipient_username": "onlycheckm8ss",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033952.713529,
-      "updated_at": 1771033952.713529,
-      "last_interaction_at": 1771033777.2825642,
-      "source": "playwright",
-      "captured_at_epoch": 1771033952.7125282,
-      "messages": [
-        {
-          "message_id": "ee91594c9aec",
-          "direction": "outbound",
-          "text": "hola\nhola",
-          "timestamp_epoch": 1771033952.648422
-        }
-      ]
-    },
-    "matidiazlife|112828203447966": {
-      "account": "matidiazlife",
-      "thread_id": "112828203447966",
-      "recipient_username": "Laura D. Klein",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771033957.9747734,
-      "updated_at": 1771033957.9747734,
-      "last_interaction_at": 1771033777.2825642,
-      "source": "playwright",
-      "captured_at_epoch": 1771033957.9747734,
-      "messages": [
-        {
-          "message_id": "0f0b337b15eb",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771033957.9173596
-        }
-      ]
-    },
-    "matidiazlife|17847288677760080": {
-      "account": "matidiazlife",
-      "thread_id": "17847288677760080",
-      "recipient_username": "RONALD TOURS / TRAVEL AGENCY",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": 1771043516.746169,
-      "last_message_id_seen": "e4d96c8a506d",
-      "last_message_sender": "lead",
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771043516.7215276,
-      "updated_at": 1771070072.482968,
-      "last_interaction_at": 1771070056.7469676,
-      "source": "playwright",
-      "captured_at_epoch": 1771070072.482968,
-      "messages": [
-        {
-          "message_id": "2e9d46fdd7bb",
-          "direction": "outbound",
-          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
-          "timestamp_epoch": 1771070072.4268205
-        },
-        {
-          "message_id": "6f8c814c2c42",
-          "direction": "inbound",
-          "text": "",
-          "timestamp_epoch": 1771070072.3386586
-        },
-        {
-          "message_id": "836ccedb50d8",
-          "direction": "inbound",
-          "text": "tinitomultiservicios",
-          "timestamp_epoch": 1771070072.2504969
-        },
-        {
-          "message_id": "8ff7683a7c8a",
-          "direction": "outbound",
-          "text": "Como va todo?\nComo va todo?",
-          "timestamp_epoch": 1771070072.170129
-        }
-      ]
-    },
-    "matidiazlife|101375444595538": {
-      "account": "matidiazlife",
-      "thread_id": "101375444595538",
-      "recipient_username": "Alejo",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": 1771055335.1886964,
-      "last_message_id_seen": "033e21df7d59",
-      "last_message_sender": "lead",
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771055335.1659403,
-      "updated_at": 1771070066.7878153,
-      "last_interaction_at": 1771070056.7469676,
-      "source": "playwright",
-      "captured_at_epoch": 1771070066.7878153,
-      "messages": [
-        {
-          "message_id": "3ab3dfa2f127",
-          "direction": "outbound",
-          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
-          "timestamp_epoch": 1771070066.723538
-        },
-        {
-          "message_id": "cee41f1a0469",
-          "direction": "inbound",
-          "text": "",
-          "timestamp_epoch": 1771070066.6110811
-        },
-        {
-          "message_id": "8219cc672a10",
-          "direction": "inbound",
-          "text": "",
-          "timestamp_epoch": 1771070066.4738517
-        },
-        {
-          "message_id": "0e590b8f9ca1",
-          "direction": "inbound",
-          "text": "si bueno, desde ya te agradezco pero realmente mis necesidades e intereses están pasando por otros lados, descreo la posibilidad de que pueda enrolarme en ese rubro.\n\ndesde ya la opinión que te puedo brindar no creo que sea constructiva.\nsi bueno, desde ya te agradezco pero realmente mis necesidades e intereses están pasando por otros lados, descreo la posibilidad de que pueda enrolarme en ese rubro.\n\ndesde ya la opinión que te puedo brindar no creo que sea constructiva.",
-          "timestamp_epoch": 1771070066.34545
-        },
-        {
-          "message_id": "9f9694f03a88",
-          "direction": "inbound",
-          "text": "igual te agradezco mucho loco por haberme contactado y demás, yo hoy por hoy estoy inmerso en varios proyectos tanto a nivel grupal como personal, no me estaría alcanzando el tiempo para hacer otra cosa y no lo estaría considerando necesario\nigual te agradezco mucho loco por haberme contactado y demás, yo hoy por hoy estoy inmerso en varios proyectos tanto a nivel grupal como personal, no me estaría alcanzando el tiempo para hacer otra cosa y no lo estaría considerando necesario",
-          "timestamp_epoch": 1771070066.233033
-        },
-        {
-          "message_id": "808f927e5361",
-          "direction": "inbound",
-          "text": "ah mira, está perfecto\nah mira, está perfecto",
-          "timestamp_epoch": 1771070066.1210222
-        },
-        {
-          "message_id": "44a100fc068b",
-          "direction": "inbound",
-          "text": "de igual manera, ¿Que requiere lo que me querés proponer?\nde igual manera, ¿Que requiere lo que me querés proponer?",
-          "timestamp_epoch": 1771070066.025011
-        },
-        {
-          "message_id": "1077a4c8ed2b",
-          "direction": "inbound",
-          "text": "soy de Cuesta Blanca, igual no te hagas drama en explicarme qué te voy a entender\nsoy de Cuesta Blanca, igual no te hagas drama en explicarme qué te voy a entender",
-          "timestamp_epoch": 1771070065.8969936
-        },
-        {
-          "message_id": "59fa6ceca322",
-          "direction": "inbound",
-          "text": "escucho\nescucho",
-          "timestamp_epoch": 1771070065.7608025
-        }
-      ]
-    },
-    "matidiazlife|124635402261001": {
-      "account": "matidiazlife",
-      "thread_id": "124635402261001",
-      "recipient_username": "Lucio 🌀🇦🇷",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120079.1383433,
-      "updated_at": 1771123860.213717,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123860.213717,
-      "messages": [
-        {
-          "message_id": "b9a13a0dffc9",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771123860.1456182
-        }
-      ]
-    },
-    "matidiazlife|17852500181783779": {
-      "account": "matidiazlife",
-      "thread_id": "17852500181783779",
-      "recipient_username": "_.ibraaa_.07",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120084.0754554,
-      "updated_at": 1771123864.967566,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123864.967566,
-      "messages": [
-        {
-          "message_id": "eda018b37114",
-          "direction": "outbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771123864.8787892
-        }
-      ]
-    },
-    "matidiazlife|108375163891821": {
-      "account": "matidiazlife",
-      "thread_id": "108375163891821",
-      "recipient_username": "Gabriel Bustos",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120088.9622655,
-      "updated_at": 1771123870.1469562,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123870.1469562,
-      "messages": [
-        {
-          "message_id": "d249ec218c20",
-          "direction": "outbound",
-          "text": "holaa que tal\nholaa que tal",
-          "timestamp_epoch": 1771123870.086143
-        }
-      ]
-    },
-    "matidiazlife|103749987686741": {
-      "account": "matidiazlife",
-      "thread_id": "103749987686741",
-      "recipient_username": "Claudio Graizman",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120093.5902324,
-      "updated_at": 1771123874.902803,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123874.8948019,
-      "messages": [
-        {
-          "message_id": "c7abacba9191",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771123874.7747881
-        }
-      ]
-    },
-    "matidiazlife|122992499092140": {
-      "account": "matidiazlife",
-      "thread_id": "122992499092140",
-      "recipient_username": "mariela.novas_psicologa",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120098.3222706,
-      "updated_at": 1771123879.662439,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123879.6544385,
-      "messages": [
-        {
-          "message_id": "a085c52e2cde",
-          "direction": "outbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771123879.5917723
-        }
-      ]
-    },
-    "matidiazlife|112068973522424": {
-      "account": "matidiazlife",
-      "thread_id": "112068973522424",
-      "recipient_username": "Ed Mon",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120103.5298212,
-      "updated_at": 1771123884.6690073,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123884.6690073,
-      "messages": [
-        {
-          "message_id": "39fe5f11100b",
-          "direction": "outbound",
-          "text": "holaa que tal\nholaa que tal",
-          "timestamp_epoch": 1771123884.596906
-        }
-      ]
-    },
-    "matidiazlife|17842281224223702": {
-      "account": "matidiazlife",
-      "thread_id": "17842281224223702",
-      "recipient_username": "elian",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": null,
-      "last_message_id_seen": null,
-      "last_message_sender": null,
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120108.7960546,
-      "updated_at": 1771123889.6372302,
-      "last_interaction_at": 1771123853.722721,
-      "source": "playwright",
-      "captured_at_epoch": 1771123889.6292276,
-      "messages": [
-        {
-          "message_id": "81b83b2236f0",
-          "direction": "outbound",
-          "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771123889.5687513
-        }
-      ]
-    },
-    "matidiazlife|104885590908254": {
-      "account": "matidiazlife",
-      "thread_id": "104885590908254",
-      "recipient_username": "VIBRA⚡️/Quemador de grasa/ suplementos / pérdida de peso",
-      "stage": "initial",
-      "messages_sent": [],
-      "last_message_sent_at": null,
-      "last_message_received_at": 1771365507.865377,
-      "last_message_id_seen": "68ab85396dae",
-      "last_message_sender": "lead",
-      "followup_stage": 0,
-      "last_followup_sent_at": null,
-      "created_at": 1771120114.4580312,
-      "updated_at": 1771365507.8974972,
-      "last_interaction_at": 1771365498.3418891,
-      "source": "playwright",
-      "captured_at_epoch": 1771365507.7610612,
-      "messages": [
-        {
-          "message_id": "68ab85396dae",
+          "message_id": "255f1eee8f04",
           "direction": "inbound",
           "text": "Hola\nHola",
-          "timestamp_epoch": 1771365507.6619081
+          "timestamp_epoch": 1771598353.7922747
         },
         {
-          "message_id": "fb88ff4651a3",
+          "message_id": "8932277d2312",
           "direction": "outbound",
-          "text": "como va\ncomo va",
-          "timestamp_epoch": 1771365507.5294042
+          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
+          "timestamp_epoch": 1771598353.5372276
+        },
+        {
+          "message_id": "3d13ca1dc23f",
+          "direction": "inbound",
+          "text": "Si dime\nSi dime",
+          "timestamp_epoch": 1771598353.2461364
+        },
+        {
+          "message_id": "8adf112b0450",
+          "direction": "inbound",
+          "text": "Hola\nHola",
+          "timestamp_epoch": 1771598352.861038
+        },
+        {
+          "message_id": "6fb3c86a53b1",
+          "direction": "outbound",
+          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
+          "timestamp_epoch": 1771598352.1038473
+        },
+        {
+          "message_id": "448d18ff8e84",
+          "direction": "inbound",
+          "text": "Que tal todo\nQue tal todo",
+          "timestamp_epoch": 1771598351.8317807
+        },
+        {
+          "message_id": "4912ad9493e4",
+          "direction": "outbound",
+          "text": "holaaa\nholaaa",
+          "timestamp_epoch": 1771598351.1857388
+        },
+        {
+          "message_id": "9bfddebdc1c8",
+          "direction": "outbound",
+          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
+          "timestamp_epoch": 1771598350.8766623
+        },
+        {
+          "message_id": "73e786085592",
+          "direction": "inbound",
+          "text": "Holaaa\nHolaaa",
+          "timestamp_epoch": 1771598350.629601
         }
       ]
     },
-    "matiid.life1|108429263881408": {
+    "matiid.life1|17844041127680891": {
       "account": "matiid.life1",
-      "thread_id": "108429263881408",
-      "recipient_username": "HW FUNCTIONAL Entrenamiento de Fuerza Funcional",
+      "thread_id": "17844041127680891",
+      "recipient_username": "Usuario de Instagram",
       "stage": "initial",
       "messages_sent": [],
       "last_message_sent_at": null,
@@ -992,17 +92,1653 @@
       "last_message_sender": null,
       "followup_stage": 0,
       "last_followup_sent_at": null,
-      "created_at": 1771123002.1482053,
-      "updated_at": 1771123002.1482053,
-      "last_interaction_at": 1771122995.047571,
+      "created_at": 1771593942.015109,
+      "updated_at": 1771598361.7600334,
+      "last_interaction_at": 1771598354.3450172,
       "source": "playwright",
-      "captured_at_epoch": 1771123002.1322052,
+      "captured_at_epoch": 1771598361.7540295,
       "messages": [
         {
-          "message_id": "ab0d6c5d6849",
+          "message_id": "ae12697b501b",
+          "direction": "outbound",
+          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
+          "timestamp_epoch": 1771598361.5248785
+        },
+        {
+          "message_id": "1190721f835c",
+          "direction": "inbound",
+          "text": "Hola usted me envió este mensaje\nHola usted me envió este mensaje",
+          "timestamp_epoch": 1771598361.2559626
+        },
+        {
+          "message_id": "4110e54a2eb5",
+          "direction": "inbound",
+          "text": "tengo una duda",
+          "timestamp_epoch": 1771598360.940008
+        },
+        {
+          "message_id": "4a4086689e1b",
+          "direction": "outbound",
+          "text": "Gracias por tu mensaje. Como te puedo ayudar?\nGracias por tu mensaje. Como te puedo ayudar?",
+          "timestamp_epoch": 1771598360.7190912
+        },
+        {
+          "message_id": "b7e44a61b875",
+          "direction": "inbound",
+          "text": "Las cotizaciones son sin compromiso y mi asesoría es gratuita.\nLas cotizaciones son sin compromiso y mi asesoría es gratuita.",
+          "timestamp_epoch": 1771598360.4095116
+        },
+        {
+          "message_id": "092e6dd36984",
+          "direction": "inbound",
+          "text": "A ver si te puedo ayudar\nA ver si te puedo ayudar",
+          "timestamp_epoch": 1771598358.8031273
+        },
+        {
+          "message_id": "45830ef632d4",
+          "direction": "inbound",
+          "text": "Cuéntame que duda tienes\nCuéntame que duda tienes",
+          "timestamp_epoch": 1771598358.4517274
+        },
+        {
+          "message_id": "34e9c1e18134",
+          "direction": "inbound",
+          "text": "Hola cómo estás ? Nose por qué tu mensaje me llegó oculto… lo acabo de ver\nHola cómo estás ? Nose por qué tu mensaje me llegó oculto… lo acabo de ver",
+          "timestamp_epoch": 1771598358.3090448
+        },
+        {
+          "message_id": "4e433ba4a975",
           "direction": "outbound",
           "text": "tengo una duda\ntengo una duda",
-          "timestamp_epoch": 1771123002.0003757
+          "timestamp_epoch": 1771598358.062709
+        }
+      ]
+    },
+    "matiid.life1|104789137583521": {
+      "account": "matiid.life1",
+      "thread_id": "104789137583521",
+      "recipient_username": "Alojamiento Deportivo en Mar Del Plata 🌞",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771593943.950252,
+      "updated_at": 1771598365.029852,
+      "last_interaction_at": 1771598362.0134845,
+      "source": "playwright",
+      "captured_at_epoch": 1771598365.029852,
+      "messages": [
+        {
+          "message_id": "f2eb2ca3b87d",
+          "direction": "outbound",
+          "text": "tengo una duda\ntengo una duda",
+          "timestamp_epoch": 1771598364.823822
+        }
+      ]
+    },
+    "matiid.life1|107470890649750": {
+      "account": "matiid.life1",
+      "thread_id": "107470890649750",
+      "recipient_username": "Juan Diego Mosquera Cruz",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771593945.955816,
+      "updated_at": 1771598368.1966202,
+      "last_interaction_at": 1771598365.2855625,
+      "source": "playwright",
+      "captured_at_epoch": 1771598368.193623,
+      "messages": [
+        {
+          "message_id": "26a7e54f91d5",
+          "direction": "outbound",
+          "text": "como va\ncomo va",
+          "timestamp_epoch": 1771598367.9275234
+        }
+      ]
+    },
+    "matiid.life1|17847770970578913": {
+      "account": "matiid.life1",
+      "thread_id": "17847770970578913",
+      "recipient_username": "J2 Refacciones | Tu depto vale más 💵",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771593947.8195508,
+      "updated_at": 1771598372.1200325,
+      "last_interaction_at": 1771598368.403028,
+      "source": "playwright",
+      "captured_at_epoch": 1771598372.0830228,
+      "messages": [
+        {
+          "message_id": "ce9eec001c59",
+          "direction": "outbound",
+          "text": "holaa que tal\nholaa que tal",
+          "timestamp_epoch": 1771598371.091908
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260145096594813454": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260145096594813454",
+      "recipient_username": "MATIAS DIAZ",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "Vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771771187.7656631,
+          "last_sent_at": 1771771187.7656631,
+          "message_id": "89df8b560b5f75a66c7da14d81726479ea397643",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771771187.7656631,
+      "last_message_received_at": 1771771170.9545887,
+      "last_message_id_seen": "mid.$cAD82S4PaQcCitw6zp2chclpYxw3U",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771627604.9447522,
+      "updated_at": 1771771187.7832859,
+      "last_interaction_at": 1771771157.6574595,
+      "source": "playwright",
+      "captured_at_epoch": 1771771170.9322746,
+      "messages": [
+        {
+          "message_id": "mid.$cAD82S4PaQcCitw6zp2chclpYxw3U",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771771095.975
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCis2FyxGcghwmHUV1d",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771709409.988
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCirnGUJGcfSxDNJxyN",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771626581.028
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCirklRYGcfQQAQkwjc",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771623942.496
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqq8E-mceWm3qUjxp",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771563498.746
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqyakmceWdRMXju3",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771563340.434
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqYYoGceWDMI3Bsx",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771562913.952
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqXIJGceWB--hg2g",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771562893.348
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqW44WceWBvKrc2d",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771562889.441
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqpZ-V2ceVEwqCuuf",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771561891.415
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276023756635767867": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276023756635767867",
+      "recipient_username": "Usuario de Instagram",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771627620.1962094,
+      "updated_at": 1771648959.8763106,
+      "last_interaction_at": 1771648945.896491,
+      "source": "playwright",
+      "captured_at_epoch": 1771648959.8693082,
+      "messages": [
+        {
+          "message_id": "mid.$cAAANqUoZ6Maiqkph22ceQUVFhpPl",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771556903.387
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6MaiqkNIY2ceP3_PDYYG",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771556438.115
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6MaiqjtNUGcePYBKhDJh",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771555915.088
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6Maio1yYR2cchdPrVFxY",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771440656.455
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6Maio1srfGcchXi7VDj8",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771440563.068
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6Maio1sFMmcchW8nGnvG",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771440553.266
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6Maio1rlhmcchWcUzSol",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771440545.158
+        },
+        {
+          "message_id": "mid.$cAAANqUoZ6Maifrx1mGcTXce32iMY",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1770826182.04
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260114679287849888": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260114679287849888",
+      "recipient_username": "Alojamiento Deportivo en Mar Del Plata 🌞",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771627634.4655323,
+      "updated_at": 1771648973.4678593,
+      "last_interaction_at": 1771648959.934298,
+      "source": "playwright",
+      "captured_at_epoch": 1771648973.4468613,
+      "messages": [
+        {
+          "message_id": "mid.$cAD836MGOXhyiom8TvWccSnGlrv60",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771425090.493
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260130627102922844": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260130627102922844",
+      "recipient_username": "Juan Diego Mosquera Cruz",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771627648.2603495,
+      "updated_at": 1771648987.0872557,
+      "last_interaction_at": 1771648973.540517,
+      "source": "playwright",
+      "captured_at_epoch": 1771648987.0872557,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8JGFqe-yuiolUlKWccQ_XaSUnW",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771423391.017
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276040069543665889": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276040069543665889",
+      "recipient_username": "J2 Refacciones | Tu depto vale más 💵",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771627661.9152231,
+      "updated_at": 1771649001.2811432,
+      "last_interaction_at": 1771648987.1492195,
+      "source": "playwright",
+      "captured_at_epoch": 1771649001.277142,
+      "messages": [
+        {
+          "message_id": "mid.$cAAAA0t5n7FyiolCd-mccQtGOpI1J",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771423094.266
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260099563639356300": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260099563639356300",
+      "recipient_username": "Tiago rojas",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771631081.7240345,
+      "updated_at": 1771649015.2892795,
+      "last_interaction_at": 1771649001.3386214,
+      "source": "playwright",
+      "captured_at_epoch": 1771649015.2792764,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8BawwJonSiok4VJGccQjHbngOJ",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771422928.164
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244259994396813204058": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244259994396813204058",
+      "recipient_username": "Castillo | Emprendedor en EEUU 🇺🇸",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771631095.5227103,
+      "updated_at": 1771633245.2601216,
+      "last_interaction_at": 1771633229.714396,
+      "source": "playwright",
+      "captured_at_epoch": 1771633245.2601216,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8DW4TCtNiioh5XUGccNkJMZzNh",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771419799.376
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260126251200025598": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260126251200025598",
+      "recipient_username": "Alejandro jimenez",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771631110.1723645,
+      "updated_at": 1771633261.258228,
+      "last_interaction_at": 1771633245.2651272,
+      "source": "playwright",
+      "captured_at_epoch": 1771633261.258228,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8P4j7sXcaiof0m2GccLfXxNeHA",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771417624.28
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276135741226133547": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276135741226133547",
+      "recipient_username": "Patricio Manduca",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771631125.4610283,
+      "updated_at": 1771633276.9523656,
+      "last_interaction_at": 1771633261.2632294,
+      "source": "playwright",
+      "captured_at_epoch": 1771633276.9523656,
+      "messages": [
+        {
+          "message_id": "mid.$cAAAOYwRAXhailRRShmcY88C596sd",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771201038.982
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244259985677427407715": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244259985677427407715",
+      "recipient_username": "Usuario de Instagram",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638482.7263112,
+      "updated_at": 1771651396.4654207,
+      "last_interaction_at": 1771651369.4908588,
+      "source": "playwright",
+      "captured_at_epoch": 1771651396.45842,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8Gr-NaNUaiRzlK2GcFfPyYMDkU",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1769894839.0
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276093622504345478": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276093622504345478",
+      "recipient_username": "WAD",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638742.5410125,
+      "updated_at": 1771651887.830646,
+      "last_interaction_at": 1771651871.717146,
+      "source": "playwright",
+      "captured_at_epoch": 1771651887.830646,
+      "messages": [
+        {
+          "message_id": "mid.$cAAAPKe9Tifuid6Yp0mcRmDWGC9Sk",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1770707280.338
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244259986861677291935": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244259986861677291935",
+      "recipient_username": "Tatiana Arias",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638759.4220998,
+      "updated_at": 1771651906.0989532,
+      "last_interaction_at": 1771651887.8446496,
+      "source": "playwright",
+      "captured_at_epoch": 1771651906.0989532,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8J6WgTW7SiVtje7mcJZOO3AtkY",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1770156955.374
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260077184401604671": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260077184401604671",
+      "recipient_username": "Finance & Investment Club Uniandes 🇨🇴",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638774.4240048,
+      "updated_at": 1771651926.3191786,
+      "last_interaction_at": 1771651906.1159582,
+      "source": "playwright",
+      "captured_at_epoch": 1771651926.3191786,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8JJkNOiKeiVs7QmWcJYmAH5NEX",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1770156296.345
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276032346682691261": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276032346682691261",
+      "recipient_username": "Mario Peláez",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638790.1166196,
+      "updated_at": 1771651950.8930576,
+      "last_interaction_at": 1771651926.326187,
+      "source": "playwright",
+      "captured_at_epoch": 1771651950.8930576,
+      "messages": [
+        {
+          "message_id": "mid.$cAAADcYp8l_SiVRIiQGcI8zZUze7C",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1770127153.728
+        },
+        {
+          "message_id": "mid.$cAAADcYp8l_SiVPx5M2cI7csFH993",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1770125734.195
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260128819923105604": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260128819923105604",
+      "recipient_username": "Mati Zimmerman | Desarrollo Personal & Productos digitales",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638805.9488487,
+      "updated_at": 1771638805.9488487,
+      "last_interaction_at": 1771638790.1226194,
+      "source": "playwright",
+      "captured_at_epoch": 1771638805.9488487,
+      "messages": [
+        {
+          "message_id": "mid.$cAD83nWxH8uOiVPU7mGcI6_ozs0l0",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1770125259.672
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276031860514691261": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276031860514691261",
+      "recipient_username": "Óscar A. Díaz del Castillo B.",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638821.6190217,
+      "updated_at": 1771638821.6190217,
+      "last_interaction_at": 1771638805.9548502,
+      "source": "playwright",
+      "captured_at_epoch": 1771638821.6190217,
+      "messages": [
+        {
+          "message_id": "mid.$cAAADRLu4OZmiRzxqa2cFfcQWX6hC",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1769895043.691
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260074548448527099": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260074548448527099",
+      "recipient_username": "Leonel Saldivar - Mentor en Membresías",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638837.2569933,
+      "updated_at": 1771638837.2569933,
+      "last_interaction_at": 1771638821.6240242,
+      "source": "playwright",
+      "captured_at_epoch": 1771638837.2569933,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8L4kpow9iiRzQDLWcFe6pmCajE",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1769894492.973
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260129304863056336": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260129304863056336",
+      "recipient_username": "Inteligencia Artificial | Setters IA | Avatares y modelos de IA",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638852.463065,
+      "updated_at": 1771638852.463065,
+      "last_interaction_at": 1771638837.263998,
+      "source": "playwright",
+      "captured_at_epoch": 1771638852.463065,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8KtzDZGn6iRzGrB2cFexSChZFs",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1769894339.335
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260114238654566313": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260114238654566313",
+      "recipient_username": "Manuela Villegas Narváez",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638867.6825047,
+      "updated_at": 1771638867.6825047,
+      "last_interaction_at": 1771638852.4690657,
+      "source": "playwright",
+      "captured_at_epoch": 1771638867.6825047,
+      "messages": [
+        {
+          "message_id": "mid.$cAD82EzncVf-iRy5NwmcFej2AKrlY",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1769894118.85
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260181027831218779": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260181027831218779",
+      "recipient_username": "Axel Jutoran",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771638882.6857743,
+      "updated_at": 1771638882.6857743,
+      "last_interaction_at": 1771638867.6885033,
+      "source": "playwright",
+      "captured_at_epoch": 1771638882.6847746,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8zFWusWhuiRyvXFGcFeZ7liAtQ",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1769893957.396
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260145096594813454": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260145096594813454",
+      "recipient_username": "MATIAS DIAZ",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "¿Todo bien? ¿En qué estás trabajando ahora?",
+          "first_sent_at": 1771709409.5782862,
+          "last_sent_at": 1771709409.5782862,
+          "message_id": "10f14eda304e083a35de796afee19bdc371b4ad5",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771709409.5782862,
+      "last_message_received_at": 1771709388.0832844,
+      "last_message_id_seen": "mid.$cAD82S4PaQcCirnGUJGcfSxDNJxyN",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771709388.0512776,
+      "updated_at": 1771735249.079838,
+      "last_interaction_at": 1771735235.7370505,
+      "source": "playwright",
+      "captured_at_epoch": 1771735249.0693321,
+      "messages": [
+        {
+          "message_id": "mid.$cAD82S4PaQcCis2FyxGcghwmHUV1d",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771709409.988
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCirnGUJGcfSxDNJxyN",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771626581.028
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCirklRYGcfQQAQkwjc",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771623942.496
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqq8E-mceWm3qUjxp",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771563498.746
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqyakmceWdRMXju3",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771563340.434
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqYYoGceWDMI3Bsx",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771562913.952
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqXIJGceWB--hg2g",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771562893.348
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqqW44WceWBvKrc2d",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771562889.441
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqpZ-V2ceVEwqCuuf",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771561891.415
+        },
+        {
+          "message_id": "mid.$cAD82S4PaQcCiqo9NYmceUoDgnYcs",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771561420.13
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260146137471376033": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260146137471376033",
+      "recipient_username": "Santiago Díaz | Creador de Contenido",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "¿Te gustaría contarme un poco más sobre tu negocio y qué objetivos tenés en mente?",
+          "first_sent_at": 1771709439.1951277,
+          "last_sent_at": 1771709439.1951277,
+          "message_id": "2bcb4128359c60e7f384b23164df5a74b85b675a",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771709439.1951277,
+      "last_message_received_at": 1771709423.336156,
+      "last_message_id_seen": "mid.$cAD86INzRpASis0F7gGcgfwo6N_X0",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771709423.3171492,
+      "updated_at": 1771735277.5339994,
+      "last_interaction_at": 1771735263.557032,
+      "source": "playwright",
+      "captured_at_epoch": 1771735277.5243816,
+      "messages": [
+        {
+          "message_id": "mid.$cAD86INzRpASis0F7gGcgfwo6N_X0",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771707315.072
+        },
+        {
+          "message_id": "mid.$cAD86INzRpASir_cExWcfrGoOTteO",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771652103.365
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244258682937461029382": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244258682937461029382",
+      "recipient_username": "Julian Lopez",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771734279.3311749,
+      "updated_at": 1771735263.453704,
+      "last_interaction_at": 1771735249.1946883,
+      "source": "playwright",
+      "captured_at_epoch": 1771735263.4477034,
+      "messages": [
+        {
+          "message_id": "mid.$cAAA1rUwlZHqitIGHbmcgzw6kDFHa",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771728289.646
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqg41z8r2ashez2mibJ",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1763924489.391
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqg41ziNWasheZW-t1G",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1763924482.613
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqg40vqk2asgadXx6ZZ",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1763923370.643
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqfcHFDh2ZPyv5aNPMN",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1757701471.111
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqfE4LEzWY4j167Qysr",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1756142337.229
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqfE4InkGY4jzd_d8P8",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1756142296.976
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqfE4HHoGY4jx9zF5UT",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1756142272.416
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqfE4HFRmY4jx7vBjn3",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1756142271.814
+        },
+        {
+          "message_id": "mid.$cAAA1rUwlZHqfE4G04GY4jxq_94IZ",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1756142267.616
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260146109464712167": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260146109464712167",
+      "recipient_username": "•titi•",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "¿Todo bien? ¿Qué tal va tu día?",
+          "first_sent_at": 1771734335.259037,
+          "last_sent_at": 1771734335.259037,
+          "message_id": "063a9007c902d2c0c2a81f90cbe9b0621a457baf",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771734335.259037,
+      "last_message_received_at": 1771734310.6879191,
+      "last_message_id_seen": "mid.$cAAABXvSGM4qistL6W2cgY2xXw_pa",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771734310.2145114,
+      "updated_at": 1771735290.856488,
+      "last_interaction_at": 1771735277.6595235,
+      "source": "playwright",
+      "captured_at_epoch": 1771735290.851728,
+      "messages": [
+        {
+          "message_id": "mid.$cAAABXvSGM4qistL6W2cgY2xXw_pa",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771700073.051
+        },
+        {
+          "message_id": "mid.$cAAABXvSGM4qistLyKmcgY2n0cNUJ",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771700070.954
+        },
+        {
+          "message_id": "mid.$cAAABXvSGM4qir84X1mcfoi9pbn1f",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771649421.27
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260146223194700794": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260146223194700794",
+      "recipient_username": "Fernando Prioló",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": 1771734355.4349136,
+      "last_message_id_seen": "mid.$cAD813rtWiSWisnzrCWcgTehFXB69",
+      "last_message_sender": "lead",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771734355.2998836,
+      "updated_at": 1771735304.1735058,
+      "last_interaction_at": 1771735290.9714234,
+      "source": "playwright",
+      "captured_at_epoch": 1771735304.1735058,
+      "messages": [
+        {
+          "message_id": "mid.$cAD813rtWiSWisnzrCWcgTehFXB69",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771694433.033
+        },
+        {
+          "message_id": "mid.$cAD813rtWiSWisHoGu2cfzSv_3YtA",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771660689.083
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260146601097996337": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260146601097996337",
+      "recipient_username": "Sara Sedanno",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771735318.2224493,
+      "updated_at": 1771735318.2224493,
+      "last_interaction_at": 1771735304.3013217,
+      "source": "playwright",
+      "captured_at_epoch": 1771735318.2179153,
+      "messages": [
+        {
+          "message_id": "mid.$cAD861zTHqbCismtVp2cgSYGCzagX",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771693280.679
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260112928694696911": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260112928694696911",
+      "recipient_username": "Bahriye Oguzhan",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "¿Hola! ¿Cómo estás? ¿Qué tal va tu día?",
+          "first_sent_at": 1771735349.684591,
+          "last_sent_at": 1771735349.684591,
+          "message_id": "4fa40db4708e40ee9364f8c0aa34e05310d32a18",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771735349.684591,
+      "last_message_received_at": 1771735331.5972898,
+      "last_message_id_seen": "mid.$cAD84IkrXy2OiskD8XGcgPuuA3Vmf",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771735331.567452,
+      "updated_at": 1771735350.0023706,
+      "last_interaction_at": 1771735318.3424666,
+      "source": "playwright",
+      "captured_at_epoch": 1771735331.5634522,
+      "messages": [
+        {
+          "message_id": "mid.$cAD84IkrXy2OiskD8XGcgPuuA3Vmf",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771690505.308
+        },
+        {
+          "message_id": "mid.$cAD84IkrXy2OiskD6YmcgPut_ZyfY",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771690504.802
+        },
+        {
+          "message_id": "mid.$cAD84IkrXy2OiaswYq2cOYbIJMwq_",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1770491662.507
+        },
+        {
+          "message_id": "mid.$cAD84IkrXy2OiaswU72cOYbIH68ki",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1770491661.551
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260136155619041090": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260136155619041090",
+      "recipient_username": "AgustinVanden",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "¿Qué tal, Agustín? ¿Cómo va todo? Te gustaría contarme un poco sobre tu negocio y ver si hay algo en lo que pueda ayudarte.",
+          "first_sent_at": 1771735396.3418024,
+          "last_sent_at": 1771735396.3418024,
+          "message_id": "12494c51c07cf77718fb685138dabd79d0146c9b",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771735396.3418024,
+      "last_message_received_at": 1771735368.124519,
+      "last_message_id_seen": "mid.$cAAAFMkch-3eisgRteGcgL8dXYw1j",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771735368.0840213,
+      "updated_at": 1771735396.357404,
+      "last_interaction_at": 1771735350.3594131,
+      "source": "playwright",
+      "captured_at_epoch": 1771735368.0840213,
+      "messages": [
+        {
+          "message_id": "mid.$cAAAFMkch-3eisgRteGcgL8dXYw1j",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771686536.568
+        },
+        {
+          "message_id": "mid.$cAAAFMkch-3eisIvDf2cf0ZqMwg7O",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771661851.519
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260037393202238303": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260037393202238303",
+      "recipient_username": "🔧🏁Franco Caccin🏁🔧",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771771200.885418,
+      "updated_at": 1771771200.885418,
+      "last_interaction_at": 1771771187.895311,
+      "source": "playwright",
+      "captured_at_epoch": 1771771200.8834205,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8AiQraejmismtE4GcgSXxqH_km",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771693276.384
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244276263745330250729": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244276263745330250729",
+      "recipient_username": "Adrián González Picón",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771771213.9212754,
+      "updated_at": 1771771213.9212754,
+      "last_interaction_at": 1771771200.9813042,
+      "source": "playwright",
+      "captured_at_epoch": 1771771213.9212754,
+      "messages": [
+        {
+          "message_id": "mid.$cAAAL1wEDItSisl8hOWcgRnMhxdCz",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771692480.825
+        }
+      ]
+    },
+    "matiid.life1|340282366841710301244260070476175597454": {
+      "account": "matiid.life1",
+      "thread_id": "340282366841710301244260070476175597454",
+      "recipient_username": "Leonardo Ramos",
+      "stage": "initial",
+      "messages_sent": [],
+      "last_message_sent_at": null,
+      "last_message_received_at": null,
+      "last_message_id_seen": null,
+      "last_message_sender": null,
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771771226.821866,
+      "updated_at": 1771771226.821866,
+      "last_interaction_at": 1771771214.02098,
+      "source": "playwright",
+      "captured_at_epoch": 1771771226.8182743,
+      "messages": [
+        {
+          "message_id": "mid.$cAD8B9FEsoZ-isl3f6WcgRiKYIWxv",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771692398.569
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260129737363010273": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260129737363010273",
+      "recipient_username": "Agus Dominguez • preparador fisico online de padel amateurs",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cuento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771771888.9627426,
+          "last_sent_at": 1771771888.9627426,
+          "message_id": "60c170e4cbd68c48a37a298014a5c422713c9a11",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771771888.9627426,
+      "last_message_received_at": 1771771870.5651367,
+      "last_message_id_seen": "mid.$cAAACwTZFkC2itwhH4GchcL_hWFyf",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771771870.5495076,
+      "updated_at": 1771771888.980189,
+      "last_interaction_at": 1771771856.3386178,
+      "source": "playwright",
+      "captured_at_epoch": 1771771870.5338805,
+      "messages": [
+        {
+          "message_id": "mid.$cAAACwTZFkC2itwhH4GchcL_hWFyf",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771770675.168
+        },
+        {
+          "message_id": "mid.$cAAACwTZFkC2itQ5vy2cg8kc70rHW",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771737524.171
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147133434609770": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147133434609770",
+      "recipient_username": "Fabrizio Cozzi",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771771990.1583323,
+          "last_sent_at": 1771771990.1583323,
+          "message_id": "d32de1e7bcb5facd8594cc2619e2b869724c7aa4",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771771990.1583323,
+      "last_message_received_at": 1771771902.6416633,
+      "last_message_id_seen": "mid.$cAAAzjugzJfaitpkzP2chVPpQGmoD",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771771902.6180115,
+      "updated_at": 1771771990.1621265,
+      "last_interaction_at": 1771771889.100768,
+      "source": "playwright",
+      "captured_at_epoch": 1771771902.6180115,
+      "messages": [
+        {
+          "message_id": "mid.$cAAAzjugzJfaitpkzP2chVPpQGmoD",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771763395.391
+        },
+        {
+          "message_id": "mid.$cAAAzjugzJfaitXR8dGchC8mRTNkC",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771744212.084
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147132351276545": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147132351276545",
+      "recipient_username": "Tiago Haubman",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772087.2019346,
+          "last_sent_at": 1771772087.2019346,
+          "message_id": "f839bbab0a146b70ce14207f0d5031c462e50fe7",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772087.2019346,
+      "last_message_received_at": 1771772003.7422957,
+      "last_message_id_seen": "mid.$cAD86Q-PZ2B-itjZABmchPDtmagGD",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772003.7152212,
+      "updated_at": 1771772087.2068512,
+      "last_interaction_at": 1771771990.2861817,
+      "source": "playwright",
+      "captured_at_epoch": 1771772003.7152212,
+      "messages": [
+        {
+          "message_id": "mid.$cAD86Q-PZ2B-itjZABmchPDtmagGD",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771756910.598
+        },
+        {
+          "message_id": "mid.$cAD86Q-PZ2B-itXKUKmchC0_nbMdd",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771744087.082
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147137674609346": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147137674609346",
+      "recipient_username": "𝙱𝚊𝚞𝚝𝚒𝚜𝚝𝚊",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772167.9238405,
+          "last_sent_at": 1771772167.9238405,
+          "message_id": "99d63c133aae21c7ed82d605155487363e784f18",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772167.9238405,
+      "last_message_received_at": 1771772100.7011864,
+      "last_message_id_seen": "mid.$cAAA0uTfk_Q6itXsL02chDW5dNLA9",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772100.6832128,
+      "updated_at": 1771772167.9358413,
+      "last_interaction_at": 1771772087.3100214,
+      "source": "playwright",
+      "captured_at_epoch": 1771772100.6812165,
+      "messages": [
+        {
+          "message_id": "mid.$cAAA0uTfk_Q6itXsL02chDW5dNLA9",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771744642.003
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147136417942805": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147136417942805",
+      "recipient_username": "Matias G. Cabrera",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772255.179411,
+          "last_sent_at": 1771772255.179411,
+          "message_id": "522db98a7936484663b14a99eae1d4ff7c459183",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772255.179411,
+      "last_message_received_at": 1771772181.1903265,
+      "last_message_id_seen": "mid.$cAAA7Wyi872OitXka2GchDPFNwJQT",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772181.1691532,
+      "updated_at": 1771772255.195039,
+      "last_interaction_at": 1771772168.0364811,
+      "source": "playwright",
+      "captured_at_epoch": 1771772181.1691532,
+      "messages": [
+        {
+          "message_id": "mid.$cAAA7Wyi872OitXka2GchDPFNwJQT",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771744514.776
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147129354610178": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147129354610178",
+      "recipient_username": "Facundo | Editor de Videos",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772356.5537786,
+          "last_sent_at": 1771772356.5537786,
+          "message_id": "88e0aca34fd371ef8c0fcadf4e3fdd5afd20bf91",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772356.5537786,
+      "last_message_received_at": 1771772268.544764,
+      "last_message_id_seen": "mid.$cAD86tawpxuWitW3zYmchCifG16wJ",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772268.5247636,
+      "updated_at": 1771772356.5586102,
+      "last_interaction_at": 1771772255.3452275,
+      "source": "playwright",
+      "captured_at_epoch": 1771772268.518759,
+      "messages": [
+        {
+          "message_id": "mid.$cAD86tawpxuWitW3zYmchCifG16wJ",
+          "direction": "inbound",
+          "text": "",
+          "timestamp_epoch": 1771743783.778
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147128387943608": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147128387943608",
+      "recipient_username": "Alessandro Crimsom",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772456.836672,
+          "last_sent_at": 1771772456.836672,
+          "message_id": "844e49ceecd88891fe105b294511286239f5852e",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772456.836672,
+      "last_message_received_at": 1771772373.742134,
+      "last_message_id_seen": "mid.$cAD87IMA6Z6eitWw7gWchCbmmiF5n",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772373.7246785,
+      "updated_at": 1771775417.3513565,
+      "last_interaction_at": 1771775410.7272246,
+      "source": "playwright",
+      "captured_at_epoch": 1771775417.3483527,
+      "messages": [
+        {
+          "message_id": "mid.$cAD87IMA6Z6eityN342chd4tkqPH6",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771772456.931
+        },
+        {
+          "message_id": "mid.$cAD87IMA6Z6eitWw7gWchCbmmiF5n",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771743671.169
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147127187943728": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147127187943728",
+      "recipient_username": "Pixelhair",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772549.4849758,
+          "last_sent_at": 1771772549.4849758,
+          "message_id": "359f92c332f591dc80f622594f2df56cf5e2647d",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772549.4849758,
+      "last_message_received_at": 1771772471.08957,
+      "last_message_id_seen": "mid.$cAD86f6vkDOSitWqyTGchCVdmVKa-",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772471.064556,
+      "updated_at": 1771775410.618037,
+      "last_interaction_at": 1771775404.1408195,
+      "source": "playwright",
+      "captured_at_epoch": 1771775410.609035,
+      "messages": [
+        {
+          "message_id": "mid.$cAD86f6vkDOSityTiwGchd-YUFTMG",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771772549.824
+        },
+        {
+          "message_id": "mid.$cAD86f6vkDOSitWqyTGchCVdmVKa-",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771743570.508
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147125777943869": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147125777943869",
+      "recipient_username": "Daniel Santiago MP",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772649.4442713,
+          "last_sent_at": 1771772649.4442713,
+          "message_id": "5b7b1a58ada483a29f6f1fce53b8ba6bd4e135d2",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772649.4442713,
+      "last_message_received_at": 1771772563.6549096,
+      "last_message_id_seen": "mid.$cAAA4jpxEWRqitWh-sWchCMpkEm4l",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772563.6416302,
+      "updated_at": 1771775404.023519,
+      "last_interaction_at": 1771775397.0597796,
+      "source": "playwright",
+      "captured_at_epoch": 1771775404.023519,
+      "messages": [
+        {
+          "message_id": "mid.$cAAA4jpxEWRqityZpBGcheEeynEnJ",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771772649.732
+        },
+        {
+          "message_id": "mid.$cAAA4jpxEWRqitWh-sWchCMpkEm4l",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771743426.225
+        }
+      ]
+    },
+    "matidiazlife|340282366841710301244260147124614610652": {
+      "account": "matidiazlife",
+      "thread_id": "340282366841710301244260147124614610652",
+      "recipient_username": "Alejandro Sarmiento | Consultor de Marketing",
+      "stage": "waiting",
+      "messages_sent": [
+        {
+          "text": "buenass, que tal? te cueento, vengo trabajando con negocios de servicios parecidos al tuyo y veo siempre lo mismo, capaz en una de esas es tu caso también. Hoy muchos pagan entre 15 y 20 dólares por llamada calificada; nosotros armamos un sistema para agendar 2 o 3 llamadas por día gastando mucho menos, te muestro cómo lo aplicarías en tu negocio?",
+          "first_sent_at": 1771772729.1876771,
+          "last_sent_at": 1771772729.1876771,
+          "message_id": "722bce2cc8983c6d212d77609b0bccb90bda6373",
+          "times_sent": 1,
+          "is_followup": false
+        }
+      ],
+      "last_message_sent_at": 1771772729.1876771,
+      "last_message_received_at": 1771772664.3557806,
+      "last_message_id_seen": "mid.$cAAA0tCJzFnmitWaqQGchCFVTfC_i",
+      "last_message_sender": "bot",
+      "followup_stage": 0,
+      "last_followup_sent_at": null,
+      "created_at": 1771772664.3278422,
+      "updated_at": 1771775396.9451702,
+      "last_interaction_at": 1771775390.1728902,
+      "source": "playwright",
+      "captured_at_epoch": 1771775396.928121,
+      "messages": [
+        {
+          "message_id": "mid.$cAAA0tCJzFnmityefmmcheJVeNWzQ",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771772729.242
+        },
+        {
+          "message_id": "mid.$cAAA0tCJzFnmitWaqQGchCFVTfC_i",
+          "direction": "outbound",
+          "text": "",
+          "timestamp_epoch": 1771743306.304
         }
       ]
     }

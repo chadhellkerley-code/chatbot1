@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from collections import deque
+from enum import Enum
 import json
 import logging
 import re
@@ -14,11 +15,12 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from PySide6.QtCore import QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -28,9 +30,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -42,6 +46,7 @@ from PySide6.QtWidgets import (
 from io_adapter import IOAdapter, InputRequest, MenuOption
 
 DEBUG_UI_FLOW = True
+USE_ENGINE_STATE_MANAGER = True
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -73,6 +78,9 @@ _EXEC_META_RE = re.compile(
     re.IGNORECASE,
 )
 _ACCOUNT_USERNAME_RE = re.compile(r"@([A-Za-z0-9._-]+)")
+_ACCOUNT_REASON_LINE_RE = re.compile(
+    r"^\s*-\s*@(?P<username>[A-Za-z0-9._-]+)\s*:\s*(?P<reason>.+?)\s*$"
+)
 _ACCOUNT_STATUS_LINE_RE = re.compile(
     r"@(?P<username>[A-Za-z0-9._-]+).*?\b(?P<status>ok|failed|error|skip(?:ped)?|omitid[oa]s?)\b",
     re.IGNORECASE,
@@ -117,6 +125,11 @@ _LEADS_RESULT_RE = re.compile(
 )
 _LEADS_SUMMARY_ROW_RE = re.compile(
     r"total\s*[=:]\s*(?P<total>\d+)\s+procesados\s*[=:]\s*(?P<processed>\d+)\s+calificados\s*[=:]\s*(?P<qualified>\d+)\s+descartados\s*[=:]\s*(?P<discarded>\d+)",
+    re.IGNORECASE,
+)
+_SEND_PROMPT_INT_DEFAULT_RE = re.compile(r"\[(?P<value>\d+)\]")
+_SEND_PROMPT_DELAY_MAX_DEFAULT_RE = re.compile(
+    r"por\s+defecto\s*(?P<value>\d+)",
     re.IGNORECASE,
 )
 _LEADS_USERNAMES_LOADED_RE = re.compile(
@@ -200,6 +213,137 @@ def _normalized_label(value: str) -> str:
     return " ".join(lower.split())
 
 
+class EngineState(str, Enum):
+    IDLE = "IDLE"
+    VALIDATING_SESSIONS = "VALIDATING_SESSIONS"
+    AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
+    RUNNING = "RUNNING"
+    STOPPING = "STOPPING"
+    FINISHED = "FINISHED"
+    ERROR = "ERROR"
+
+
+class EngineStateManager(QObject):
+    state_changed = Signal(str, str, str)
+    event_handled = Signal(str, str)
+
+    _ALLOWED_TRANSITIONS: dict[EngineState, set[EngineState]] = {
+        EngineState.IDLE: {
+            EngineState.VALIDATING_SESSIONS,
+            EngineState.RUNNING,
+            EngineState.ERROR,
+        },
+        EngineState.VALIDATING_SESSIONS: {
+            EngineState.AWAITING_USER_DECISION,
+            EngineState.RUNNING,
+            EngineState.STOPPING,
+            EngineState.FINISHED,
+            EngineState.ERROR,
+            EngineState.IDLE,
+        },
+        EngineState.AWAITING_USER_DECISION: {
+            EngineState.VALIDATING_SESSIONS,
+            EngineState.RUNNING,
+            EngineState.STOPPING,
+            EngineState.ERROR,
+            EngineState.IDLE,
+        },
+        EngineState.RUNNING: {
+            EngineState.STOPPING,
+            EngineState.FINISHED,
+            EngineState.ERROR,
+            EngineState.IDLE,
+        },
+        EngineState.STOPPING: {
+            EngineState.FINISHED,
+            EngineState.ERROR,
+            EngineState.IDLE,
+        },
+        EngineState.FINISHED: {
+            EngineState.IDLE,
+            EngineState.VALIDATING_SESSIONS,
+            EngineState.ERROR,
+        },
+        EngineState.ERROR: {
+            EngineState.IDLE,
+            EngineState.VALIDATING_SESSIONS,
+        },
+    }
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.current_state = EngineState.IDLE
+
+    def set_state(self, new_state: EngineState | str, *, reason: str = "manual") -> bool:
+        try:
+            target = (
+                new_state
+                if isinstance(new_state, EngineState)
+                else EngineState(str(new_state).strip().upper())
+            )
+        except Exception:
+            return False
+
+        previous = self.current_state
+        if target == previous:
+            return False
+
+        allowed = self._ALLOWED_TRANSITIONS.get(previous, set())
+        if target not in allowed:
+            return False
+
+        self.current_state = target
+        self.state_changed.emit(previous.value, target.value, reason)
+        return True
+
+    def handle_backend_event(self, event: dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            return
+        raw_event_type = event.get("type")
+        event_type = str(raw_event_type or "").strip().upper()
+        if not event_type:
+            return
+
+        next_state: Optional[EngineState] = None
+        if event_type in {
+            "SEND_CONFIG_SUBMITTED",
+            "INPUT_REQUEST_SEND_ALIAS",
+            "INPUT_REQUEST_SEND_LEADS",
+            "INPUT_REQUEST_SEND_PER_ACCOUNT",
+            "INPUT_REQUEST_SEND_CONCURRENCY",
+            "INPUT_REQUEST_SEND_DELAY_MIN",
+            "INPUT_REQUEST_SEND_DELAY_MAX",
+            "INPUT_REQUEST_SEND_TEMPLATE_MODE",
+            "INPUT_REQUEST_SEND_TEMPLATE_PICK",
+            "INPUT_REQUEST_SEND_MANUAL_MESSAGE",
+        }:
+            next_state = EngineState.VALIDATING_SESSIONS
+        elif event_type in {
+            "LOW_PROFILE_DETECTED",
+            "LOW_PROFILE_DECISION_REQUEST",
+            "SESSION_ISSUES_DETECTED",
+            "SESSION_LOGIN_DECISION_REQUEST",
+            "PARTIAL_LOGIN_DECISION_REQUEST",
+        }:
+            next_state = EngineState.AWAITING_USER_DECISION
+        elif event_type == "DECISION_SUBMITTED":
+            next_state = EngineState.VALIDATING_SESSIONS
+        elif event_type in {"CAMPAIGN_RUNNING", "CAMPAIGN_STARTED"}:
+            next_state = EngineState.RUNNING
+        elif event_type in {"STOP_REQUESTED", "STOPPING_REQUESTED"}:
+            next_state = EngineState.STOPPING
+        elif event_type in {"CAMPAIGN_FINISHED", "CAMPAIGN_SUMMARY_DETECTED"}:
+            next_state = EngineState.FINISHED
+        elif event_type in {"LOGIN_TOTAL_FAILURE", "BACKEND_ERROR"}:
+            next_state = EngineState.ERROR
+        elif event_type in {"MAIN_MENU_READY", "SUMMARY_CLOSED", "RESET_IDLE", "BACKEND_DONE"}:
+            next_state = EngineState.IDLE
+
+        if next_state is not None:
+            self.set_state(next_state, reason=event_type)
+        self.event_handled.emit(event_type, self.current_state.value)
+
+
 class MainWindow(QMainWindow):
     backend_done = Signal(int)
     backend_failed = Signal(str)
@@ -260,6 +404,21 @@ class MainWindow(QMainWindow):
         self._execution_log_times: list[float] = []
         self._exec_inflight_rows: dict[str, int] = {}
         self._campaign_running = False
+        self._campaign_active = False
+        self._campaign_start_time = 0.0
+        self._showing_summary = False
+        self._block_navigation = False
+        self._campaign_summary_detected = False
+        self._campaign_account_stats: dict[str, dict[str, int]] = {}
+        self._campaign_summary_capture_active = False
+        self._campaign_summary_alias = "-"
+        self._campaign_summary_accounts: dict[str, dict[str, int]] = {}
+        self._campaign_summary_totals = {"ok": 0, "err": 0, "no_dm": 0, "unver": 0, "total": 0}
+        self._capture_low_profile_list = False
+        self._capture_session_list = False
+        self._send_low_profile_accounts: list[tuple[str, str]] = []
+        self._send_session_issue_accounts: list[tuple[str, str]] = []
+        self._send_login_total_failure = False
         self._autoresponder_running = False
         self._autoresponder_started_at = 0.0
         self._autoresponder_active_accounts = 0
@@ -321,6 +480,15 @@ class MainWindow(QMainWindow):
         self._accounts_alias_select_value = ""
         self._accounts_alias_back_value = ""
         self._accounts_alias_manual_mode = False
+        self._send_setup_prompt_kind = ""
+        self._send_setup_prompt_text = ""
+        self._send_setup_use_saved_templates = False
+        self._auto_fill_active = False
+        self._auto_fill_queue: list[str] = []
+        self._engine_state_manager: Optional[EngineStateManager] = None
+        if USE_ENGINE_STATE_MANAGER:
+            self._engine_state_manager = EngineStateManager(self)
+            self._engine_state_manager.state_changed.connect(self._on_engine_state_changed)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_dashboard_page())
@@ -340,6 +508,7 @@ class MainWindow(QMainWindow):
         self._set_status("Idle")
         self._apply_log_panel_state()
         self._update_primary_button_visibility()
+        self._emit_engine_event("RESET_IDLE")
 
         self.backend_done.connect(self._on_backend_done)
         self.backend_failed.connect(self._on_backend_failed)
@@ -423,9 +592,77 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(16, 16, 16, 12)
         content_layout.setSpacing(12)
         content_layout.addWidget(self._build_live_input_bar(), 0)
-        content_layout.addWidget(self._stack, 1)
+        self._central_scroll = QScrollArea()
+        self._central_scroll.setObjectName("SubmenuScroll")
+        self._central_scroll.setWidgetResizable(True)
+        self._central_scroll.setFrameShape(QFrame.NoFrame)
+        self._central_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._central_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._central_scroll.setWidget(self._stack)
+        content_layout.addWidget(self._central_scroll, 1)
+        self._build_send_loading_overlay()
         content_layout.addWidget(self._build_log_panel(), 0)
         layout.addWidget(content, 1)
+
+    def _build_send_loading_overlay(self) -> None:
+        viewport = self._central_scroll.viewport()
+        self._send_loading_overlay = QWidget(viewport)
+        self._send_loading_overlay.setObjectName("SendLoadingOverlay")
+        overlay_layout = QVBoxLayout(self._send_loading_overlay)
+        overlay_layout.setContentsMargins(0, 0, 0, 0)
+        overlay_layout.setSpacing(0)
+
+        center_wrap = QWidget()
+        center_layout = QVBoxLayout(center_wrap)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("SendLoadingCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 18, 20, 18)
+        card_layout.setSpacing(10)
+
+        spinner = QProgressBar()
+        spinner.setObjectName("SendLoadingSpinner")
+        spinner.setRange(0, 0)
+        spinner.setTextVisible(False)
+        spinner.setFixedWidth(190)
+
+        label = QLabel("Cargando...")
+        label.setObjectName("SendLoadingLabel")
+        label.setAlignment(Qt.AlignCenter)
+
+        card_layout.addWidget(spinner, 0, Qt.AlignCenter)
+        card_layout.addWidget(label, 0, Qt.AlignCenter)
+        center_layout.addWidget(card, 0, Qt.AlignCenter)
+
+        overlay_layout.addStretch(1)
+        overlay_layout.addWidget(center_wrap, 0, Qt.AlignCenter)
+        overlay_layout.addStretch(1)
+        self._send_loading_overlay.hide()
+
+    def _sync_send_loading_overlay_geometry(self) -> None:
+        if not hasattr(self, "_send_loading_overlay") or not hasattr(self, "_central_scroll"):
+            return
+        viewport = self._central_scroll.viewport()
+        self._send_loading_overlay.setGeometry(viewport.rect())
+
+    def _show_send_loading_overlay(self) -> None:
+        if not hasattr(self, "_send_loading_overlay"):
+            return
+        self._sync_send_loading_overlay_geometry()
+        self._send_loading_overlay.raise_()
+        self._send_loading_overlay.show()
+
+    def _hide_send_loading_overlay(self) -> None:
+        if not hasattr(self, "_send_loading_overlay"):
+            return
+        self._send_loading_overlay.hide()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._sync_send_loading_overlay_geometry()
 
     def _build_live_input_bar(self) -> QWidget:
         bar = QFrame()
@@ -814,10 +1051,18 @@ class MainWindow(QMainWindow):
         )
 
     def _on_sidebar_item_clicked(self, key: str) -> None:
+        if self._block_navigation:
+            self._set_status("Waiting input")
+            return
         if key == "exit":
             self.shutdown_application(reason="sidebar-exit")
             return
         self._set_active_sidebar(key)
+        if key != "send":
+            self._auto_fill_active = False
+            self._auto_fill_queue.clear()
+            self._set_send_setup_visible(False)
+            self._hide_send_loading_overlay()
         if key != "leads":
             self._set_leads_live_card_visible(False)
         self._set_menu_activity_visible(False)
@@ -884,13 +1129,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setObjectName("SubmenuScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
         container = QWidget()
         container.setObjectName("SubmenuScrollContent")
         container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -940,8 +1178,7 @@ class MainWindow(QMainWindow):
         container_layout.addLayout(grid)
         container_layout.addStretch(1)
 
-        scroll.setWidget(container)
-        layout.addWidget(scroll, 1)
+        layout.addWidget(container, 1)
         return page
 
     def _build_metric_card(self, key: str, label_text: str) -> QWidget:
@@ -981,6 +1218,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._menu_prompt_label)
         layout.addWidget(self._accounts_users_label)
 
+        self._send_setup_card = self._build_send_setup_panel()
+        self._send_setup_card.setVisible(False)
+        layout.addWidget(self._send_setup_card, 0)
+
         self._leads_live_card = QFrame()
         self._leads_live_card.setObjectName("LeadPromptCard")
         leads_live_layout = QVBoxLayout(self._leads_live_card)
@@ -1018,13 +1259,6 @@ class MainWindow(QMainWindow):
         self._leads_live_card.setVisible(False)
         layout.addWidget(self._leads_live_card, 0)
 
-        scroll = QScrollArea()
-        scroll.setObjectName("SubmenuScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
         self._menu_options_container = QWidget()
         self._menu_options_container.setObjectName("SubmenuScrollContent")
         self._menu_options_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -1033,8 +1267,7 @@ class MainWindow(QMainWindow):
         self._menu_options_layout.setSpacing(12)
         self._menu_options_layout.addStretch(1)
 
-        scroll.setWidget(self._menu_options_container)
-        layout.addWidget(scroll, 1)
+        layout.addWidget(self._menu_options_container, 1)
 
         logs_card = QFrame()
         logs_card.setObjectName("ExecCard")
@@ -1068,6 +1301,605 @@ class MainWindow(QMainWindow):
         layout.addWidget(logs_card, 0)
         self._refresh_menu_activity_log()
         return page
+
+    def _build_send_setup_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("SendSetupCard")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+
+        title = QLabel("Envío de mensajes · Configuración")
+        title.setObjectName("PageTitle")
+
+        self._send_setup_back_button = QPushButton("← Atrás")
+        self._send_setup_back_button.setObjectName("SecondaryButton")
+        self._send_setup_back_button.clicked.connect(self._handle_send_setup_back)
+
+        self._send_setup_submit_button = QPushButton("Enviar")
+        self._send_setup_submit_button.setObjectName("PrimaryButton")
+        self._send_setup_submit_button.clicked.connect(self._submit_send_setup_value)
+
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        header_row.addWidget(self._send_setup_back_button)
+        header_row.addWidget(self._send_setup_submit_button)
+        layout.addLayout(header_row)
+
+        self._send_setup_prompt_label = QLabel("Esperando prompt de envío...")
+        self._send_setup_prompt_label.setObjectName("MutedText")
+        self._send_setup_prompt_label.setWordWrap(True)
+        layout.addWidget(self._send_setup_prompt_label)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+
+        def _field_card(title_text: str, widget: QWidget) -> QFrame:
+            card = QFrame()
+            card.setObjectName("SendSetupFieldCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setSpacing(6)
+            label = QLabel(title_text)
+            label.setObjectName("MutedText")
+            card_layout.addWidget(label)
+            card_layout.addWidget(widget)
+            return card
+
+        self._send_alias_combo = QComboBox()
+        self._send_alias_combo.setObjectName("SendSetupCombo")
+        self._send_alias_combo.setEditable(False)
+        self._send_alias_combo.setInsertPolicy(QComboBox.NoInsert)
+        self._send_alias_combo.activated.connect(
+            lambda _index=0: self._auto_submit_send_setup_if_waiting("alias")
+        )
+        grid.addWidget(_field_card("Alias o grupo", self._send_alias_combo), 0, 0)
+
+        self._send_leads_combo = QComboBox()
+        self._send_leads_combo.setObjectName("SendSetupCombo")
+        self._send_leads_combo.setEditable(False)
+        self._send_leads_combo.setInsertPolicy(QComboBox.NoInsert)
+        self._send_leads_combo.activated.connect(
+            lambda _index=0: self._auto_submit_send_setup_if_waiting("leads_alias")
+        )
+        grid.addWidget(_field_card("Alias de los leads", self._send_leads_combo), 0, 1)
+
+        self._send_per_account_spin = QSpinBox()
+        self._send_per_account_spin.setObjectName("SendSetupSpin")
+        self._send_per_account_spin.setRange(1, 100000)
+        self._send_per_account_spin.setValue(1)
+        grid.addWidget(
+            _field_card("Cantidad de mensajes por cuenta", self._send_per_account_spin),
+            1,
+            0,
+        )
+
+        self._send_concurrency_spin = QSpinBox()
+        self._send_concurrency_spin.setObjectName("SendSetupSpin")
+        self._send_concurrency_spin.setRange(1, 500)
+        self._send_concurrency_spin.setValue(1)
+        grid.addWidget(_field_card("Cuentas en simultáneo", self._send_concurrency_spin), 1, 1)
+
+        self._send_delay_min_spin = QSpinBox()
+        self._send_delay_min_spin.setObjectName("SendSetupSpin")
+        self._send_delay_min_spin.setRange(1, 3600)
+        self._send_delay_min_spin.setValue(10)
+        grid.addWidget(_field_card("Delay mínimo (seg)", self._send_delay_min_spin), 2, 0)
+
+        self._send_delay_max_spin = QSpinBox()
+        self._send_delay_max_spin.setObjectName("SendSetupSpin")
+        self._send_delay_max_spin.setRange(1, 3600)
+        self._send_delay_max_spin.setValue(20)
+        grid.addWidget(_field_card("Delay máximo (seg)", self._send_delay_max_spin), 2, 1)
+
+        toggle_wrap = QWidget()
+        toggle_layout = QHBoxLayout(toggle_wrap)
+        toggle_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_layout.setSpacing(8)
+        self._send_templates_yes_button = QPushButton("SI")
+        self._send_templates_yes_button.setObjectName("SecondaryButton")
+        self._send_templates_yes_button.setCheckable(True)
+        self._send_templates_yes_button.clicked.connect(
+            lambda: self._on_send_template_toggle_clicked(True)
+        )
+        self._send_templates_no_button = QPushButton("NO")
+        self._send_templates_no_button.setObjectName("SecondaryButton")
+        self._send_templates_no_button.setCheckable(True)
+        self._send_templates_no_button.clicked.connect(
+            lambda: self._on_send_template_toggle_clicked(False)
+        )
+        toggle_layout.addWidget(self._send_templates_yes_button)
+        toggle_layout.addWidget(self._send_templates_no_button)
+        toggle_layout.addStretch(1)
+        grid.addWidget(_field_card("Seleccionar plantilla (SI/NO)", toggle_wrap), 3, 0, 1, 2)
+
+        self._send_saved_template_combo = QComboBox()
+        self._send_saved_template_combo.setObjectName("SendSetupCombo")
+        self._send_saved_template_combo.setEditable(False)
+        self._send_saved_template_combo.activated.connect(
+            lambda _index=0: self._auto_submit_send_setup_if_waiting("templates_saved")
+        )
+        self._send_saved_template_card = _field_card(
+            "Plantillas guardadas",
+            self._send_saved_template_combo,
+        )
+        grid.addWidget(self._send_saved_template_card, 4, 0, 1, 2)
+
+        self._send_manual_message_input = QLineEdit()
+        self._send_manual_message_input.setObjectName("InputField")
+        self._send_manual_message_input.setPlaceholderText("Mensaje manual (una línea)")
+        self._send_manual_message_input.returnPressed.connect(self._submit_send_setup_value)
+        self._send_manual_message_card = _field_card(
+            "Mensaje manual",
+            self._send_manual_message_input,
+        )
+        grid.addWidget(self._send_manual_message_card, 5, 0, 1, 2)
+
+        layout.addLayout(grid)
+        self._set_send_template_mode(False)
+        return panel
+
+    def _set_send_setup_visible(self, visible: bool) -> None:
+        if not hasattr(self, "_send_setup_card"):
+            return
+        self._send_setup_card.setVisible(visible)
+        if hasattr(self, "_menu_options_container"):
+            self._menu_options_container.setVisible(not visible)
+        if visible:
+            self._refresh_send_setup_sources()
+
+    def _load_leads_aliases(self) -> list[str]:
+        aliases: list[str] = []
+        try:
+            module = import_module("leads")
+            list_files_callable = getattr(module, "list_files", None)
+            if callable(list_files_callable):
+                payload = list_files_callable()
+                if isinstance(payload, list):
+                    aliases = sorted(
+                        {
+                            str(item).strip()
+                            for item in payload
+                            if str(item).strip()
+                        }
+                    )
+        except Exception:
+            aliases = []
+        if not aliases:
+            leads_dir = self._root_dir / "text" / "leads"
+            try:
+                if leads_dir.is_dir():
+                    aliases = sorted(
+                        {path.stem for path in leads_dir.glob("*.txt") if path.is_file() and path.stem}
+                    )
+            except Exception:
+                aliases = []
+        if "default" not in aliases:
+            aliases.insert(0, "default")
+        return aliases
+
+    def _load_send_saved_templates(self) -> list[dict[str, str]]:
+        try:
+            from templates_store import load_templates
+
+            payload = load_templates()
+        except Exception:
+            payload = []
+        items: list[dict[str, str]] = []
+        for raw in payload:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            text = str(raw.get("text") or "").strip()
+            if not name or not text:
+                continue
+            items.append({"name": name, "text": text})
+        return items
+
+    def _load_active_accounts_aliases(self) -> list[str]:
+        records: list[dict[str, Any]] = []
+        try:
+            module = import_module("accounts")
+            list_callable = getattr(module, "list_all", None)
+            if callable(list_callable):
+                payload = list_callable()
+                if isinstance(payload, list):
+                    records = [item for item in payload if isinstance(item, dict)]
+        except Exception:
+            records = []
+
+        aliases = {
+            str(record.get("alias") or "default").strip() or "default"
+            for record in records
+            if bool(record.get("active", True))
+        }
+        if aliases:
+            return sorted(aliases)
+        return self._load_accounts_aliases()
+
+    def _refresh_send_setup_sources(self) -> None:
+        if not hasattr(self, "_send_alias_combo"):
+            return
+
+        def _update_combo(combo: QComboBox, values: list[str]) -> None:
+            current = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            for value in values:
+                combo.addItem(value)
+            if current:
+                idx = combo.findText(current)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                elif combo.count() > 0:
+                    combo.setCurrentIndex(0)
+            elif combo.count() > 0:
+                combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+
+        _update_combo(self._send_alias_combo, self._load_active_accounts_aliases())
+        _update_combo(self._send_leads_combo, self._load_leads_aliases())
+
+        current_saved_data = str(self._send_saved_template_combo.currentData() or "").strip()
+        self._send_saved_template_combo.blockSignals(True)
+        self._send_saved_template_combo.clear()
+        templates = self._load_send_saved_templates()
+        for index, item in enumerate(templates, start=1):
+            preview = item["text"].replace("\n", " ").strip()
+            if len(preview) > 36:
+                preview = preview[:33] + "..."
+            label = f"{index}) {item['name']} · {preview}"
+            self._send_saved_template_combo.addItem(label, str(index))
+        if current_saved_data:
+            idx = self._send_saved_template_combo.findData(current_saved_data)
+            if idx >= 0:
+                self._send_saved_template_combo.setCurrentIndex(idx)
+            elif self._send_saved_template_combo.count() > 0:
+                self._send_saved_template_combo.setCurrentIndex(0)
+        elif self._send_saved_template_combo.count() > 0:
+            self._send_saved_template_combo.setCurrentIndex(0)
+        self._send_saved_template_combo.blockSignals(False)
+        self._send_saved_template_combo.setEnabled(bool(templates))
+        self._send_manual_message_input.setEnabled(True)
+
+    def _set_send_template_mode(self, use_saved: bool) -> None:
+        self._send_setup_use_saved_templates = bool(use_saved)
+        self._send_templates_yes_button.setChecked(self._send_setup_use_saved_templates)
+        self._send_templates_no_button.setChecked(not self._send_setup_use_saved_templates)
+        self._send_saved_template_card.setVisible(self._send_setup_use_saved_templates)
+        self._send_manual_message_card.setVisible(not self._send_setup_use_saved_templates)
+        self._send_saved_template_combo.setEnabled(
+            self._send_setup_use_saved_templates and self._send_saved_template_combo.count() > 0
+        )
+        self._send_manual_message_input.setEnabled(not self._send_setup_use_saved_templates)
+        if self._send_setup_use_saved_templates:
+            self._send_saved_template_combo.setFocus()
+        else:
+            self._send_manual_message_input.setFocus()
+
+    def _on_send_template_toggle_clicked(self, use_saved: bool) -> None:
+        self._set_send_template_mode(use_saved)
+        self._auto_submit_send_setup_if_waiting("templates_toggle")
+
+    def _auto_submit_send_setup_if_waiting(self, expected_kind: str) -> None:
+        # El envio en modo formulario se dispara una sola vez desde el boton "Enviar".
+        # Evitamos auto-submit por cambios de campos para no adelantar pasos del backend.
+        return
+
+    def _detect_send_prompt_kind(self, prompt_text: str) -> str:
+        normalized = _normalized_label(prompt_text)
+        if not normalized:
+            return "manual_message"
+        if "alias grupo" in normalized:
+            return "alias"
+        if "nombre de la lista" in normalized or "text leads" in normalized:
+            return "leads_alias"
+        if "mensajes por cuenta" in normalized:
+            return "per_account"
+        if "cuentas en simultaneo" in normalized:
+            return "concurrency"
+        if "delay minimo" in normalized:
+            return "delay_min"
+        if "delay maximo" in normalized:
+            return "delay_max"
+        if "usar plantillas guardadas" in normalized:
+            return "templates_toggle"
+        if "selecciona plantillas" in normalized:
+            return "templates_saved"
+        return "manual_message"
+
+    @staticmethod
+    def _extract_send_prompt_default_int(prompt_text: str, fallback: int) -> int:
+        match = _SEND_PROMPT_INT_DEFAULT_RE.search(prompt_text or "")
+        if not match:
+            return fallback
+        try:
+            return max(1, int(match.group("value")))
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _extract_send_delay_max_default(prompt_text: str, fallback: int) -> int:
+        normalized = _normalized_label(prompt_text or "")
+        match = _SEND_PROMPT_DELAY_MAX_DEFAULT_RE.search(normalized)
+        if match:
+            try:
+                return max(1, int(match.group("value")))
+            except Exception:
+                return fallback
+        values = [int(item.group("value")) for item in _SEND_PROMPT_INT_DEFAULT_RE.finditer(prompt_text or "")]
+        if values:
+            return max(1, values[-1])
+        return fallback
+
+    def _focus_send_setup_kind(self, kind: str) -> None:
+        if kind == "alias":
+            self._send_alias_combo.setFocus()
+            return
+        if kind == "leads_alias":
+            self._send_leads_combo.setFocus()
+            return
+        if kind == "per_account":
+            self._send_per_account_spin.setFocus()
+            self._send_per_account_spin.selectAll()
+            return
+        if kind == "concurrency":
+            self._send_concurrency_spin.setFocus()
+            self._send_concurrency_spin.selectAll()
+            return
+        if kind == "delay_min":
+            self._send_delay_min_spin.setFocus()
+            self._send_delay_min_spin.selectAll()
+            return
+        if kind == "delay_max":
+            self._send_delay_max_spin.setFocus()
+            self._send_delay_max_spin.selectAll()
+            return
+        if kind == "templates_saved":
+            self._send_saved_template_combo.setFocus()
+            return
+        self._send_manual_message_input.setFocus()
+        self._send_manual_message_input.selectAll()
+
+    def _configure_send_setup_from_request(self, request: InputRequest) -> None:
+        if not hasattr(self, "_send_setup_card"):
+            return
+        cleaned_prompt = _strip_cli_hints(request.prompt or "")
+        self._send_setup_prompt_text = cleaned_prompt
+        self._send_setup_prompt_kind = self._detect_send_prompt_kind(cleaned_prompt)
+        self._refresh_send_setup_sources()
+
+        if self._send_setup_prompt_kind == "per_account":
+            default = self._extract_send_prompt_default_int(
+                cleaned_prompt,
+                self._send_per_account_spin.value(),
+            )
+            self._send_per_account_spin.setValue(default)
+        elif self._send_setup_prompt_kind == "concurrency":
+            default = self._extract_send_prompt_default_int(
+                cleaned_prompt,
+                self._send_concurrency_spin.value(),
+            )
+            self._send_concurrency_spin.setValue(default)
+        elif self._send_setup_prompt_kind == "delay_min":
+            default = self._extract_send_prompt_default_int(
+                cleaned_prompt,
+                self._send_delay_min_spin.value(),
+            )
+            self._send_delay_min_spin.setValue(default)
+        elif self._send_setup_prompt_kind == "delay_max":
+            default = self._extract_send_delay_max_default(
+                cleaned_prompt,
+                self._send_delay_max_spin.value(),
+            )
+            self._send_delay_max_spin.setValue(default)
+        elif self._send_setup_prompt_kind == "templates_toggle":
+            self._set_send_template_mode(self._send_setup_use_saved_templates)
+        elif self._send_setup_prompt_kind == "templates_saved":
+            self._set_send_template_mode(True)
+
+        prompt_label = cleaned_prompt.strip() or "Escribe una plantilla y presiona Enviar."
+        self._send_setup_prompt_label.setText(prompt_label)
+        self._focus_send_setup_kind(self._send_setup_prompt_kind)
+
+    def _send_setup_value_for_request(self, request: InputRequest) -> str:
+        kind = self._send_setup_prompt_kind or self._detect_send_prompt_kind(request.prompt or "")
+        if kind == "alias":
+            value = self._send_alias_combo.currentText().strip()
+            return value or "default"
+        if kind == "leads_alias":
+            return self._send_leads_combo.currentText().strip()
+        if kind == "per_account":
+            return str(self._send_per_account_spin.value())
+        if kind == "concurrency":
+            return str(self._send_concurrency_spin.value())
+        if kind == "delay_min":
+            return str(self._send_delay_min_spin.value())
+        if kind == "delay_max":
+            return str(self._send_delay_max_spin.value())
+        if kind == "templates_toggle":
+            return "s" if self._send_setup_use_saved_templates else "n"
+        if kind == "templates_saved":
+            data = self._send_saved_template_combo.currentData()
+            if data is not None:
+                data_text = str(data).strip()
+                if data_text:
+                    return data_text
+            text_value = self._send_saved_template_combo.currentText().strip()
+            if ")" in text_value and text_value.split(")", 1)[0].strip().isdigit():
+                return text_value.split(")", 1)[0].strip()
+            return text_value
+        return self._send_manual_message_input.text()
+
+    def _set_send_setup_validation_error(self, message: str) -> None:
+        self._set_status("Waiting input")
+        self._send_setup_prompt_label.setText(message)
+        self._append_log(f"[gui] send setup validation: {message}\n")
+
+    def _selected_saved_template_value(self) -> str:
+        data = self._send_saved_template_combo.currentData()
+        if data is not None:
+            data_text = str(data).strip()
+            if data_text:
+                return data_text
+        text_value = self._send_saved_template_combo.currentText().strip()
+        if ")" in text_value and text_value.split(")", 1)[0].strip().isdigit():
+            return text_value.split(")", 1)[0].strip()
+        return text_value
+
+    def _build_send_setup_auto_fill_queue(self) -> Optional[list[str]]:
+        alias_group = self._send_alias_combo.currentText().strip()
+        if not alias_group:
+            self._set_send_setup_validation_error("Selecciona Alias o grupo.")
+            return None
+
+        leads_alias = self._send_leads_combo.currentText().strip()
+        if not leads_alias:
+            self._set_send_setup_validation_error("Selecciona Alias de los leads.")
+            return None
+
+        per_account = int(self._send_per_account_spin.value())
+        concurrency = int(self._send_concurrency_spin.value())
+        delay_min = int(self._send_delay_min_spin.value())
+        delay_max = int(self._send_delay_max_spin.value())
+        if delay_max < delay_min:
+            self._set_send_setup_validation_error("Delay máximo debe ser mayor o igual al mínimo.")
+            return None
+
+        use_saved_templates = bool(self._send_setup_use_saved_templates)
+        template_toggle = "SI" if use_saved_templates else "NO"
+        if use_saved_templates:
+            selected_template = self._selected_saved_template_value().strip()
+            if not selected_template:
+                self._set_send_setup_validation_error("Selecciona una plantilla guardada.")
+                return None
+            queue = [
+                alias_group,
+                leads_alias,
+                str(per_account),
+                str(concurrency),
+                str(delay_min),
+                str(delay_max),
+                template_toggle,
+                selected_template,
+            ]
+            return queue
+
+        manual_message = self._send_manual_message_input.text().strip()
+        if not manual_message:
+            self._set_send_setup_validation_error("Escribe un mensaje manual.")
+            return None
+        # El CLI cierra la captura manual con una linea vacia.
+        queue = [
+            alias_group,
+            leads_alias,
+            str(per_account),
+            str(concurrency),
+            str(delay_min),
+            str(delay_max),
+            template_toggle,
+            manual_message,
+            "",
+        ]
+        return queue
+
+    def _consume_send_setup_auto_fill(self, request: InputRequest) -> bool:
+        if self._active_sidebar_key != "send" or not self._auto_fill_active:
+            return False
+        if request.is_menu:
+            self._auto_fill_active = False
+            self._auto_fill_queue.clear()
+            self._hide_send_loading_overlay()
+            return False
+        if not self._auto_fill_queue:
+            self._auto_fill_active = False
+            return False
+        value = self._auto_fill_queue.pop(0)
+        kind = self._detect_send_prompt_kind(request.prompt or "")
+        outbound = value
+        if kind == "templates_toggle":
+            outbound = "s" if value.strip().lower() in {"s", "si", "yes", "y"} else "n"
+        adapter = self._io_adapter
+        if adapter is None:
+            self._auto_fill_active = False
+            self._auto_fill_queue.clear()
+            self._hide_send_loading_overlay()
+            return False
+        accepted = adapter.fulfill_input(outbound, request_id=request.request_id)
+        if not accepted:
+            self._auto_fill_active = False
+            self._auto_fill_queue.clear()
+            self._hide_send_loading_overlay()
+            return False
+        visible = "***" if request.sensitive and outbound else outbound
+        self._append_log(f"[gui] input submitted: {visible}\n")
+        if not self._auto_fill_queue:
+            self._auto_fill_active = False
+        return True
+
+    def _submit_send_setup_value(self) -> None:
+        if self._block_navigation:
+            return
+        if self._active_sidebar_key != "send":
+            return
+        if self._auto_fill_active:
+            return
+        queue = self._build_send_setup_auto_fill_queue()
+        if not queue:
+            return
+        self._capture_low_profile_list = False
+        self._capture_session_list = False
+        self._send_low_profile_accounts.clear()
+        self._send_session_issue_accounts.clear()
+        self._send_login_total_failure = False
+        self._emit_engine_event("SEND_CONFIG_SUBMITTED", queued_inputs=len(queue))
+        self._auto_fill_queue = queue
+        self._auto_fill_active = True
+        self._show_send_loading_overlay()
+        pending = self._pending_request
+        if isinstance(pending, InputRequest):
+            self._consume_send_setup_auto_fill(pending)
+
+    def _exit_send_config_mode(self) -> None:
+        self._hide_send_loading_overlay()
+        self._auto_fill_active = False
+        self._auto_fill_queue.clear()
+        self._capture_low_profile_list = False
+        self._capture_session_list = False
+        self._send_low_profile_accounts.clear()
+        self._send_session_issue_accounts.clear()
+        self._send_login_total_failure = False
+        self._set_send_setup_visible(False)
+        self._send_setup_prompt_kind = ""
+        self._send_setup_prompt_text = ""
+        self._send_setup_use_saved_templates = False
+        self._set_send_template_mode(False)
+        self._send_manual_message_input.clear()
+        if self._send_alias_combo.count() > 0:
+            self._send_alias_combo.setCurrentIndex(0)
+        if self._send_leads_combo.count() > 0:
+            self._send_leads_combo.setCurrentIndex(0)
+        if self._send_saved_template_combo.count() > 0:
+            self._send_saved_template_combo.setCurrentIndex(0)
+        self._last_prompt_value.setText("-")
+
+    def _handle_send_setup_back(self) -> None:
+        try:
+            from runtime import request_stop
+
+            request_stop("salida desde configuracion de envio")
+        except Exception:
+            pass
+        if self._pending_request is not None:
+            self._submit_current_input("")
+        self._exit_send_config_mode()
+        self._set_page(self.PAGE_DASHBOARD)
 
     def _build_execution_page(self) -> QWidget:
         page = QWidget()
@@ -1680,6 +2512,15 @@ class MainWindow(QMainWindow):
         text = _strip_cli_hints(line).strip()
         if not text or text.startswith("[gui]") or text.startswith("[DBG]"):
             return ""
+        upper = text.upper()
+        if (
+            text.startswith("SCROLL_CHECK")
+            or text.startswith("DISCOVERY_")
+            or text.startswith("LOOP_EXIT")
+            or text.startswith("[TEMP_METRIC]")
+            or upper.startswith("TRACE_")
+        ):
+            return ""
         if _AUTORESPONDER_TRACE_RE.match(text):
             return ""
         if _CLI_HINT_LINE_RE.match(text):
@@ -1957,10 +2798,16 @@ class MainWindow(QMainWindow):
         self._execution_mode_active = visible
         self._set_execution_view(view)
         if visible:
+            self._hide_send_loading_overlay()
             if self._stack.currentIndex() != self.PAGE_EXECUTION:
                 self._set_page(self.PAGE_EXECUTION)
             return
-        if not keep_view and self._stack.currentIndex() == self.PAGE_EXECUTION:
+        if (
+            not keep_view
+            and self._stack.currentIndex() == self.PAGE_EXECUTION
+            and not self._showing_summary
+            and not self._block_navigation
+        ):
             self._set_page(self.PAGE_MENU)
 
     @staticmethod
@@ -1984,10 +2831,255 @@ class MainWindow(QMainWindow):
         if self._campaign_running == running:
             return
         self._campaign_running = running
+        if running:
+            self._emit_engine_event("CAMPAIGN_RUNNING")
+            if not self._campaign_active:
+                self._campaign_active = True
+                self._campaign_start_time = time.time()
+                self._campaign_summary_detected = False
+                self._block_navigation = False
+                self._campaign_account_stats.clear()
+                self._campaign_summary_capture_active = False
+                self._campaign_summary_alias = "-"
+                self._campaign_summary_accounts.clear()
+                self._campaign_summary_totals = {
+                    "ok": 0,
+                    "err": 0,
+                    "no_dm": 0,
+                    "unver": 0,
+                    "total": 0,
+                }
+                self._capture_low_profile_list = False
+                self._capture_session_list = False
+                self._send_low_profile_accounts.clear()
+                self._send_session_issue_accounts.clear()
+                self._send_login_total_failure = False
+            self._hide_send_loading_overlay()
+        else:
+            self._emit_engine_event("CAMPAIGN_FINISHED")
         if hasattr(self, "_exec_stop_button"):
             self._exec_stop_button.setEnabled(running)
         if not running:
             self._set_execution_mode(self._autoresponder_running or self._leads_filter_running)
+
+    @staticmethod
+    def _safe_int_text(value: str) -> int:
+        match = re.search(r"\d+", str(value or ""))
+        if not match:
+            return 0
+        try:
+            return max(0, int(match.group(0)))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _parse_campaign_summary_row(line: str) -> Optional[tuple[str, int, int, int, int, int]]:
+        parts = str(line or "").strip().split()
+        if len(parts) < 6:
+            return None
+        tail = parts[-5:]
+        if not all(token.isdigit() for token in tail):
+            return None
+        account = " ".join(parts[:-5]).strip()
+        if not account:
+            return None
+        if _normalized_label(account) == "cuenta":
+            return None
+        ok, err, no_dm, unver, total = (int(token) for token in tail)
+        return account, ok, err, no_dm, unver, total
+
+    def _campaign_summary_metrics(self) -> dict[str, int]:
+        totals = dict(self._campaign_summary_totals)
+        if totals.get("total", 0) > 0 or self._campaign_summary_accounts:
+            ok = max(0, int(totals.get("ok", 0)))
+            errors = max(0, int(totals.get("err", 0)))
+            skipped = max(0, int(totals.get("no_dm", 0)))
+            unverified = max(0, int(totals.get("unver", 0)))
+            sent = max(0, ok + unverified)
+            total = max(0, int(totals.get("total", sent + errors + skipped)))
+            return {
+                "sent": sent,
+                "errors": errors,
+                "unverified": unverified,
+                "skipped": skipped,
+                "total": total,
+            }
+
+        sent = self._safe_int_text(self._exec_metric_labels.get("sent", QLabel("0")).text())
+        errors = self._safe_int_text(self._exec_metric_labels.get("error", QLabel("0")).text())
+        unverified = self._safe_int_text(self._exec_metric_labels.get("unverified", QLabel("0")).text())
+        skipped = self._safe_int_text(self._exec_metric_labels.get("skipped", QLabel("0")).text())
+        total = max(0, sent + errors + skipped)
+        return {
+            "sent": sent,
+            "errors": errors,
+            "unverified": unverified,
+            "skipped": skipped,
+            "total": total,
+        }
+
+    def _show_custom_summary_modal(self, duration_seconds: float) -> None:
+        if self._showing_summary:
+            return
+        self._showing_summary = True
+        self._block_navigation = True
+        try:
+            metrics = self._campaign_summary_metrics()
+            alias = self._campaign_summary_alias.strip() or "-"
+            if alias == "-":
+                alias_text = self._exec_alias_tag.text().strip()
+                alias = alias_text.split(":", 1)[1].strip() if ":" in alias_text else "-"
+            duration_text = self._format_elapsed_hhmmss(duration_seconds)
+
+            dialog = QDialog(self)
+            dialog.setObjectName("CampaignSummaryDialog")
+            dialog.setWindowTitle("Resumen de Campaña")
+            dialog.setModal(True)
+            dialog.setMinimumWidth(620)
+            dialog.setFont(QFont("Segoe UI Emoji", 10))
+            dialog.setStyleSheet(
+                """
+                QDialog#CampaignSummaryDialog {
+                    background-color: #0b1220;
+                    color: #e2e8f0;
+                    border: 1px solid #1e293b;
+                    border-radius: 12px;
+                }
+                QLabel#CampaignSummaryTitle {
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: #f8fafc;
+                }
+                QLabel#CampaignSummaryBody {
+                    font-size: 14px;
+                    color: #cbd5e1;
+                }
+                QFrame#CampaignSummaryWarn {
+                    background-color: #422006;
+                    border: 1px solid #92400e;
+                    border-radius: 10px;
+                }
+                QLabel#CampaignSummaryWarnTitle {
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #fbbf24;
+                }
+                QLabel#CampaignSummaryWarnBody {
+                    font-size: 13px;
+                    color: #fde68a;
+                }
+                QPushButton#CampaignSummaryClose {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 18px;
+                    font-weight: 700;
+                }
+                QPushButton#CampaignSummaryClose:hover {
+                    background-color: #1d4ed8;
+                }
+                """
+            )
+
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(18, 18, 18, 18)
+            layout.setSpacing(10)
+
+            title = QLabel("📊 Resumen de Campaña")
+            title.setObjectName("CampaignSummaryTitle")
+            title.setAlignment(Qt.AlignCenter)
+            title.setFont(QFont("Segoe UI Emoji", 12))
+
+            sent_line = QLabel(f"🟢 Mensajes enviados: {metrics['sent']}")
+            err_line = QLabel(f"🔴 Errores: {metrics['errors']}")
+            time_line = QLabel(f"⏱ Tiempo total: {duration_text}")
+            alias_line = QLabel(f"Alias: {alias}")
+            for row in (sent_line, err_line, time_line, alias_line):
+                row.setObjectName("CampaignSummaryBody")
+                row.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                row.setFont(QFont("Segoe UI Emoji", 10))
+
+            accounts_title = QLabel("Cuentas")
+            accounts_title.setObjectName("CampaignSummaryBody")
+            accounts_title.setStyleSheet("font-weight: 700; color: #e2e8f0;")
+            accounts_title.setFont(QFont("Segoe UI Emoji", 10))
+
+            lines: list[str] = []
+            source_accounts = self._campaign_summary_accounts or self._campaign_account_stats
+            for username in sorted(source_accounts.keys()):
+                stats = source_accounts.get(username) or {}
+                ok_count = max(0, int(stats.get("ok", 0)))
+                err_count = max(0, int(stats.get("err", 0)))
+                tone = "🔴" if err_count > ok_count and err_count > 0 else "🟢"
+                lines.append(f"{tone} {username} — OK: {ok_count} | ERR: {err_count}")
+            if not lines:
+                lines = ["🟢 Sin detalle por cuenta — OK: 0 | ERR: 0"]
+
+            accounts_body = QLabel("\n".join(lines))
+            accounts_body.setObjectName("CampaignSummaryBody")
+            accounts_body.setWordWrap(True)
+            accounts_body.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            accounts_body.setFont(QFont("Segoe UI Emoji", 10))
+
+            show_recommendations = (
+                metrics["errors"] > 0 or metrics["unverified"] > 0 or metrics["skipped"] > 0
+            )
+            warn_card: Optional[QFrame] = None
+            if show_recommendations:
+                warn_card = QFrame()
+                warn_card.setObjectName("CampaignSummaryWarn")
+                warn_layout = QVBoxLayout(warn_card)
+                warn_layout.setContentsMargins(10, 10, 10, 10)
+                warn_layout.setSpacing(6)
+                warn_title = QLabel("⚠️ Recomendaciones")
+                warn_title.setObjectName("CampaignSummaryWarnTitle")
+                warn_title.setFont(QFont("Segoe UI Emoji", 10))
+                suggested_cap = max(10, min(60, metrics["sent"] + metrics["errors"]))
+                worst_account = "-"
+                worst_err = 0
+                for username, stats in source_accounts.items():
+                    err_value = max(0, int((stats or {}).get("err", 0)))
+                    if err_value > worst_err:
+                        worst_err = err_value
+                        worst_account = username
+                warn_body = QLabel(
+                    f"Cuenta con más errores: {worst_account} ({worst_err}).\n"
+                    f"Reducir volumen a ~{suggested_cap} mensajes/día.\n"
+                    "Activar interacción manual para estabilizar resultados."
+                )
+                warn_body.setObjectName("CampaignSummaryWarnBody")
+                warn_body.setWordWrap(True)
+                warn_body.setFont(QFont("Segoe UI Emoji", 10))
+                warn_layout.addWidget(warn_title)
+                warn_layout.addWidget(warn_body)
+
+            close_button = QPushButton("Cerrar")
+            close_button.setObjectName("CampaignSummaryClose")
+            close_button.clicked.connect(dialog.accept)
+
+            layout.addWidget(title)
+            layout.addWidget(alias_line)
+            layout.addWidget(sent_line)
+            layout.addWidget(err_line)
+            layout.addWidget(time_line)
+            layout.addWidget(accounts_title)
+            layout.addWidget(accounts_body)
+            if warn_card is not None:
+                layout.addWidget(warn_card)
+            layout.addWidget(close_button, 0, Qt.AlignCenter)
+            dialog.exec()
+        finally:
+            self._showing_summary = False
+            self._block_navigation = False
+            request = self._pending_request
+            if isinstance(request, InputRequest) and not request.is_menu:
+                prompt_norm = _normalized_label(_strip_cli_hints(request.prompt or ""))
+                if "presiona enter para continuar" in prompt_norm or "enter para continuar" in prompt_norm:
+                    self._submit_current_input("")
+            self._set_active_sidebar("dashboard")
+            self._set_page(self.PAGE_DASHBOARD)
+            self._emit_engine_event("SUMMARY_CLOSED")
 
     def _set_autoresponder_running(self, running: bool) -> None:
         if self._autoresponder_running == running:
@@ -2046,12 +3138,12 @@ class MainWindow(QMainWindow):
         if not self._campaign_running:
             self._append_log("[gui] No campaign running.\n")
             return
+        self._emit_engine_event("STOP_REQUESTED")
         try:
             from runtime import request_stop
 
             request_stop("se presionó Q")
             self._append_log("[gui] Frenar campaña solicitado (equivalente a Q).\n")
-            self._set_campaign_running(False)
         except Exception as exc:
             self._append_log(f"[gui] No se pudo solicitar freno de campaña: {exc}\n")
 
@@ -2192,6 +3284,12 @@ class MainWindow(QMainWindow):
         if event_row:
             account, lead, row_time, result, detail = event_row
             self._update_exec_row(account, lead, row_time, result, detail)
+            stats = self._campaign_account_stats.setdefault(account, {"ok": 0, "err": 0})
+            result_norm = _normalized_label(result)
+            if "error" in result_norm or "fall" in result_norm:
+                stats["err"] = int(stats.get("err", 0)) + 1
+            elif "skip" not in result_norm and "omit" not in result_norm:
+                stats["ok"] = int(stats.get("ok", 0)) + 1
             self._set_campaign_running(True)
             self._set_execution_mode(True)
             send_log_line = True
@@ -2221,15 +3319,55 @@ class MainWindow(QMainWindow):
             self._set_execution_mode(True)
             send_log_line = True
 
-        completion_tokens = (
-            "resumen final",
-            "total general",
-            "hora fin",
-            "proceso detenido",
-            "ok confirmados",
-        )
-        if any(token in normalized for token in completion_tokens):
-            self._set_campaign_running(False)
+        if "resumen final" in normalized and "campana" in normalized:
+            self._campaign_summary_detected = True
+            self._emit_engine_event("CAMPAIGN_SUMMARY_DETECTED")
+            self._campaign_summary_capture_active = True
+            self._campaign_summary_alias = "-"
+            self._campaign_summary_accounts.clear()
+            self._campaign_summary_totals = {
+                "ok": 0,
+                "err": 0,
+                "no_dm": 0,
+                "unver": 0,
+                "total": 0,
+            }
+            send_log_line = True
+        elif self._campaign_summary_capture_active:
+            if normalized.startswith("alias:"):
+                alias_chunk = normalized_line.split("|", 1)[0].strip()
+                if ":" in alias_chunk:
+                    parsed_alias = alias_chunk.split(":", 1)[1].strip()
+                    if parsed_alias:
+                        self._campaign_summary_alias = parsed_alias
+                send_log_line = True
+
+            parsed_row = self._parse_campaign_summary_row(normalized_line)
+            if parsed_row is not None:
+                account, ok, err, no_dm, unver, total = parsed_row
+                account_norm = _normalized_label(account)
+                if account_norm == "total general":
+                    self._campaign_summary_totals = {
+                        "ok": ok,
+                        "err": err,
+                        "no_dm": no_dm,
+                        "unver": unver,
+                        "total": total,
+                    }
+                    self._campaign_summary_capture_active = False
+                else:
+                    self._campaign_summary_accounts[account] = {
+                        "ok": ok,
+                        "err": err,
+                        "no_dm": no_dm,
+                        "unver": unver,
+                        "total": total,
+                    }
+                send_log_line = True
+
+            if _DECORATIVE_LINE_RE.match(stripped) and self._campaign_summary_totals.get("total", 0) > 0:
+                self._campaign_summary_capture_active = False
+        elif any(token in normalized for token in ("total general", "hora fin", "ok confirmados")):
             send_log_line = True
 
         is_noise = (
@@ -2523,13 +3661,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setObjectName("SubmenuScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
         container = QWidget()
         container.setObjectName("SubmenuScrollContent")
         container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -2571,8 +3702,7 @@ class MainWindow(QMainWindow):
         container_layout.addWidget(buttons)
         container_layout.addStretch(1)
 
-        scroll.setWidget(container)
-        layout.addWidget(scroll, 1)
+        layout.addWidget(container, 1)
         return page
 
     def _build_log_panel(self) -> QWidget:
@@ -2631,6 +3761,33 @@ class MainWindow(QMainWindow):
     def _set_status(self, value: str) -> None:
         self._status_value.setText(value)
 
+    def _append_engine_log_line(self, text: str) -> None:
+        if not text or not hasattr(self, "_log_console"):
+            return
+        cursor = self._log_console.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text)
+        self._log_console.setTextCursor(cursor)
+        self._log_console.ensureCursorVisible()
+
+    @Slot(str, str, str)
+    def _on_engine_state_changed(self, previous: str, current: str, reason: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self._append_engine_log_line(
+            f"[engine] {stamp} {previous} -> {current} ({reason})\n"
+        )
+
+    def _emit_engine_event(self, event_type: str, **payload: Any) -> None:
+        if not USE_ENGINE_STATE_MANAGER:
+            return
+        manager = self._engine_state_manager
+        if manager is None:
+            return
+        event: dict[str, Any] = {"type": str(event_type or "").strip().upper()}
+        if payload:
+            event.update(payload)
+        manager.handle_backend_event(event)
+
     def _dbg(self, message: str) -> None:
         if not DEBUG_UI_FLOW:
             return
@@ -2655,6 +3812,308 @@ class MainWindow(QMainWindow):
             return
         self.backend_done.emit(exit_code)
 
+    def _consume_send_prompt_context_line(self, line: str) -> None:
+        stripped = str(line or "").strip()
+        if not stripped:
+            return
+        normalized_line = self._normalize_execution_line(stripped)
+        normalized = _normalized_label(normalized_line)
+        if not normalized:
+            return
+
+        if "las siguientes cuentas necesitan volver a iniciar sesion" in normalized:
+            self._capture_session_list = True
+            self._send_session_issue_accounts.clear()
+            self._emit_engine_event("SESSION_ISSUES_DETECTED")
+            return
+
+        if self._capture_session_list:
+            issue_match = _ACCOUNT_REASON_LINE_RE.match(normalized_line)
+            if issue_match:
+                username = issue_match.group("username").strip()
+                reason = issue_match.group("reason").strip()
+                self._send_session_issue_accounts.append((username, reason))
+                return
+            if not stripped.startswith("-"):
+                self._capture_session_list = False
+
+        if "se detectaron cuentas en modo bajo perfil" in normalized:
+            self._capture_low_profile_list = True
+            self._send_low_profile_accounts.clear()
+            self._emit_engine_event("LOW_PROFILE_DETECTED")
+            return
+
+        if self._capture_low_profile_list:
+            low_profile_match = _ACCOUNT_REASON_LINE_RE.match(normalized_line)
+            if low_profile_match:
+                username = low_profile_match.group("username").strip()
+                reason = low_profile_match.group("reason").strip()
+                self._send_low_profile_accounts.append((username, reason))
+                return
+            if not stripped.startswith("-"):
+                self._capture_low_profile_list = False
+
+        if (
+            "no hay cuentas con sesion valida para enviar mensajes" in normalized
+            or "no se pudo iniciar sesion en ninguna cuenta" in normalized
+        ):
+            self._send_login_total_failure = True
+            self._emit_engine_event("LOGIN_TOTAL_FAILURE")
+
+    def _run_send_critical_choice_dialog(
+        self,
+        *,
+        title: str,
+        body: str,
+        detail_lines: Optional[list[str]] = None,
+        positive_label: str = "Sí",
+        negative_label: Optional[str] = "No",
+    ) -> bool:
+        self._block_navigation = True
+        try:
+            result = {"value": False}
+            dialog = QDialog(self)
+            dialog.setObjectName("SendCriticalDialog")
+            dialog.setWindowTitle("Envío de mensajes")
+            dialog.setModal(True)
+            dialog.setMinimumWidth(600)
+            dialog.setFont(QFont("Segoe UI Emoji", 10))
+            dialog.setStyleSheet(
+                """
+                QDialog#SendCriticalDialog {
+                    background-color: #0b1220;
+                    color: #e2e8f0;
+                    border: 1px solid #1e293b;
+                    border-radius: 12px;
+                }
+                QLabel#SendCriticalTitle {
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: #f8fafc;
+                }
+                QLabel#SendCriticalBody {
+                    font-size: 14px;
+                    color: #cbd5e1;
+                }
+                QLabel#SendCriticalList {
+                    font-size: 13px;
+                    color: #e2e8f0;
+                }
+                QPushButton#SendCriticalPrimary {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 18px;
+                    font-weight: 700;
+                }
+                QPushButton#SendCriticalPrimary:hover {
+                    background-color: #1d4ed8;
+                }
+                QPushButton#SendCriticalSecondary {
+                    background-color: #334155;
+                    color: #e2e8f0;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 18px;
+                    font-weight: 700;
+                }
+                QPushButton#SendCriticalSecondary:hover {
+                    background-color: #475569;
+                }
+                """
+            )
+
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(18, 18, 18, 18)
+            layout.setSpacing(10)
+
+            title_label = QLabel(title)
+            title_label.setObjectName("SendCriticalTitle")
+            title_label.setAlignment(Qt.AlignCenter)
+
+            body_label = QLabel(body)
+            body_label.setObjectName("SendCriticalBody")
+            body_label.setWordWrap(True)
+
+            layout.addWidget(title_label)
+            layout.addWidget(body_label)
+
+            if detail_lines:
+                details = QLabel("\n".join(detail_lines))
+                details.setObjectName("SendCriticalList")
+                details.setWordWrap(True)
+                details.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+                layout.addWidget(details)
+
+            button_row = QHBoxLayout()
+            button_row.setContentsMargins(0, 4, 0, 0)
+            button_row.setSpacing(10)
+            button_row.addStretch(1)
+
+            positive = QPushButton(positive_label)
+            positive.setObjectName("SendCriticalPrimary")
+            positive.clicked.connect(lambda: (result.__setitem__("value", True), dialog.accept()))
+            button_row.addWidget(positive)
+
+            if negative_label:
+                negative = QPushButton(negative_label)
+                negative.setObjectName("SendCriticalSecondary")
+                negative.clicked.connect(lambda: (result.__setitem__("value", False), dialog.accept()))
+                button_row.addWidget(negative)
+
+            button_row.addStretch(1)
+            layout.addLayout(button_row)
+            dialog.exec()
+            return bool(result["value"])
+        finally:
+            self._block_navigation = False
+
+    def _maybe_intercept_send_critical_prompt(self, request: InputRequest) -> bool:
+        prompt_text = _strip_cli_hints(request.prompt or "")
+        prompt_norm = _normalized_label(prompt_text)
+        if not prompt_norm:
+            return False
+
+        if "aplicar limites conservadores automaticamente" in prompt_norm:
+            self._emit_engine_event("LOW_PROFILE_DECISION_REQUEST")
+            lines = [
+                f"@{username} - {reason}"
+                for username, reason in self._send_low_profile_accounts
+            ]
+            choice = self._run_send_critical_choice_dialog(
+                title="⚠️ Cuentas con perfil bajo",
+                body="Se detectaron cuentas en modo bajo perfil. ¿Aplicar límites conservadores automáticamente?",
+                detail_lines=lines or None,
+                positive_label="Sí",
+                negative_label="No",
+            )
+            self._capture_low_profile_list = False
+            self._emit_engine_event(
+                "DECISION_SUBMITTED",
+                decision="S" if choice else "N",
+                decision_type="LOW_PROFILE",
+            )
+            self._submit_current_input("S" if choice else "N")
+            return True
+
+        if "iniciar sesion ahora" in prompt_norm:
+            self._emit_engine_event("SESSION_LOGIN_DECISION_REQUEST")
+            issue_lines = [
+                f"@{username} - {reason}"
+                for username, reason in self._send_session_issue_accounts
+            ]
+            partial_prompt = (
+                "continuar" in prompt_norm
+                or "cuentas activas" in prompt_norm
+                or "solo" in prompt_norm
+            )
+            if partial_prompt:
+                choice = self._run_send_critical_choice_dialog(
+                    title="⚠️ Inicio de sesión parcial",
+                    body=(
+                        "Se detectaron cuentas con sesión inválida. "
+                        "¿Desea continuar solo con las cuentas activas?"
+                    ),
+                    detail_lines=issue_lines or None,
+                    positive_label="Continuar",
+                    negative_label="Cancelar",
+                )
+            else:
+                choice = self._run_send_critical_choice_dialog(
+                    title="🔐 Sesión requerida",
+                    body=(
+                        "Se detectaron cuentas sin sesión activa o con sesión vencida.\n"
+                        "¿Desea iniciar sesión ahora?"
+                    ),
+                    detail_lines=issue_lines or None,
+                    positive_label="Sí",
+                    negative_label="No",
+                )
+            self._capture_session_list = False
+            self._emit_engine_event(
+                "DECISION_SUBMITTED",
+                decision="S" if choice else "N",
+                decision_type="SESSION_LOGIN",
+            )
+            self._submit_current_input("S" if choice else "N")
+            if partial_prompt and not choice:
+                self._set_active_sidebar("dashboard")
+                self._set_page(self.PAGE_DASHBOARD)
+            return True
+
+        if "desea continuar" in prompt_norm and (
+            "cuentas activas" in prompt_norm or "solo" in prompt_norm
+        ):
+            self._emit_engine_event("PARTIAL_LOGIN_DECISION_REQUEST")
+            issue_lines = [
+                f"@{username} - {reason}"
+                for username, reason in self._send_session_issue_accounts
+            ]
+            choice = self._run_send_critical_choice_dialog(
+                title="⚠️ Inicio de sesión parcial",
+                body="Se inició sesión de forma parcial. ¿Desea continuar solo con las cuentas activas?",
+                detail_lines=issue_lines or None,
+                positive_label="Continuar",
+                negative_label="Cancelar",
+            )
+            self._capture_session_list = False
+            self._emit_engine_event(
+                "DECISION_SUBMITTED",
+                decision="S" if choice else "N",
+                decision_type="PARTIAL_LOGIN",
+            )
+            self._submit_current_input("S" if choice else "N")
+            if not choice:
+                self._set_active_sidebar("dashboard")
+                self._set_page(self.PAGE_DASHBOARD)
+            return True
+
+        if self._send_login_total_failure and request.is_menu:
+            self._emit_engine_event("LOGIN_TOTAL_FAILURE")
+            issue_lines = [
+                f"@{username} - {reason}"
+                for username, reason in self._send_session_issue_accounts
+            ]
+            self._run_send_critical_choice_dialog(
+                title="❌ Error de sesión",
+                body="No se pudo iniciar sesión en ninguna de las cuentas seleccionadas.",
+                detail_lines=issue_lines or None,
+                positive_label="Ir al Dashboard",
+                negative_label=None,
+            )
+            self._send_login_total_failure = False
+            self._capture_session_list = False
+            self._send_session_issue_accounts.clear()
+            self._set_active_sidebar("dashboard")
+            self._set_page(self.PAGE_DASHBOARD)
+            return True
+
+        if self._send_login_total_failure and (
+            "presiona enter para continuar" in prompt_norm or "enter para continuar" in prompt_norm
+        ):
+            self._emit_engine_event("LOGIN_TOTAL_FAILURE")
+            issue_lines = [
+                f"@{username} - {reason}"
+                for username, reason in self._send_session_issue_accounts
+            ]
+            self._run_send_critical_choice_dialog(
+                title="❌ Error de sesión",
+                body="No se pudo iniciar sesión en ninguna de las cuentas seleccionadas.",
+                detail_lines=issue_lines or None,
+                positive_label="Ir al Dashboard",
+                negative_label=None,
+            )
+            self._send_login_total_failure = False
+            self._capture_session_list = False
+            self._send_session_issue_accounts.clear()
+            self._submit_current_input("")
+            self._set_active_sidebar("dashboard")
+            self._set_page(self.PAGE_DASHBOARD)
+            return True
+
+        return False
+
     @Slot(str)
     def _append_log(self, chunk: str) -> None:
         text = _clean_log_chunk("" if chunk is None else str(chunk))
@@ -2662,6 +4121,7 @@ class MainWindow(QMainWindow):
             return
 
         for raw_line in text.splitlines():
+            self._consume_send_prompt_context_line(raw_line)
             self._consume_execution_line(raw_line)
             self._consume_leads_filter_line(raw_line)
             self._consume_autoresponder_line(raw_line)
@@ -2677,6 +4137,8 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _preview_menu_detected(self, request_obj: object) -> None:
         if not isinstance(request_obj, InputRequest):
+            return
+        if self._block_navigation or self._campaign_summary_detected:
             return
         if request_obj.is_menu and request_obj.menu_options:
             self._render_menu_request(request_obj, is_preview=True)
@@ -2694,6 +4156,8 @@ class MainWindow(QMainWindow):
             self._finish_accounts_operation()
         self._pending_request = request_obj
         self._set_status("Waiting input")
+        if not self._auto_fill_active:
+            self._hide_send_loading_overlay()
         prompt_text = _strip_cli_hints(request_obj.prompt or "(no prompt)")
         self._dbg(
             "backend_response_type=InputRequest "
@@ -2701,10 +4165,53 @@ class MainWindow(QMainWindow):
             f"is_menu={request_obj.is_menu} detected_options_count={len(request_obj.menu_options)}"
         )
         self._last_prompt_value.setText(prompt_text or "(no prompt)")
+        self._emit_engine_event(
+            "INPUT_REQUEST_RECEIVED",
+            request_id=request_obj.request_id,
+            is_menu=request_obj.is_menu,
+        )
+
+        if self._campaign_summary_detected:
+            duration = 0.0
+            if self._campaign_start_time > 0:
+                duration = max(0.0, time.time() - self._campaign_start_time)
+            self._campaign_summary_detected = False
+            self._block_navigation = True
+            self._campaign_active = False
+            self._campaign_start_time = 0.0
+            self._set_campaign_running(False)
+            self._show_custom_summary_modal(duration)
+            return
+
+        if self._maybe_intercept_send_critical_prompt(request_obj):
+            return
+
+        if request_obj.is_menu and request_obj.menu_options:
+            primary_mapping = self._derive_primary_mapping(request_obj.menu_options)
+            if self._looks_like_primary_menu(primary_mapping):
+                self._emit_engine_event("MAIN_MENU_READY", request_id=request_obj.request_id)
+        elif self._active_sidebar_key == "send":
+            kind = self._detect_send_prompt_kind(prompt_text)
+            kind_event = {
+                "alias": "INPUT_REQUEST_SEND_ALIAS",
+                "leads_alias": "INPUT_REQUEST_SEND_LEADS",
+                "per_account": "INPUT_REQUEST_SEND_PER_ACCOUNT",
+                "concurrency": "INPUT_REQUEST_SEND_CONCURRENCY",
+                "delay_min": "INPUT_REQUEST_SEND_DELAY_MIN",
+                "delay_max": "INPUT_REQUEST_SEND_DELAY_MAX",
+                "templates_toggle": "INPUT_REQUEST_SEND_TEMPLATE_MODE",
+                "templates_saved": "INPUT_REQUEST_SEND_TEMPLATE_PICK",
+                "manual_message": "INPUT_REQUEST_SEND_MANUAL_MESSAGE",
+            }.get(kind)
+            if kind_event:
+                self._emit_engine_event(kind_event, request_id=request_obj.request_id)
 
         self._set_execution_mode(False)
+        if self._consume_send_setup_auto_fill(request_obj):
+            return
         if self._accounts_alias_manual_mode and self._is_accounts_alias_text_prompt(prompt_text):
             self._pending_request_is_primary_menu = False
+            self._set_send_setup_visible(False)
             self._set_accounts_users_preview("")
             self._menu_title_label.setVisible(False)
             self._menu_prompt_label.setVisible(False)
@@ -2725,6 +4232,7 @@ class MainWindow(QMainWindow):
         self._pending_request_is_primary_menu = False
         self._dbg("calling_render_buttons=False")
         if self._is_accounts_alias_text_prompt(prompt_text):
+            self._set_send_setup_visible(False)
             self._set_accounts_users_preview("")
             self._menu_title_label.setVisible(False)
             self._menu_prompt_label.setVisible(False)
@@ -2743,6 +4251,7 @@ class MainWindow(QMainWindow):
         primary_mapping = self._derive_primary_mapping(request.menu_options)
         is_primary = self._looks_like_primary_menu(primary_mapping)
         self._set_execution_mode(False)
+        self._set_send_setup_visible(False)
 
         if is_primary:
             self._accounts_alias_select_value = ""
@@ -2808,7 +4317,8 @@ class MainWindow(QMainWindow):
             self._menu_title_label.setText("Filtrado de leads")
             self._update_leads_live_prompt(rendered_prompt)
         self._rebuild_menu_buttons(request.menu_options)
-        self._set_page(self.PAGE_MENU)
+        if not self._showing_summary and not self._block_navigation:
+            self._set_page(self.PAGE_MENU)
         if self._active_sidebar_key in self._SECTION_LOG_KEYS:
             self._section_log_scope = self._active_sidebar_key
         self._refresh_menu_activity_log()
@@ -3327,13 +4837,25 @@ class MainWindow(QMainWindow):
         self._set_accounts_users_preview("")
         cleaned_prompt = _strip_cli_hints(request.prompt or "Ingresa un valor:")
         leads_context = self._active_sidebar_key == "leads"
+        send_context = self._active_sidebar_key == "send"
         self._set_leads_live_card_visible(leads_context)
+        self._set_send_setup_visible(send_context)
         self._menu_title_label.setVisible(True)
-        self._menu_title_label.setText("Filtrado de leads" if leads_context else "Input")
+        if leads_context:
+            self._menu_title_label.setText("Filtrado de leads")
+        elif send_context:
+            self._menu_title_label.setText("Envío de mensajes")
+        else:
+            self._menu_title_label.setText("Input")
         self._menu_prompt_label.setVisible(True)
-        self._menu_prompt_label.setText(cleaned_prompt or "Ingresa un valor:")
+        if send_context:
+            self._menu_prompt_label.setText("Completa la configuración y presiona Enviar.")
+        else:
+            self._menu_prompt_label.setText(cleaned_prompt or "Ingresa un valor:")
         if leads_context:
             self._update_leads_live_prompt(cleaned_prompt)
+        if send_context:
+            self._configure_send_setup_from_request(request)
         self._clear_menu_buttons()
         self._menu_options_layout.takeAt(0)
         self._menu_options_layout.addStretch(1)
@@ -3380,6 +4902,20 @@ class MainWindow(QMainWindow):
 
     def _set_live_input_enabled(self, enabled: bool, *, prompt: str, sensitive: bool = False) -> None:
         prompt_text = _strip_cli_hints(prompt or "").strip()
+        send_panel_active = bool(
+            enabled
+            and self._active_sidebar_key == "send"
+            and hasattr(self, "_send_setup_card")
+            and self._send_setup_card.isVisible()
+        )
+        if send_panel_active:
+            self._live_input_prompt.setText("Configuración de envío activa en el panel central.")
+            self._live_input_field.setEnabled(False)
+            self._live_input_submit.setEnabled(False)
+            self._live_input_empty.setEnabled(False)
+            self._live_input_field.setEchoMode(QLineEdit.Normal)
+            self._live_input_field.setPlaceholderText("Usa el panel de configuración de envío")
+            return
         if enabled:
             self._live_input_prompt.setText(prompt_text or "Entrada global (input literal)")
             self._live_input_field.setEnabled(True)
@@ -3452,6 +4988,7 @@ class MainWindow(QMainWindow):
         accepted = self._io_adapter.fulfill_input(value, request_id=request_id)
         self._dbg(f"fulfill_input_accepted={accepted}")
         if not accepted:
+            self._hide_send_loading_overlay()
             return
 
         visible = "***" if request and request.sensitive and value else value
@@ -3479,12 +5016,27 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_backend_done(self, exit_code: int) -> None:
         self.backend_exit_code = exit_code
+        self._emit_engine_event("BACKEND_DONE", exit_code=exit_code)
+        self._hide_send_loading_overlay()
         self._set_status(f"Finished ({exit_code})")
         self._thread_value.setText("stopped")
         self._section_log_scope = None
         self._set_menu_activity_visible(False)
         self._finish_accounts_operation()
         self._set_campaign_running(False)
+        self._campaign_active = False
+        self._campaign_start_time = 0.0
+        self._block_navigation = False
+        self._campaign_summary_detected = False
+        self._campaign_summary_capture_active = False
+        self._campaign_summary_alias = "-"
+        self._campaign_summary_accounts.clear()
+        self._campaign_summary_totals = {"ok": 0, "err": 0, "no_dm": 0, "unver": 0, "total": 0}
+        self._capture_low_profile_list = False
+        self._capture_session_list = False
+        self._send_low_profile_accounts.clear()
+        self._send_session_issue_accounts.clear()
+        self._send_login_total_failure = False
         self._set_autoresponder_running(False)
         self._set_leads_filter_running(False)
         self._set_leads_live_card_visible(False)
@@ -3497,12 +5049,27 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_backend_failed(self, traceback_text: str) -> None:
         self.backend_exit_code = 1
+        self._emit_engine_event("BACKEND_ERROR")
+        self._hide_send_loading_overlay()
         self._set_status("Failed (1)")
         self._thread_value.setText("stopped")
         self._section_log_scope = None
         self._set_menu_activity_visible(False)
         self._finish_accounts_operation()
         self._set_campaign_running(False)
+        self._campaign_active = False
+        self._campaign_start_time = 0.0
+        self._block_navigation = False
+        self._campaign_summary_detected = False
+        self._campaign_summary_capture_active = False
+        self._campaign_summary_alias = "-"
+        self._campaign_summary_accounts.clear()
+        self._campaign_summary_totals = {"ok": 0, "err": 0, "no_dm": 0, "unver": 0, "total": 0}
+        self._capture_low_profile_list = False
+        self._capture_session_list = False
+        self._send_low_profile_accounts.clear()
+        self._send_session_issue_accounts.clear()
+        self._send_login_total_failure = False
         self._set_autoresponder_running(False)
         self._set_leads_filter_running(False)
         self._set_leads_live_card_visible(False)

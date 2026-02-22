@@ -127,13 +127,27 @@ def _is_valid_executable(path: Path) -> bool:
         return False
 
 
-def _resolve_executable_from_env() -> Optional[Path]:
+def _is_headless_shell_executable(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/").lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "chromium_headless_shell",
+            "chrome-headless-shell",
+            "headless_shell",
+        )
+    )
+
+
+def _resolve_executable_from_env(*, headless: bool) -> Optional[Path]:
     for key in _PLAYWRIGHT_EXECUTABLE_ENV_KEYS:
         value = (os.environ.get(key) or "").strip()
         if not value:
             continue
         candidate = Path(value).expanduser()
         if _is_valid_executable(candidate):
+            if not headless and _is_headless_shell_executable(candidate):
+                continue
             return candidate
     return None
 
@@ -168,7 +182,7 @@ def _select_executable(root: Path, *, headless: bool) -> Optional[Path]:
 
 
 def resolve_playwright_executable(headless: bool) -> Optional[Path]:
-    explicit = _resolve_executable_from_env()
+    explicit = _resolve_executable_from_env(headless=headless)
     if explicit:
         return explicit
 

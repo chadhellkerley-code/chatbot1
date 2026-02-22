@@ -321,6 +321,118 @@
         "matidiazlife"
       ],
       "enabled": true
+    },
+    "alias": {
+      "alias": "alias",
+      "prompt": "Disea�a� un plan de seguimiento amable para leads de Instagram. Envia� el primer recordatorio cuando hayan pasado al menos 6 horas sin respuesta. Si despua�s de 12 horas ma�s no responden, envia� un segundo y a�ltimo mensaje. No enva�es ma�s de dos seguimientos y evita� sonar insistente.",
+      "history": {
+        "tester|fu-1": {
+          "count": 1,
+          "last_sent_ts": 1771773419.1431599,
+          "last_message_id": "fu-1",
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771758899.1431599,
+          "cycle_followup_count": 1
+        },
+        "tester|fu-2": {
+          "count": 1,
+          "last_sent_ts": 1771773419.1431599,
+          "last_message_id": "fu-2",
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771758899.232108,
+          "cycle_followup_count": 1
+        }
+      }
+    },
+    "15dm": {
+      "alias": "15dm",
+      "prompt": "Disea�a� un plan de seguimiento amable para leads de Instagram. Envia� el primer recordatorio cuando hayan pasado al menos 6 horas sin respuesta. Si despua�s de 12 horas ma�s no responden, envia� un segundo y a�ltimo mensaje. No enva�es ma�s de dos seguimientos y evita� sonar insistente.",
+      "accounts": [
+        "matiid.life1"
+      ],
+      "enabled": true,
+      "history": {
+        "matiid.life1|104789137583521": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425303.5709817
+        },
+        "matiid.life1|107470890649750": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425303.5709817
+        },
+        "matiid.life1|17847770970578913": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425303.5709817
+        },
+        "matiid.life1|116332726424009": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425303.5709817
+        },
+        "matiid.life1|118735882848101": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425303.5709817
+        },
+        "matiid.life1|113545516707451": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425303.5709817
+        },
+        "matiid.life1|17845923495046571": {
+          "last_eval_ts": 1771598103.5709817,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771252503.5709817
+        },
+        "matiid.life1|340282366841710301244260145096594813454": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 1,
+          "cycle_anchor_ts": 1771626581.028
+        },
+        "matiid.life1|340282366841710301244276023756635767867": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 1,
+          "cycle_anchor_ts": 1771556903.387
+        },
+        "matiid.life1|340282366841710301244260114679287849888": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771425090.493
+        },
+        "matiid.life1|340282366841710301244260130627102922844": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771423391.017
+        },
+        "matiid.life1|340282366841710301244276040069543665889": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771423094.266
+        },
+        "matiid.life1|340282366841710301244260099563639356300": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771422928.164
+        },
+        "matiid.life1|340282366841710301244259994396813204058": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771419799.376
+        },
+        "matiid.life1|340282366841710301244260126251200025598": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771417624.28
+        },
+        "matiid.life1|340282366841710301244276135741226133547": {
+          "last_eval_ts": 1771627701.9807715,
+          "etapa_negocio": 0,
+          "cycle_anchor_ts": 1771201038.982
+        }
+      }
     }
   }
 }
