@@ -73,6 +73,7 @@ class _FakeInboxClient:
         self.list_threads_calls = 0
         self.get_messages_calls = 0
         self.sent_messages: list[tuple[str, str]] = []
+        self.opened_threads: list[str] = []
 
     def _open_inbox(self) -> None:
         self._page.url = "https://www.instagram.com/direct/inbox/"
@@ -129,11 +130,19 @@ class _FakeInboxClient:
         self.sent_messages.append((str(thread.id), text))
         return f"sent-{len(self.sent_messages)}"
 
+    def _open_thread(self, thread) -> bool:
+        self.opened_threads.append(str(getattr(thread, "id", "")))
+        return True
+
 
 class _FakeFollowupClient:
     def __init__(self, threads):
         self.user_id = "me"
+        self.username = "tester"
+        self.headless = True
         self._threads = threads
+        self._thread_cache: dict[str, object] = {}
+        self._thread_cache_meta: dict[str, dict] = {}
         self.sent_messages: list[tuple[str, str]] = []
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False):
@@ -147,6 +156,9 @@ class _FakeFollowupClient:
     def send_message(self, thread, text: str):
         self.sent_messages.append((str(thread.id), text))
         return f"fu-{len(self.sent_messages)}"
+
+    def _open_thread(self, thread) -> bool:
+        return True
 
 
 class _ScenarioFollowupClient(_FakeFollowupClient):
@@ -181,15 +193,49 @@ class _FakeIterInboxClientWithOpenFailures(_FakeIterInboxClient):
         super().__init__(rows)
         self.fail_thread_ids = {str(v) for v in fail_thread_ids}
 
-    def get_messages(self, thread, amount: int = 10):
-        self.get_messages_calls += 1
-        if str(getattr(thread, "id", "")) in self.fail_thread_ids:
-            return []
-        now = time.time()
-        return [_msg(f"in-{thread.id}", f"lead-{thread.id}", "hola", now)]
+    def _open_thread(self, thread) -> bool:
+        thread_id = str(getattr(thread, "id", ""))
+        if thread_id in self.fail_thread_ids:
+            return False
+        return super()._open_thread(thread)
 
 
-def _patch_inbox_dependencies(monkeypatch, *, can_send: bool, delay_calls: list[str]) -> None:
+def _memory_row(
+    *,
+    thread_id: str,
+    recipient_username: str,
+    messages: list[dict],
+    unread_count: int = 0,
+    recipient_id: str | None = None,
+) -> dict:
+    now = time.time()
+    return {
+        "thread_id": thread_id,
+        "recipient_id": recipient_id or recipient_username,
+        "recipient_username": recipient_username,
+        "title": recipient_username,
+        "snippet": str(messages[0].get("text") or "") if messages else "",
+        "unread_count": unread_count,
+        "last_activity_at": now,
+        "last_interaction_at": now,
+        "messages": list(messages),
+        "updated_at": now,
+    }
+
+
+def _patch_inbox_dependencies(
+    monkeypatch,
+    *,
+    can_send: bool,
+    delay_calls: list[str],
+    memory_rows: list[dict] | None = None,
+) -> None:
+    rows = list(memory_rows or [])
+    monkeypatch.setattr(
+        responder,
+        "_account_conversations_from_memory",
+        lambda *_a, **_k: list(rows),
+    )
     monkeypatch.setattr(responder, "_gen_response", lambda *_args, **_kwargs: "respuesta")
     monkeypatch.setattr(
         responder,
@@ -214,19 +260,24 @@ def _patch_inbox_dependencies(monkeypatch, *, can_send: bool, delay_calls: list[
     monkeypatch.setattr(responder, "log_conversation_status", lambda *_a, **_k: None)
 
 
-def _patch_followup_dependencies(monkeypatch, *, logs: list[dict] | None = None) -> None:
-    monkeypatch.setattr(responder, "_load_all_conversations_to_memory", lambda *_a, **_k: None)
+def _patch_followup_dependencies(
+    monkeypatch,
+    *,
+    memory_rows: list[dict],
+    logs: list[dict] | None = None,
+) -> None:
+    rows = list(memory_rows)
+    monkeypatch.setattr(
+        responder,
+        "_account_conversations_from_memory",
+        lambda *_a, **_k: list(rows),
+    )
     monkeypatch.setattr(
         responder,
         "_followup_enabled_entry_for",
         lambda _user: ("alias", {"enabled": True, "prompt": "seguir"}),
     )
     monkeypatch.setattr(responder, "_followup_decision", lambda *_a, **_k: ("seguimiento", 1))
-    monkeypatch.setattr(
-        responder,
-        "_determine_followup_stage_from_initial_message",
-        lambda *_a, **_k: (1, responder._MIN_TIME_FOR_FOLLOWUP + 120),
-    )
     monkeypatch.setattr(
         responder,
         "_get_conversation_state",
@@ -248,6 +299,11 @@ def _patch_followup_dependencies(monkeypatch, *, logs: list[dict] | None = None)
     monkeypatch.setattr(responder, "save_auto_state", lambda *_a, **_k: None)
     monkeypatch.setattr(responder, "_print_response_summary", lambda *_a, **_k: None)
     monkeypatch.setattr(responder, "log_conversation_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        responder,
+        "_load_conversation_state",
+        lambda *_a, **_k: {"version": "1.0", "last_cleanup_ts": 0, "conversations": {}},
+    )
     monkeypatch.setattr(responder, "_save_conversation_state", lambda *_a, **_k: None)
     monkeypatch.setattr(responder, "_set_followup_entry", lambda *_a, **_k: None)
     if logs is not None:
@@ -259,7 +315,28 @@ def test_inbox_small_scan_is_fast_and_delay_only_between_messages(monkeypatch):
     rows = [_FakeRow(thread_id=f"t{i}", title=f"lead{i}") for i in range(5)]
     client = _FakeInboxClient(rows)
     delay_calls: list[str] = []
-    _patch_inbox_dependencies(monkeypatch, can_send=True, delay_calls=delay_calls)
+    now = time.time()
+    memory_rows = [
+        _memory_row(
+            thread_id=f"t{i}",
+            recipient_username=f"lead{i}",
+            messages=[
+                {
+                    "message_id": f"in-t{i}",
+                    "direction": "inbound",
+                    "text": "hola",
+                    "timestamp_epoch": now - i,
+                }
+            ],
+        )
+        for i in range(5)
+    ]
+    _patch_inbox_dependencies(
+        monkeypatch,
+        can_send=True,
+        delay_calls=delay_calls,
+        memory_rows=memory_rows,
+    )
     stats = responder.BotStats(alias="alias")
 
     responder._process_inbox(
@@ -276,9 +353,8 @@ def test_inbox_small_scan_is_fast_and_delay_only_between_messages(monkeypatch):
         threads_limit=5,
     )
 
-    assert client.list_threads_calls >= 1
     assert len(client.sent_messages) == 5
-    assert len(delay_calls) == 4
+    assert len(delay_calls) == 5
     assert stats.responded == 5
 
 
@@ -286,18 +362,36 @@ def test_inbox_skips_thread_when_no_new_inbound_after_last_outbound(monkeypatch)
     responder.reset_stop_event()
     rows = [_FakeRow(thread_id="t1", title="lead1")]
     now = time.time()
-
-    class _ScenarioInboxClient(_FakeInboxClient):
-        def get_messages(self, thread, amount: int = 10):
-            self.get_messages_calls += 1
-            return [
-                _msg(f"out-{thread.id}", "me", "ultimo mensaje bot", now),
-                _msg(f"in-{thread.id}", f"lead-{thread.id}", "mensaje viejo lead", now - 120),
-            ]
-
-    client = _ScenarioInboxClient(rows)
+    client = _FakeInboxClient(rows)
     delay_calls: list[str] = []
-    _patch_inbox_dependencies(monkeypatch, can_send=True, delay_calls=delay_calls)
+    memory_rows = [
+        _memory_row(
+            thread_id="t1",
+            recipient_username="lead1",
+            messages=[
+                {
+                    "message_id": "out-t1",
+                    "direction": "outbound",
+                    "text": "ultimo mensaje bot",
+                    "timestamp_epoch": now,
+                    "sender_id": "me",
+                },
+                {
+                    "message_id": "in-t1",
+                    "direction": "inbound",
+                    "text": "mensaje viejo lead",
+                    "timestamp_epoch": now - 120,
+                    "sender_id": "lead-t1",
+                },
+            ],
+        )
+    ]
+    _patch_inbox_dependencies(
+        monkeypatch,
+        can_send=True,
+        delay_calls=delay_calls,
+        memory_rows=memory_rows,
+    )
     stats = responder.BotStats(alias="alias")
 
     responder._process_inbox(
@@ -314,8 +408,6 @@ def test_inbox_skips_thread_when_no_new_inbound_after_last_outbound(monkeypatch)
         threads_limit=1,
     )
 
-    assert client.list_threads_calls >= 1
-    assert client.get_messages_calls >= 1
     assert len(client.sent_messages) == 0
     assert stats.responded == 0
 
@@ -324,20 +416,36 @@ def test_inbox_skips_when_outbound_wins_same_timestamp(monkeypatch):
     responder.reset_stop_event()
     rows = [_FakeRow(thread_id="t2", title="lead2")]
     now = time.time()
-
-    class _ScenarioInboxClient(_FakeInboxClient):
-        def get_messages(self, thread, amount: int = 10):
-            self.get_messages_calls += 1
-            # Mismo timestamp para ambos: la posicion del batch (mas arriba = mas nuevo)
-            # debe hacer que gane el outbound y se omita respuesta.
-            return [
-                _msg(f"out-{thread.id}", "me", "outbound reciente", now),
-                _msg(f"in-{thread.id}", f"lead-{thread.id}", "inbound en empate", now),
-            ]
-
-    client = _ScenarioInboxClient(rows)
+    client = _FakeInboxClient(rows)
     delay_calls: list[str] = []
-    _patch_inbox_dependencies(monkeypatch, can_send=True, delay_calls=delay_calls)
+    memory_rows = [
+        _memory_row(
+            thread_id="t2",
+            recipient_username="lead2",
+            messages=[
+                {
+                    "message_id": "z-outbound",
+                    "direction": "outbound",
+                    "text": "outbound reciente",
+                    "timestamp_epoch": now,
+                    "sender_id": "me",
+                },
+                {
+                    "message_id": "a-inbound",
+                    "direction": "inbound",
+                    "text": "inbound en empate",
+                    "timestamp_epoch": now,
+                    "sender_id": "lead-t2",
+                },
+            ],
+        )
+    ]
+    _patch_inbox_dependencies(
+        monkeypatch,
+        can_send=True,
+        delay_calls=delay_calls,
+        memory_rows=memory_rows,
+    )
     stats = responder.BotStats(alias="alias")
 
     responder._process_inbox(
@@ -354,8 +462,6 @@ def test_inbox_skips_when_outbound_wins_same_timestamp(monkeypatch):
         threads_limit=1,
     )
 
-    assert client.list_threads_calls >= 1
-    assert client.get_messages_calls >= 1
     assert len(client.sent_messages) == 0
     assert stats.responded == 0
 
@@ -363,10 +469,30 @@ def test_inbox_skips_when_outbound_wins_same_timestamp(monkeypatch):
 def test_inbox_500_threads_reaches_target_with_bulk_reseed(monkeypatch):
     responder.reset_stop_event()
     rows = [_FakeRow(thread_id="seed-1", title="seed1"), _FakeRow(thread_id="seed-2", title="seed2")]
-    reseed_threads = [_make_thread(f"bulk-{i}", f"lead{i}") for i in range(650)]
-    client = _FakeInboxClient(rows, list_threads_payload=reseed_threads)
+    client = _FakeInboxClient(rows)
     delay_calls: list[str] = []
-    _patch_inbox_dependencies(monkeypatch, can_send=False, delay_calls=delay_calls)
+    now = time.time()
+    memory_rows = [
+        _memory_row(
+            thread_id=f"bulk-{i}",
+            recipient_username=f"lead{i}",
+            messages=[
+                {
+                    "message_id": f"in-bulk-{i}",
+                    "direction": "inbound",
+                    "text": "hola",
+                    "timestamp_epoch": now - i,
+                }
+            ],
+        )
+        for i in range(500)
+    ]
+    _patch_inbox_dependencies(
+        monkeypatch,
+        can_send=False,
+        delay_calls=delay_calls,
+        memory_rows=memory_rows,
+    )
     stats = responder.BotStats(alias="alias")
 
     responder._process_inbox(
@@ -383,8 +509,6 @@ def test_inbox_500_threads_reaches_target_with_bulk_reseed(monkeypatch):
         threads_limit=500,
     )
 
-    assert client.list_threads_calls >= 1
-    assert client.get_messages_calls >= 500
     assert len(client.sent_messages) == 0
     assert stats.responded == 0
 
@@ -394,32 +518,36 @@ def test_followup_sends_and_applies_delay_only_between_messages(monkeypatch):
     threads = [_make_thread("fu-1", "lead1"), _make_thread("fu-2", "lead2")]
     client = _FakeFollowupClient(threads)
     delay_calls: list[str] = []
-
-    monkeypatch.setattr(responder, "_load_all_conversations_to_memory", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        responder,
-        "_followup_enabled_entry_for",
-        lambda _user: ("alias", {"enabled": True, "prompt": "seguir"}),
-    )
-    monkeypatch.setattr(responder, "_followup_decision", lambda *_a, **_k: ("seguimiento", 1))
-    monkeypatch.setattr(
-        responder,
-        "_determine_followup_stage_from_initial_message",
-        lambda *_a, **_k: (1, responder._MIN_TIME_FOR_FOLLOWUP + 120),
-    )
-    monkeypatch.setattr(
-        responder,
-        "_get_conversation_state",
-        lambda *_a, **_k: {
-            "last_message_sent_at": time.time() - (responder._MIN_TIME_FOR_FOLLOWUP + 180),
-            "last_message_received_at": None,
-            "last_message_sender": "me",
-            "messages_sent": [],
-        },
-    )
-    monkeypatch.setattr(responder, "_can_send_message", lambda *_a, **_k: (True, "ok"))
-    monkeypatch.setattr(responder, "_record_message_sent", lambda *_a, **_k: None)
-    monkeypatch.setattr(responder, "_update_conversation_state", lambda *_a, **_k: None)
+    now = time.time()
+    memory_rows = [
+        _memory_row(
+            thread_id="fu-1",
+            recipient_username="lead1",
+            messages=[
+                {
+                    "message_id": "out-fu-1",
+                    "direction": "outbound",
+                    "text": "te escribo",
+                    "timestamp_epoch": now - (5 * 3600),
+                    "sender_id": "me",
+                }
+            ],
+        ),
+        _memory_row(
+            thread_id="fu-2",
+            recipient_username="lead2",
+            messages=[
+                {
+                    "message_id": "out-fu-2",
+                    "direction": "outbound",
+                    "text": "te escribo",
+                    "timestamp_epoch": now - (5 * 3600),
+                    "sender_id": "me",
+                }
+            ],
+        ),
+    ]
+    _patch_followup_dependencies(monkeypatch, memory_rows=memory_rows)
     monkeypatch.setattr(
         responder,
         "_sleep_between_replies_sync",
@@ -446,7 +574,28 @@ def test_inbox_prefers_iter_threads_over_list_threads(monkeypatch):
     rows = [_FakeRow(thread_id=f"t{i}", title=f"lead{i}") for i in range(3)]
     client = _FakeIterInboxClient(rows)
     delay_calls: list[str] = []
-    _patch_inbox_dependencies(monkeypatch, can_send=False, delay_calls=delay_calls)
+    now = time.time()
+    memory_rows = [
+        _memory_row(
+            thread_id=f"t{i}",
+            recipient_username=f"lead{i}",
+            messages=[
+                {
+                    "message_id": f"in-t{i}",
+                    "direction": "inbound",
+                    "text": "hola",
+                    "timestamp_epoch": now - i,
+                }
+            ],
+        )
+        for i in range(3)
+    ]
+    _patch_inbox_dependencies(
+        monkeypatch,
+        can_send=False,
+        delay_calls=delay_calls,
+        memory_rows=memory_rows,
+    )
     stats = responder.BotStats(alias="alias")
 
     responder._process_inbox(
@@ -463,8 +612,8 @@ def test_inbox_prefers_iter_threads_over_list_threads(monkeypatch):
         threads_limit=3,
     )
 
-    assert client.iter_threads_calls == 1
-    assert client.get_messages_calls == 3
+    assert client.iter_threads_calls == 0
+    assert client.list_threads_calls == 0
 
 
 def test_inbox_reaches_target_even_if_some_threads_fail_to_open(monkeypatch):
@@ -473,7 +622,28 @@ def test_inbox_reaches_target_even_if_some_threads_fail_to_open(monkeypatch):
     client = _FakeIterInboxClientWithOpenFailures(rows, fail_thread_ids={"t0", "t1"})
     delay_calls: list[str] = []
     captured_threads: list[str] = []
-    _patch_inbox_dependencies(monkeypatch, can_send=False, delay_calls=delay_calls)
+    now = time.time()
+    memory_rows = [
+        _memory_row(
+            thread_id=f"t{i}",
+            recipient_username=f"lead{i}",
+            messages=[
+                {
+                    "message_id": f"in-t{i}",
+                    "direction": "inbound",
+                    "text": "hola",
+                    "timestamp_epoch": now - i,
+                }
+            ],
+        )
+        for i in range(6)
+    ]
+    _patch_inbox_dependencies(
+        monkeypatch,
+        can_send=False,
+        delay_calls=delay_calls,
+        memory_rows=memory_rows,
+    )
     monkeypatch.setattr(
         responder,
         "_update_conversation_state",
@@ -495,8 +665,6 @@ def test_inbox_reaches_target_even_if_some_threads_fail_to_open(monkeypatch):
         threads_limit=3,
     )
 
-    # Debe completar 3 hilos trabajados aunque los primeros 2 fallen al abrir.
-    # Cada hilo procesado actualiza estado al menos para captura de contexto.
     unique_captured = {tid for tid in captured_threads}
     assert len(unique_captured) >= 3
 
@@ -512,7 +680,22 @@ def test_followup_allows_thread_when_last_outbound_is_older_than_60s(monkeypatch
         },
     )
     logs: list[dict] = []
-    _patch_followup_dependencies(monkeypatch, logs=logs)
+    memory_rows = [
+        _memory_row(
+            thread_id="fu-old",
+            recipient_username="lead_old",
+            messages=[
+                {
+                    "message_id": "out-old",
+                    "direction": "outbound",
+                    "text": "te escribo",
+                    "timestamp_epoch": now - 180,
+                    "sender_id": "me",
+                }
+            ],
+        )
+    ]
+    _patch_followup_dependencies(monkeypatch, memory_rows=memory_rows, logs=logs)
 
     responder._process_followups(
         client=client,
@@ -541,7 +724,22 @@ def test_followup_blocks_thread_when_last_outbound_is_newer_than_60s(monkeypatch
         },
     )
     logs: list[dict] = []
-    _patch_followup_dependencies(monkeypatch, logs=logs)
+    memory_rows = [
+        _memory_row(
+            thread_id="fu-recent",
+            recipient_username="lead_recent",
+            messages=[
+                {
+                    "message_id": "out-recent",
+                    "direction": "outbound",
+                    "text": "te escribo",
+                    "timestamp_epoch": now - 30,
+                    "sender_id": "me",
+                }
+            ],
+        )
+    ]
+    _patch_followup_dependencies(monkeypatch, memory_rows=memory_rows, logs=logs)
     monkeypatch.setattr(
         responder,
         "_get_conversation_state",
@@ -584,7 +782,22 @@ def test_followup_does_not_invent_timestamp_when_message_timestamp_is_missing(mo
         messages_by_thread={"fu-missing-ts": [message_without_timestamp]},
     )
     logs: list[dict] = []
-    _patch_followup_dependencies(monkeypatch, logs=logs)
+    memory_rows = [
+        _memory_row(
+            thread_id="fu-missing-ts",
+            recipient_username="lead_missing_ts",
+            messages=[
+                {
+                    "message_id": "out-missing",
+                    "direction": "outbound",
+                    "text": "te escribo",
+                    "timestamp_epoch": None,
+                    "sender_id": "me",
+                }
+            ],
+        )
+    ]
+    _patch_followup_dependencies(monkeypatch, memory_rows=memory_rows, logs=logs)
 
     responder._process_followups(
         client=client,

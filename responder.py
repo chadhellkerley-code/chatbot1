@@ -663,254 +663,6 @@ def _update_conversation_state(
     return current
 
 
-def _load_all_conversations_to_memory(
-    client,
-    account: str,
-    max_age_days: int = 7,
-    threads_limit: int = 20,
-) -> None:
-    now = time.time()
-    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
-    print(style_text(f"[Memoria] Cargando conversaciones para @{account}...", color=Fore.CYAN))
-    start_ts = time.time()
-    max_seconds = 20
-    
-    try:
-        print(style_text(f"[Memoria] Pre-discovery de threads para @{account}...", color=Fore.CYAN))
-        threads = client.list_threads(amount=threads_limit, filter_unread=False)
-    except Exception as exc:
-        logger.warning("No se pudieron obtener threads para cargar memoria de @%s: %s", account, exc, exc_info=False)
-        print(style_text(f"[Memoria] Error obteniendo threads para @{account}", color=Fore.YELLOW))
-        return
-    
-    if not threads:
-        print(style_text(f"[Memoria] No hay threads para @{account}", color=Fore.YELLOW))
-        return
-    
-    logger.info("Cargando memoria: analizando %d threads para @%s", len(threads), account)
-    loaded_count = 0
-
-    for idx, thread in enumerate(threads):
-        if STOP_EVENT.is_set():
-            break
-        if time.time() - start_ts > max_seconds:
-            print(style_text(f"[Memoria] Tiempo maximo alcanzado para @{account}", color=Fore.YELLOW))
-            break
-        
-        thread_id_val = getattr(thread, "id", None) or getattr(thread, "pk", None)
-        if thread_id_val is None:
-            continue
-        thread_id = str(thread_id_val)
-        
-        try:
-            messages = client.get_messages(thread, amount=20)
-        except Exception as exc:
-            logger.debug("No se pudieron obtener mensajes del thread %s: %s", thread_id, exc, exc_info=False)
-            continue
-        
-        if not messages:
-            continue
-        
-        # Obtener información del participante
-        participants = getattr(thread, "users", None) or []
-        recipient_id: Optional[str] = None
-        recipient_username = ""
-        for participant in participants:
-            pk_val = getattr(participant, "pk", None) or getattr(participant, "id", None)
-            pk = str(pk_val) if pk_val is not None else ""
-            if pk and pk != str(client.user_id):
-                recipient_id = pk
-                recipient_username = getattr(participant, "username", None) or pk
-                break
-        
-        if not recipient_id:
-            continue
-        
-        outbound_messages = []
-        inbound_messages = []
-        
-        for msg in messages:
-            msg_ts = _message_timestamp(msg)
-            if msg_ts is None:
-                continue
-            
-            if max_age_seconds and (now - msg_ts) > max_age_seconds:
-                continue
-            
-            msg_text = getattr(msg, "text", "") or ""
-            msg_id = getattr(msg, "id", None)
-            
-            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id):
-                outbound_messages.append({
-                    "text": msg_text,
-                    "timestamp": msg_ts,
-                    "message_id": str(msg_id) if msg_id else "",
-                })
-            else:
-                inbound_messages.append({
-                    "text": msg_text,
-                    "timestamp": msg_ts,
-                    "message_id": str(msg_id) if msg_id else "",
-                })
-        
-        outbound_messages.sort(key=lambda x: x["timestamp"])
-        inbound_messages.sort(key=lambda x: x["timestamp"])
-        
-        conv_state = _get_conversation_state(account, thread_id)
-        
-        first_sent_message = outbound_messages[0] if outbound_messages else None
-        first_sent_at = first_sent_message["timestamp"] if first_sent_message else None
-        
-        last_received_message = inbound_messages[-1] if inbound_messages else None
-        last_received_at = last_received_message["timestamp"] if last_received_message else None
-        
-        last_sent_message = outbound_messages[-1] if outbound_messages else None
-        last_sent_at = last_sent_message["timestamp"] if last_sent_message else None
-        
-        updates = {
-            "recipient_username": recipient_username,
-            "first_message_sent_at": first_sent_at,
-            "last_message_sent_at": last_sent_at,
-            "last_message_received_at": last_received_at,
-        }
-        
-        # No marcar como "visto" durante el cargado inicial de memoria.
-        # Esto evita ignorar mensajes reales que aún no fueron respondidos.
-        
-        if outbound_messages and inbound_messages:
-            if last_sent_at and last_received_at:
-                updates["last_message_sender"] = "bot" if last_sent_at > last_received_at else "lead"
-            elif last_sent_at:
-                updates["last_message_sender"] = "bot"
-            elif last_received_at:
-                updates["last_message_sender"] = "lead"
-        elif outbound_messages:
-            updates["last_message_sender"] = "bot"
-        elif inbound_messages:
-            updates["last_message_sender"] = "lead"
-        
-        messages_sent_in_json = conv_state.get("messages_sent", [])
-        for outbound_msg in outbound_messages:
-            msg_text = outbound_msg["text"].strip()
-            if not msg_text:
-                continue
-            
-            found = False
-            for sent_msg in messages_sent_in_json:
-                if sent_msg.get("text", "").strip().lower() == msg_text.lower():
-                    if first_sent_at and sent_msg.get("first_sent_at") is None:
-                        sent_msg["first_sent_at"] = first_sent_at
-                    found = True
-                    break
-            
-            if not found and first_sent_at:
-                is_first = outbound_msg["timestamp"] == first_sent_at
-                if is_first:
-                    messages_sent_in_json.append({
-                        "text": msg_text,
-                        "first_sent_at": first_sent_at,
-                        "last_sent_at": outbound_msg["timestamp"],
-                        "message_id": outbound_msg["message_id"],
-                        "times_sent": 1,
-                        "is_followup": False,
-                    })
-        
-        updates["messages_sent"] = messages_sent_in_json
-        
-        if not outbound_messages:
-            updates["stage"] = _STAGE_INITIAL
-        elif not inbound_messages:
-            updates["stage"] = _STAGE_FOLLOWUP
-        elif first_sent_at and last_received_at:
-            if last_received_at > first_sent_at:
-                if last_received_at > last_sent_at:
-                    updates["stage"] = _STAGE_ACTIVE
-                else:
-                    updates["stage"] = _STAGE_WAITING
-            else:
-                updates["stage"] = _STAGE_FOLLOWUP
-        elif last_received_at and last_sent_at and last_received_at > last_sent_at:
-            updates["stage"] = _STAGE_ACTIVE
-        elif last_sent_at and last_received_at and last_sent_at > last_received_at:
-            updates["stage"] = _STAGE_FOLLOWUP
-        else:
-            pass
-        
-        _update_conversation_state(account, thread_id, updates, recipient_username)
-        loaded_count += 1
-        
-        if (idx + 1) % 10 == 0:
-            _save_conversation_engine()
-            print(style_text(f"[Memoria] Progreso @{account}: {idx + 1}/{len(threads)}", color=Fore.CYAN))
-    
-    logger.info("Memoria cargada: %d conversaciones sincronizadas para @%s", loaded_count, account)
-    _save_conversation_engine()
-    print(style_text(f"[Memoria] Listo @{account}: {loaded_count} conversaciones", color=Fore.GREEN))
-
-
-def _determine_followup_stage_from_initial_message(
-    account: str,
-    thread_id: str,
-    now: float,
-    schedule_hours: Optional[List[int]] = None,
-) -> tuple[Optional[int], Optional[float]]:
-    state = _get_conversation_state(account, thread_id)
-    
-    first_sent_at = state.get("first_message_sent_at")
-    if not first_sent_at:
-        messages_sent = state.get("messages_sent", [])
-        if messages_sent:
-            non_followup_messages = [m for m in messages_sent if not m.get("is_followup", False)]
-            if non_followup_messages:
-                first_msg = min(non_followup_messages, key=lambda m: m.get("first_sent_at", m.get("last_sent_at", float("inf"))))
-                first_sent_at = first_msg.get("first_sent_at") or first_msg.get("last_sent_at")
-            else:
-                first_msg = min(messages_sent, key=lambda m: m.get("first_sent_at", m.get("last_sent_at", float("inf"))))
-                first_sent_at = first_msg.get("first_sent_at") or first_msg.get("last_sent_at")
-    
-    if not first_sent_at:
-        return None, None
-    
-    last_received_at = state.get("last_message_received_at")
-    if last_received_at and last_received_at > first_sent_at:
-        return None, None
-    
-    time_since_initial = now - first_sent_at
-    hours_since_initial = time_since_initial / 3600.0
-    
-    messages_sent = state.get("messages_sent", [])
-    followups_sent = [m for m in messages_sent if m.get("is_followup", False)]
-    
-    followups_sent_sorted = sorted(followups_sent, key=lambda m: m.get("last_sent_at", m.get("first_sent_at", 0)))
-    
-    num_followups_sent = len(followups_sent_sorted)
-    schedule = [h for h in (schedule_hours or []) if isinstance(h, int) and h > 0]
-    if schedule:
-        schedule = sorted(set(schedule))
-        if num_followups_sent >= len(schedule):
-            return None, None
-        required_hours = schedule[num_followups_sent]
-        if hours_since_initial >= required_hours:
-            return num_followups_sent + 1, time_since_initial
-        return None, None
-
-    if hours_since_initial >= 5:
-        if num_followups_sent == 0:
-            return 1, time_since_initial
-        elif hours_since_initial >= 24 and num_followups_sent == 1:
-            return 2, time_since_initial
-        elif hours_since_initial >= 48 and num_followups_sent == 2:
-            return 3, time_since_initial
-        elif hours_since_initial >= 72 and num_followups_sent == 3:
-            return 4, time_since_initial
-        elif num_followups_sent >= 4:
-            return None, None
-        else:
-            return None, None
-
-    return None, None
-
-
 def _record_message_sent(
     account: str,
     thread_id: str,
@@ -1602,314 +1354,6 @@ def _followup_decision(
     )
     return None
 
-
-def _process_followups(
-    client,
-    user: str,
-    api_key: str,
-    delay_min: float = 0.0,
-    delay_max: float = 0.0,
-    max_age_days: int = 7,
-    threads_limit: int = 15,
-    followup_schedule_hours: Optional[List[int]] = None,
-) -> None:
-    _load_all_conversations_to_memory(client, user, max_age_days, threads_limit=threads_limit)
-    
-    alias, entry = _followup_enabled_entry_for(user)
-    if not alias or not entry or not entry.get("enabled"):
-        if not _FORCE_ALWAYS_FOLLOWUP:
-            return
-        alias = alias or ACTIVE_ALIAS or user
-        entry = _get_followup_entry(alias) if alias else {}
-    prompt_text = str(entry.get("prompt") or _DEFAULT_FOLLOWUP_PROMPT)
-    if not prompt_text.strip():
-        return
-    try:
-        threads = client.list_threads(amount=threads_limit, filter_unread=False)
-    except Exception as exc:  # pragma: no cover - depende de SDK externo
-        logger.debug(
-            "No se pudieron obtener hilos para seguimiento de @%s: %s",
-            user,
-            exc,
-            exc_info=False,
-        )
-        return
-    now_ts = time.time()
-    followups_sent_this_cycle = 0
-    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
-    for thread in threads:
-        if STOP_EVENT.is_set():
-            break
-        thread_id = getattr(thread, "id", None)
-        if not thread_id:
-            continue
-        unread_count = getattr(thread, "unread_count", None)
-        try:
-            unread_int = int(unread_count)
-        except Exception:
-            unread_int = 0
-        if unread_int > 0:
-            continue
-        participants = getattr(thread, "users", None)
-        recipient_id: Optional[str] = None
-        recipient_username = ""
-        if isinstance(participants, list):
-            for participant in participants:
-                pk_val = getattr(participant, "pk", None) or getattr(participant, "id", None)
-                pk = str(pk_val) if pk_val is not None else ""
-                if pk and pk != str(client.user_id):
-                    recipient_id = pk
-                    recipient_username = getattr(participant, "username", pk)
-                    break
-        if not recipient_id:
-            continue
-        try:
-            messages = client.get_messages(thread, amount=20)
-        except Exception as exc:  # pragma: no cover - depende de SDK externo
-            logger.debug(
-                "No se pudieron obtener mensajes del hilo %s para seguimiento: %s",
-                thread_id,
-                exc,
-                exc_info=False,
-            )
-            continue
-        if not messages:
-            continue
-        latest_ts = None
-        for msg in messages:
-            msg_ts = _message_timestamp(msg)
-            if msg_ts is None:
-                continue
-            latest_ts = msg_ts if latest_ts is None else max(latest_ts, msg_ts)
-        if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
-            continue
-        last_message = messages[0]
-        if not _same_user_id(getattr(last_message, 'user_id', ''), client.user_id):
-            continue
-
-        def _msg_ts(msg: object) -> Optional[float]:
-            ts_obj = getattr(msg, "timestamp", None)
-            if isinstance(ts_obj, datetime):
-                return ts_obj.timestamp()
-            try:
-                return float(ts_obj)
-            except Exception:
-                return None
-
-        last_outbound_ts = _msg_ts(last_message)
-        if last_outbound_ts and now_ts - last_outbound_ts < 60:
-            continue
-        if last_outbound_ts and now_ts - last_outbound_ts < _MIN_TIME_FOR_FOLLOWUP:
-            _append_message_log(
-                {
-                    "action": "followup_skip",
-                    "reason": "last_bot_message_too_recent",
-                    "account": user,
-                    "thread_id": str(thread_id),
-                    "lead": recipient_username or str(recipient_id),
-                    "seconds_since_last_sent": int(now_ts - last_outbound_ts),
-                }
-            )
-            continue
-
-        outbound_ts_values = [
-            _msg_ts(msg)
-            for msg in messages
-            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and _msg_ts(msg) is not None
-        ]
-        first_outbound_ts = min(outbound_ts_values) if outbound_ts_values else None
-        engine_state = _get_conversation_state(user, thread_id)
-        if first_outbound_ts is None:
-            first_outbound_ts = engine_state.get("first_message_sent_at")
-
-        inbound_messages = [
-            msg
-            for msg in messages
-            if not _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and isinstance(getattr(msg, "text", None), str)
-        ]
-        has_inbound = bool(inbound_messages)
-        last_inbound = inbound_messages[0] if has_inbound else None
-        last_inbound_ts = _msg_ts(last_inbound) if last_inbound else None
-        if has_inbound:
-            if last_inbound_ts and now_ts - last_inbound_ts < 60:
-                continue
-
-        try:
-            thread_messages = client.get_messages(thread, amount=50)
-            if thread_messages:
-                outbound = [
-                    m for m in thread_messages
-                    if _same_user_id(getattr(m, "user_id", ""), client.user_id)
-                ]
-                inbound = [
-                    m for m in thread_messages
-                    if not _same_user_id(getattr(m, "user_id", ""), client.user_id)
-                ]
-                
-                if outbound:
-                    first_outbound_ts = min(_message_timestamp(m) or now_ts for m in outbound)
-                    last_outbound_ts = max(_message_timestamp(m) or now_ts for m in outbound)
-                    conv_state = _get_conversation_state(user, thread_id)
-                    if not conv_state.get("first_message_sent_at"):
-                        _update_conversation_state(user, thread_id, {"first_message_sent_at": first_outbound_ts}, recipient_username)
-        except Exception:
-            pass
-        
-        conv_state = _get_conversation_state(user, thread_id)
-        last_sent_at = conv_state.get("last_message_sent_at")
-        last_received_at = conv_state.get("last_message_received_at")
-        last_sender = conv_state.get("last_message_sender")
-        current_followup_stage = conv_state.get("followup_stage", 0)
-        
-        if last_sender == "lead" and last_received_at:
-            time_since_last_received = now_ts - last_received_at
-            if time_since_last_received < 60:
-                continue
-        
-        followup_stage, time_since_initial = _determine_followup_stage_from_initial_message(
-            user, thread_id, now_ts, followup_schedule_hours
-        )
-        
-        if followup_stage is None:
-            continue
-        
-        last_followup_sent_at = conv_state.get("last_followup_sent_at")
-        if last_followup_sent_at:
-            time_since_last_followup = now_ts - last_followup_sent_at
-            if time_since_last_followup < _FOLLOWUP_MIN_INTERVAL:
-                continue
-            schedule = [h for h in (followup_schedule_hours or []) if isinstance(h, int) and h > 0]
-            schedule = sorted(set(schedule))
-            if schedule and followup_stage:
-                if followup_stage > 1 and len(schedule) >= followup_stage:
-                    min_gap_hours = schedule[followup_stage - 1] - schedule[followup_stage - 2]
-                    if min_gap_hours > 0 and time_since_last_followup < min_gap_hours * 3600:
-                        continue
-        
-        last_eval_ts = conv_state.get("last_eval_ts")
-        if last_eval_ts and now_ts - last_eval_ts < _FOLLOWUP_MIN_INTERVAL:
-            continue
-
-        messages_sent = conv_state.get("messages_sent", [])
-        followups_sent = len([m for m in messages_sent if m.get("is_followup", False)])
-        
-        conversation_lines: List[str] = []
-        for msg in reversed(messages[:40]):
-            text_value = getattr(msg, "text", "") or ""
-            prefix = "YO" if _message_outbound_status(msg, client.user_id) is True else "ELLOS"
-            conversation_lines.append(f"{prefix}: {text_value}")
-        conversation_text = "\n".join(conversation_lines[-40:])
-
-        time_since_last_followup = (now_ts - conv_state.get("last_followup_sent_at")) if conv_state.get("last_followup_sent_at") else None
-        time_since_last_sent = (now_ts - last_sent_at) if last_sent_at else None
-        time_since_last_received = (now_ts - last_received_at) if last_received_at else None
-        first_sent_at = conv_state.get("first_message_sent_at")
-        hours_since_initial = (time_since_initial / 3600.0) if time_since_initial else None
-        
-        metadata = {
-            "alias": alias,
-            "cuenta_origen": f"@{user}",
-            "lead": recipient_username or str(recipient_id),
-            "etapa_actual": followup_stage,
-            "seguimientos_previos": followups_sent,
-            "ultimo_mensaje_de": last_sender or "desconocido",
-            "horas_desde_mensaje_inicial": round(hours_since_initial, 1) if hours_since_initial else "desconocido",
-            "horas_desde_ultimo_seguimiento": round(time_since_last_followup / 3600.0, 1) if time_since_last_followup else "nunca",
-            "horas_desde_ultimo_mensaje_enviado": round(time_since_last_sent / 3600.0, 1) if time_since_last_sent else "nunca",
-            "horas_desde_ultima_respuesta": round(time_since_last_received / 3600.0, 1) if time_since_last_received else "desconocido",
-            "segundos_desde_mensaje_inicial": int(time_since_initial) if time_since_initial else "desconocido",
-            "segundos_desde_ultimo_seguimiento": int(time_since_last_followup) if time_since_last_followup else "nunca",
-            "segundos_desde_ultima_respuesta": int(time_since_last_received) if time_since_last_received else "desconocido",
-            "segundos_desde_ultimo_mensaje_enviado": int(time_since_last_sent) if time_since_last_sent else "desconocido",
-        }
-        
-        _update_conversation_state(user, thread_id, {"last_eval_ts": now_ts}, recipient_username)
-        
-        decision = _followup_decision(api_key, prompt_text, conversation_text, metadata)
-        if not decision:
-            continue
-            
-        message_text, stage = decision
-        
-        stage_int = followup_stage
-        
-        can_send, reason = _can_send_message(
-            user,
-            thread_id,
-            message_text,
-            force=_FORCE_ALWAYS_FOLLOWUP,
-        )
-        if not can_send:
-            logger.info(
-                "Omitiendo seguimiento para @%s → @%s: %s",
-                user,
-                recipient_username,
-                reason,
-            )
-            continue
-
-        logger.info(
-            "Decision seguimiento @%s thread=%s stage=%s reason=%s",
-            user,
-            thread_id,
-            stage_int,
-            reason,
-        )
-        
-        if followups_sent_this_cycle > 0:
-            _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
-        try:
-            message_id = client.send_message(thread, message_text)
-        except Exception as exc:  # pragma: no cover - depende de SDK externo
-            logger.warning(
-                "No se pudo enviar seguimiento automatico a %s desde @%s: %s",
-                recipient_username or recipient_id,
-                user,
-                exc,
-                exc_info=False,
-            )
-            continue
-        if not message_id:
-            logger.warning(
-                "Seguimiento no verificado para @%s -> @%s (thread %s)",
-                user,
-                recipient_username or recipient_id,
-                thread_id,
-            )
-            continue
-        
-        _record_message_sent(
-            user,
-            thread_id,
-            message_text,
-            str(message_id),
-            recipient_username,
-            is_followup=True,
-            followup_stage=stage_int,
-        )
-        followups_sent_this_cycle += 1
-        _update_conversation_state(
-            user,
-            thread_id,
-            {
-                "stage": _STAGE_FOLLOWUP,
-            },
-            recipient_username,
-        )
-        
-        logger.info(
-            "Seguimiento enviado por @%s → @%s: etapa %d (último mensaje del bot hace %.1f horas)",
-            user,
-            recipient_username,
-            stage_int,
-            (now_ts - last_sent_at) / 3600.0 if last_sent_at else 0,
-        )
-        print(
-            style_text(
-                f"[Seguimiento] @{user} -> @{recipient_username}: mensaje etapa {stage_int}",
-                color=Fore.MAGENTA,
-            )
-        )
 
 _POSITIVE_KEYWORDS = (
     "si",
@@ -5442,7 +4886,522 @@ def _maybe_schedule_google_calendar_event(
     return "\n".join(message_lines), status_line
 
 
-def _process_inbox(
+@dataclass
+class _MemoryMessageSnapshot:
+    id: str
+    user_id: str
+    text: str
+    timestamp: Optional[float]
+    direction: str = "inbound"
+
+
+def _safe_float(value: object) -> Optional[float]:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    return number if number > 0 else None
+
+
+def _default_conversation_entry(account: str, thread_id: str, recipient_username: str = "") -> Dict[str, Any]:
+    now_ts = time.time()
+    return {
+        "account": account,
+        "thread_id": str(thread_id),
+        "recipient_username": recipient_username,
+        "stage": _STAGE_INITIAL,
+        "messages_sent": [],
+        "last_message_sent_at": None,
+        "last_message_received_at": None,
+        "last_message_id_seen": None,
+        "last_message_sender": None,
+        "followup_stage": 0,
+        "last_followup_sent_at": None,
+        "created_at": now_ts,
+        "updated_at": now_ts,
+    }
+
+
+def _normalize_snapshot_messages(messages: object, *, client_user_id: object) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(messages, list):
+        return normalized
+    self_id = str(client_user_id or "").strip()
+    for raw in messages:
+        if not isinstance(raw, dict):
+            continue
+        direction_raw = str(raw.get("direction") or "").strip().lower()
+        sender_id = str(raw.get("sender_id") or raw.get("user_id") or "").strip()
+        if direction_raw in {"outbound", "outgoing", "sent", "viewer"}:
+            direction = "outbound"
+        elif direction_raw in {"inbound", "incoming", "received"}:
+            direction = "inbound"
+        elif sender_id and self_id and sender_id == self_id:
+            direction = "outbound"
+        else:
+            direction = "inbound"
+        normalized.append(
+            {
+                "message_id": str(raw.get("message_id") or raw.get("id") or "").strip(),
+                "direction": direction,
+                "text": str(raw.get("text") or ""),
+                "timestamp_epoch": _safe_float(
+                    raw.get("timestamp_epoch")
+                    if raw.get("timestamp_epoch") is not None
+                    else raw.get("timestamp")
+                ),
+                "sender_id": sender_id,
+            }
+        )
+    normalized.sort(
+        key=lambda item: (
+            float(item.get("timestamp_epoch") or 0.0),
+            str(item.get("message_id") or ""),
+        ),
+        reverse=True,
+    )
+    return normalized
+
+
+def _conversation_snapshot_signature(conv: Dict[str, Any]) -> tuple[object, ...]:
+    messages = conv.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+    top = messages[0] if messages and isinstance(messages[0], dict) else {}
+    try:
+        unread_int = int(conv.get("unread_count") or 0)
+    except Exception:
+        unread_int = 0
+    return (
+        str(conv.get("recipient_username") or ""),
+        str(conv.get("recipient_id") or ""),
+        str(conv.get("title") or ""),
+        str(conv.get("snippet") or ""),
+        unread_int,
+        float(conv.get("last_activity_at") or 0.0),
+        str(top.get("message_id") or ""),
+        float(top.get("timestamp_epoch") or 0.0),
+        len(messages),
+    )
+
+
+def _account_conversations_from_memory(account: str, *, refresh: bool = False) -> List[Dict[str, Any]]:
+    engine = _load_conversation_engine(refresh=refresh)
+    conversations = engine.get("conversations", {})
+    if not isinstance(conversations, dict):
+        return []
+    account_key = f"{_normalize_username(account)}|"
+    rows: List[Dict[str, Any]] = []
+    for key, value in conversations.items():
+        if not isinstance(value, dict):
+            continue
+        if not str(key).startswith(account_key):
+            continue
+        row = dict(value)
+        row.setdefault("thread_id", str(key).split("|", 1)[-1])
+        row["_key"] = str(key)
+        rows.append(row)
+    rows.sort(
+        key=lambda row: (
+            float(row.get("last_interaction_at") or row.get("updated_at") or 0.0),
+            str(row.get("thread_id") or ""),
+        ),
+        reverse=True,
+    )
+    return rows
+
+
+def _upsert_threads_into_memory(
+    client,
+    account: str,
+    snapshots: List[Dict[str, Any]],
+    *,
+    source_label: str,
+    sync_cursor: str = "",
+) -> tuple[int, int]:
+    engine = _load_conversation_engine()
+    conversations = engine.setdefault("conversations", {})
+    now_ts = time.time()
+    new_count = 0
+    updated_count = 0
+    for snapshot in snapshots:
+        thread_id = str(snapshot.get("thread_id") or "").strip()
+        if not thread_id:
+            continue
+        recipient_username = str(
+            snapshot.get("recipient_username")
+            or snapshot.get("title")
+            or "unknown"
+        ).strip() or "unknown"
+        recipient_id = str(
+            snapshot.get("recipient_id")
+            or snapshot.get("recipient_username")
+            or snapshot.get("title")
+            or ""
+        ).strip()
+        if not recipient_id:
+            recipient_id = recipient_username
+        title_value = str(snapshot.get("title") or "").strip()
+        if not title_value:
+            title_value = str(snapshot.get("recipient_username") or "").strip() or recipient_username
+        snippet_value = str(snapshot.get("snippet") or "").strip()
+        try:
+            unread_int = max(0, int(snapshot.get("unread_count") or 0))
+        except Exception:
+            unread_int = 0
+        snapshot_last_activity = _safe_float(snapshot.get("last_activity_at"))
+        key = _get_conversation_key(account, thread_id)
+        current_raw = conversations.get(key)
+        if not isinstance(current_raw, dict):
+            current = _default_conversation_entry(account, thread_id, recipient_username)
+            old_signature = None
+            new_count += 1
+        else:
+            current = dict(current_raw)
+            old_signature = _conversation_snapshot_signature(current)
+            if not snippet_value:
+                snippet_value = str(current.get("snippet") or "").strip()
+            if unread_int <= 0:
+                try:
+                    unread_int = max(0, int(current.get("unread_count") or 0))
+                except Exception:
+                    unread_int = 0
+            if snapshot_last_activity is None:
+                snapshot_last_activity = _safe_float(current.get("last_activity_at"))
+
+        normalized_messages = _normalize_snapshot_messages(
+            snapshot.get("messages"),
+            client_user_id=getattr(client, "user_id", ""),
+        )
+        if not normalized_messages:
+            existing_messages = current.get("messages")
+            normalized_messages = _normalize_snapshot_messages(
+                existing_messages if isinstance(existing_messages, list) else [],
+                client_user_id=getattr(client, "user_id", ""),
+            )
+        latest_inbound_ts: Optional[float] = None
+        latest_outbound_ts: Optional[float] = None
+        latest_sender = current.get("last_message_sender")
+        for msg in normalized_messages:
+            ts_value = _safe_float(msg.get("timestamp_epoch"))
+            if ts_value is None:
+                continue
+            if msg.get("direction") == "outbound":
+                latest_outbound_ts = ts_value if latest_outbound_ts is None else max(latest_outbound_ts, ts_value)
+            else:
+                latest_inbound_ts = ts_value if latest_inbound_ts is None else max(latest_inbound_ts, ts_value)
+            latest_sender = "bot" if msg.get("direction") == "outbound" else "lead"
+
+        existing_last_sent = _safe_float(current.get("last_message_sent_at"))
+        existing_last_received = _safe_float(current.get("last_message_received_at"))
+        if latest_outbound_ts is not None:
+            merged_sent = latest_outbound_ts if existing_last_sent is None else max(existing_last_sent, latest_outbound_ts)
+            current["last_message_sent_at"] = merged_sent
+        if latest_inbound_ts is not None:
+            merged_received = latest_inbound_ts if existing_last_received is None else max(existing_last_received, latest_inbound_ts)
+            current["last_message_received_at"] = merged_received
+        if latest_sender:
+            current["last_message_sender"] = latest_sender
+
+        existing_last_interaction = _safe_float(current.get("last_interaction_at"))
+        interaction_candidates = [snapshot_last_activity, latest_inbound_ts, latest_outbound_ts, existing_last_interaction]
+        interaction_values = [value for value in interaction_candidates if value is not None]
+        last_interaction_ts = max(interaction_values) if interaction_values else now_ts
+        current.update(
+            {
+                "thread_id": thread_id,
+                "recipient_id": recipient_id,
+                "recipient_username": recipient_username,
+                "title": title_value,
+                "snippet": snippet_value,
+                "unread_count": unread_int,
+                "last_activity_at": snapshot_last_activity,
+                "last_interaction_at": last_interaction_ts,
+                "source": f"{source_label}:{str(sync_cursor or '').strip()}" if sync_cursor else source_label,
+                "captured_at_epoch": now_ts,
+                "messages": normalized_messages,
+            }
+        )
+        if not current.get("created_at"):
+            current["created_at"] = now_ts
+        current["updated_at"] = now_ts
+        conversations[key] = current
+
+        if old_signature is not None:
+            if _conversation_snapshot_signature(current) != old_signature:
+                updated_count += 1
+
+    _save_conversation_engine()
+    return new_count, updated_count
+
+
+def _memory_messages_from_state(state: Dict[str, Any], client_user_id: object) -> List[_MemoryMessageSnapshot]:
+    messages_raw = state.get("messages", [])
+    normalized = _normalize_snapshot_messages(messages_raw, client_user_id=client_user_id)
+    out: List[_MemoryMessageSnapshot] = []
+    self_id = str(client_user_id or "").strip()
+    for entry in normalized:
+        direction = "outbound" if str(entry.get("direction") or "").lower() == "outbound" else "inbound"
+        sender_id = str(entry.get("sender_id") or "").strip()
+        if not sender_id:
+            sender_id = self_id if direction == "outbound" and self_id else "peer"
+        out.append(
+            _MemoryMessageSnapshot(
+                id=str(entry.get("message_id") or "").strip(),
+                user_id=sender_id,
+                text=str(entry.get("text") or ""),
+                timestamp=_safe_float(entry.get("timestamp_epoch")),
+                direction=direction,
+            )
+        )
+    out.sort(
+        key=lambda item: (
+            float(item.timestamp or 0.0),
+            str(item.id or ""),
+        ),
+        reverse=True,
+    )
+    return out
+
+
+def _thread_from_memory_state(client, state: Dict[str, Any]) -> Optional[ThreadLike]:
+    thread_id = str(state.get("thread_id") or "").strip()
+    if not thread_id:
+        return None
+    recipient_username = str(state.get("recipient_username") or "unknown").strip() or "unknown"
+    recipient_id = str(state.get("recipient_id") or "").strip() or recipient_username
+    snippet = str(state.get("snippet") or "").strip()
+    try:
+        unread_count = max(0, int(state.get("unread_count") or 0))
+    except Exception:
+        unread_count = 0
+    thread = ThreadLike(
+        id=thread_id,
+        pk=thread_id,
+        users=[UserLike(pk=recipient_id, id=recipient_id, username=recipient_username)],
+        unread_count=unread_count,
+        link=f"https://www.instagram.com/direct/t/{thread_id}/",
+        title=recipient_username,
+        snippet=snippet,
+        source_index=-1,
+    )
+    try:
+        client._thread_cache[thread_id] = thread
+        client._thread_cache_meta[thread_id] = {
+            "title": recipient_username,
+            "snippet": snippet,
+            "link": f"https://www.instagram.com/direct/t/{thread_id}/",
+            "idx": -1,
+            "selector": "memory_state",
+            "key_source": "memory_state",
+        }
+    except Exception:
+        pass
+    return thread
+
+
+def _conversation_text_from_memory(messages: List[_MemoryMessageSnapshot], client_user_id: object) -> str:
+    lines: List[str] = []
+    for msg in reversed(messages):
+        prefix = "YO" if _message_outbound_status(msg, client_user_id) is True else "ELLOS"
+        lines.append(f"{prefix}: {msg.text or ''}")
+    return "\n".join(lines)
+
+
+def _minutes_until_followup_from_memory(
+    state: Dict[str, Any],
+    now_ts: float,
+    followup_schedule_hours: Optional[List[int]],
+) -> Optional[int]:
+    schedule = [value for value in (followup_schedule_hours or []) if isinstance(value, int) and value > 0]
+    schedule = sorted(set(schedule))
+    if not schedule:
+        return None
+    first_sent_at = _safe_float(state.get("first_message_sent_at"))
+    if first_sent_at is None:
+        messages_sent = state.get("messages_sent", [])
+        if isinstance(messages_sent, list):
+            first_values = []
+            for item in messages_sent:
+                if not isinstance(item, dict):
+                    continue
+                ts_value = _safe_float(item.get("first_sent_at") or item.get("last_sent_at"))
+                if ts_value is not None:
+                    first_values.append(ts_value)
+            if first_values:
+                first_sent_at = min(first_values)
+    if first_sent_at is None:
+        return None
+    last_received_at = _safe_float(state.get("last_message_received_at"))
+    if last_received_at is not None and last_received_at > first_sent_at:
+        return None
+    messages_sent = state.get("messages_sent", [])
+    followups_sent = 0
+    if isinstance(messages_sent, list):
+        followups_sent = len(
+            [
+                item for item in messages_sent
+                if isinstance(item, dict) and bool(item.get("is_followup", False))
+            ]
+        )
+    if followups_sent >= len(schedule):
+        return None
+    required_seconds = float(schedule[followups_sent]) * 3600.0
+    elapsed = max(0.0, now_ts - first_sent_at)
+    remaining = required_seconds - elapsed
+    if remaining <= 0:
+        return 0
+    return int((remaining + 59.0) // 60.0)
+
+
+def _memory_action_for_thread(
+    state: Dict[str, Any],
+    *,
+    client_user_id: object,
+    now_ts: float,
+    max_age_seconds: int,
+    followup_schedule_hours: Optional[List[int]],
+) -> tuple[str, Dict[str, Any]]:
+    messages = _memory_messages_from_state(state, client_user_id)
+    if not messages:
+        return "skip", {"reason": "sin_mensajes"}
+
+    last_inbound = _latest_inbound_message(messages, client_user_id)
+    last_outbound = _latest_outbound_message(messages, client_user_id)
+    if last_inbound is not None:
+        has_new_inbound = (
+            last_outbound is None
+            or _message_is_newer_than(last_inbound, last_outbound, messages)
+        )
+        if has_new_inbound:
+            last_id = getattr(last_inbound, "id", None) or getattr(last_inbound, "message_id", None)
+            last_id_str = str(last_id or "").strip()
+            last_seen = str(state.get("last_message_id_seen") or "").strip()
+            inbound_ts = _message_timestamp(last_inbound)
+            if max_age_seconds and (inbound_ts is None or (now_ts - inbound_ts) > max_age_seconds):
+                return "skip", {"reason": "inbound_antiguo"}
+            if last_id_str and last_seen and last_seen == last_id_str:
+                return "skip", {"reason": "inbound_ya_visto"}
+            return "reply", {"last_inbound": last_inbound, "messages": messages}
+
+    wait_minutes = _minutes_until_followup_from_memory(state, now_ts, followup_schedule_hours)
+    if wait_minutes is None:
+        return "skip", {"reason": "sin_accion"}
+    if wait_minutes <= 0:
+        return "followup_due", {"minutes": 0}
+    return "wait", {"minutes": wait_minutes}
+
+
+def full_discovery_initial(client, user: str, threads_target: int) -> None:
+    target = max(1, int(threads_target or 1))
+    print(style_text("🔎 Sincronización inicial del inbox", color=Fore.CYAN, bold=True))
+    page_number = 0
+    cursor = ""
+    accumulated: Dict[str, Dict[str, Any]] = {}
+    page_size = max(10, min(80, target))
+    while not STOP_EVENT.is_set() and len(accumulated) < target:
+        page_number += 1
+        try:
+            page_result = client.fetch_inbox_threads_page(
+                cursor=cursor,
+                limit=page_size,
+                message_limit=20,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Discovery inicial por endpoint falló para @%s en página %s: %s",
+                user,
+                page_number,
+                exc,
+                exc_info=False,
+            )
+            break
+
+        page_threads = list(page_result.get("threads") or [])
+        for snapshot in page_threads:
+            thread_id = str(snapshot.get("thread_id") or "").strip()
+            if not thread_id:
+                continue
+            previous = accumulated.get(thread_id)
+            if previous is None:
+                accumulated[thread_id] = snapshot
+                continue
+            previous_ts = _safe_float(previous.get("last_activity_at")) or 0.0
+            current_ts = _safe_float(snapshot.get("last_activity_at")) or 0.0
+            if current_ts >= previous_ts:
+                accumulated[thread_id] = snapshot
+
+        print(
+            style_text(
+                f"📦 Página {page_number} cargada → {len(page_threads)} threads (acumulado {len(accumulated)})",
+                color=Fore.WHITE,
+            )
+        )
+        next_cursor = str(page_result.get("cursor") or "").strip()
+        has_more = bool(page_result.get("has_more"))
+        if len(accumulated) >= target:
+            cursor = next_cursor or cursor
+            break
+        if not has_more or not next_cursor or next_cursor == cursor:
+            cursor = next_cursor or cursor
+            break
+        cursor = next_cursor
+
+    if not accumulated:
+        logger.warning("Sin resultados de endpoint para sincronización inicial de @%s.", user)
+        return
+
+    print(style_text("🧠 Construyendo memoria...", color=Fore.GREEN))
+    snapshots = list(accumulated.values())[:target]
+    new_count, updated_count = _upsert_threads_into_memory(
+        client,
+        user,
+        snapshots,
+        source_label="endpoint_full_discovery",
+        sync_cursor=cursor,
+    )
+    logger.info(
+        "Memory full discovery @%s -> nuevos=%s actualizados=%s total=%s cursor=%s",
+        user,
+        new_count,
+        updated_count,
+        len(snapshots),
+        cursor or "-",
+    )
+    print(style_text("💾 Memoria persistida correctamente", color=Fore.GREEN))
+    print(style_text("✅ Sincronización inicial completada", color=Fore.GREEN, bold=True))
+
+
+def incremental_discovery_sync(client, user: str, page_limit: int = 30) -> tuple[int, int]:
+    print(style_text("🔄 Verificando nuevos mensajes...", color=Fore.CYAN))
+    try:
+        page_result = client.fetch_inbox_threads_page(
+            cursor="",
+            limit=max(5, int(page_limit or 30)),
+            message_limit=20,
+        )
+    except Exception as exc:
+        logger.warning("Sync incremental falló para @%s: %s", user, exc, exc_info=False)
+        print(style_text("✔ No se detectaron cambios", color=Fore.YELLOW))
+        return 0, 0
+
+    snapshots = list(page_result.get("threads") or [])
+    cursor = str(page_result.get("cursor") or "").strip()
+    new_count, updated_count = _upsert_threads_into_memory(
+        client,
+        user,
+        snapshots,
+        source_label="endpoint_incremental_sync",
+        sync_cursor=cursor,
+    )
+    if new_count > 0:
+        print(style_text(f"📥 {new_count} threads nuevos detectados", color=Fore.GREEN))
+    if new_count <= 0 and updated_count <= 0:
+        print(style_text("✔ No se detectaron cambios", color=Fore.WHITE))
+    return new_count, updated_count
+
+
+def decision_cycle_from_memory(
     client,
     user: str,
     state: Dict[str, Dict[str, str]],
@@ -5453,343 +5412,109 @@ def _process_inbox(
     delay_max: float = 0.0,
     max_age_days: int = 7,
     allowed_thread_ids: Optional[set[str]] = None,
-    threads_limit: int = 20,
+    followup_schedule_hours: Optional[List[int]] = None,
 ) -> None:
-    scan_started_at = time.time()
-    first_thread_attempt_at: Optional[float] = None
-    first_thread_attempt_delay_s: Optional[float] = None
-    threads_attempted = 0
-    messages_empty = 0
-    processed_threads = 0
-    discovered_count = 0
-    candidate_count = 0
-    stream_error: Optional[Exception] = None
-    loop_exit_reason = ""
-    loop_exit_detail = ""
-
-    def _print_temp_scan_summary(exit_reason: str, detail: str = "") -> None:
-        if not _AUTORESPONDER_VERBOSE_TECH_LOGS:
-            return
-        total_scan_s = time.time() - scan_started_at
-        first_attempt_s = first_thread_attempt_delay_s if first_thread_attempt_delay_s is not None else -1.0
-        print(style_text(f"LOOP_EXIT reason={exit_reason} detail={detail or '-'}", color=Fore.YELLOW))
-        print(
-            style_text(
-                (
-                    "[TEMP_METRIC] "
-                    f"first_thread_attempt_s={first_attempt_s:.3f} "
-                    f"total_scan_s={total_scan_s:.3f} "
-                    f"candidates={candidate_count} "
-                    f"threads_attempted={threads_attempted} "
-                    f"messages_empty={messages_empty} "
-                    f"threads_processed={processed_threads}"
-                ),
-                color=Fore.WHITE,
-            )
-        )
-
-    print(style_text(f"Escaneando inbox (hasta {max(1, int(threads_limit or 1))} chats)...", color=Fore.CYAN))
-
-    # FASE 1 — ABRIR INBOX (UNA SOLA VEZ)
-    client._open_inbox()
-    print(style_text(f"Cuenta {user} | Inbox cargado", color=Fore.CYAN))
-
-    state.setdefault(user, {})
-    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
-    total_threads = max(1, int(threads_limit or 1))
-    messages_sent_this_scan = 0
-    page = client._ensure_page()
-
-    def _safe_return_to_inbox(*, force: bool = False) -> None:
-        try:
-            if not force:
-                current_url = getattr(page, "url", "") or ""
-                # En vista /direct/t/ podemos abrir el siguiente thread desde el panel lateral
-                # sin pagar un "back" por cada iteracion.
-                if "/direct/t/" in current_url:
-                    return
-            client.return_to_inbox()
-        except Exception:
-            pass
-
-    def _candidate_dedup_key(thread: object) -> str:
-        thread_id = str(getattr(thread, "id", "") or "").strip()
-        if thread_id and not thread_id.startswith("stable_"):
-            return f"id:{thread_id}"
-        title = str(getattr(thread, "title", "") or "").strip().lower()
-        snippet = str(getattr(thread, "snippet", "") or "").strip().lower()
-        if title or snippet:
-            return f"stable:{title}|{snippet}"
-        if thread_id:
-            return f"id:{thread_id}"
-        return ""
-
-    def _collect_candidates(target: int) -> tuple[Iterator[ThreadLike], str, str]:
-        discovery_target = max(1, int(target or 1))
-        reason = "other"
-        detail = "-"
-        collect_method = getattr(client, "collect_threads", None)
-        iter_method = getattr(client, "iter_threads", None)
-        if callable(iter_method):
-            return iter_method(amount=discovery_target, filter_unread=False), "iter_stream", "-"
-        if callable(collect_method):
-            collected, raw_reason, raw_detail = collect_method(
-                amount=discovery_target,
-                filter_unread=False,
-            )
-            reason = str(raw_reason or "").strip() or "other"
-            detail = str(raw_detail or "").strip() or "-"
-            return iter(list(collected or [])), reason, detail
-        listed = client.list_threads(amount=discovery_target, filter_unread=False)
-        listed_threads = list(listed or [])
-        reason = "target_reached" if len(listed_threads) >= discovery_target else "no_more_threads"
-        detail = "list_threads_fallback"
-        return iter(listed_threads), reason, detail
-
-    discovery_target = min(5000, max(total_threads * 2, total_threads + 12))
-    discovery_reason = "other"
-    discovery_detail = "-"
-    try:
-        discovered_threads, discovery_reason, discovery_detail = _collect_candidates(discovery_target)
-    except Exception as exc:
-        loop_exit_reason = "exception"
-        loop_exit_detail = f"thread_source_error:{type(exc).__name__}"
-        logger.warning(
-            "No se pudieron listar threads para @%s: %s",
-            user,
-            exc,
-            exc_info=not settings.quiet,
-        )
-        print(style_text(f"[Barrido] Error listando chats para @{user}", color=Fore.YELLOW))
-        try:
-            client.debug_dump_inbox("list_threads_error")
-        except Exception:
-            pass
-        _print_temp_scan_summary(loop_exit_reason, loop_exit_detail)
+    _ = state  # compatibilidad de firma
+    account_threads = _account_conversations_from_memory(user, refresh=True)
+    if not account_threads:
+        print(style_text(f"[Memoria] Sin conversaciones para @{user}", color=Fore.YELLOW))
         return
 
-    candidate_count = 0
-    discovered_count = 0
-    candidate_keys_seen: set[str] = set()
-    if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-        print(
-            style_text(
-                f"DISCOVERY_START target={discovery_target}",
-                color=Fore.CYAN,
-            )
+    now_ts = time.time()
+    max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
+    print(style_text("🧮 Analizando estado de los threads...", color=Fore.CYAN, bold=True))
+    actions_by_thread: Dict[str, tuple[str, Dict[str, Any]]] = {}
+    pending_replies = 0
+    pending_followups = 0
+    no_action = 0
+    for row in account_threads:
+        thread_id = str(row.get("thread_id") or "").strip()
+        if not thread_id:
+            continue
+        action, details = _memory_action_for_thread(
+            row,
+            client_user_id=getattr(client, "user_id", ""),
+            now_ts=now_ts,
+            max_age_seconds=max_age_seconds,
+            followup_schedule_hours=followup_schedule_hours,
         )
-    def _safe_candidate_stream(stream: Iterator[ThreadLike]) -> Iterator[ThreadLike]:
-        nonlocal stream_error, loop_exit_reason, loop_exit_detail
-        try:
-            for candidate in stream:
-                yield candidate
-        except Exception as exc:
-            stream_error = exc
-            loop_exit_reason = "exception"
-            loop_exit_detail = f"thread_source_error:{type(exc).__name__}"
+        actions_by_thread[thread_id] = (action, details)
+        if action == "reply":
+            pending_replies += 1
+        elif action == "followup_due":
+            pending_followups += 1
+        else:
+            no_action += 1
 
-    candidate_index = 0
-    for thread in _safe_candidate_stream(discovered_threads):
-        if processed_threads >= total_threads:
-            break
+    print(style_text("📊 Resumen:", color=Fore.WHITE, bold=True))
+    print(style_text(f"• Respuestas pendientes: {pending_replies}", color=Fore.WHITE))
+    print(style_text(f"• Follow-ups listos: {pending_followups}", color=Fore.WHITE))
+    print(style_text(f"• Sin acción: {no_action}", color=Fore.WHITE))
+
+    messages_sent_this_cycle = 0
+    for idx, row in enumerate(account_threads, start=1):
         if STOP_EVENT.is_set():
-            loop_exit_reason = "other"
-            loop_exit_detail = "stop_event"
             break
-
-        dedup_key = _candidate_dedup_key(thread)
-        if dedup_key and dedup_key in candidate_keys_seen:
+        thread_id = str(row.get("thread_id") or "").strip()
+        if not thread_id:
             continue
-        if dedup_key:
-            candidate_keys_seen.add(dedup_key)
-
-        candidate_index += 1
-        candidate_count = candidate_index
-        discovered_count = candidate_count
-        next_thread_no = min(total_threads, processed_threads + 1)
-        print(style_text(f"abriendo thread {next_thread_no}/{total_threads}", color=Fore.CYAN))
-        logger.info(
-            "ABRIENDO_THREAD account=@%s step=%s total=%s candidate=%s thread_id=%s",
-            user,
-            next_thread_no,
-            total_threads,
-            candidate_index,
-            getattr(thread, "id", ""),
-        )
-        now = time.time()
-        time_str = datetime.now().strftime('%H:%M')
-
-        # Paso 4/5: CLICK THREAD REAL + VALIDACIÓN (Ocurre dentro de get_messages)
-        pre_open_key = _get_conversation_key(user, str(thread.id))
-        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-            print(
-                style_text(
-                    f"[TRACE_ID PRE_OPEN] candidate={candidate_index} id={thread.id} pk={getattr(thread, 'pk', None)} title={getattr(thread, 'title', '')} source_index={getattr(thread, 'source_index', None)} url={getattr(page, 'url', '')} key={pre_open_key}",
-                    color=Fore.WHITE,
-                )
-            )
-        if first_thread_attempt_at is None:
-            first_thread_attempt_at = time.time()
-            first_thread_attempt_delay_s = first_thread_attempt_at - scan_started_at
-            if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-                print(
-                    style_text(
-                        f"[TEMP_METRIC] FIRST_THREAD_ATTEMPT delay_s={first_thread_attempt_delay_s:.3f} candidate={candidate_index}",
-                        color=Fore.CYAN,
-                    )
-                )
-        threads_attempted += 1
-        messages = client.get_messages(thread, amount=10)
-        if not messages:
-            messages_empty += 1
-
-        if not messages:
-            # Retry único con return forzado para cubrir fallos transitorios de foco/UI.
-            _safe_return_to_inbox(force=True)
-            try:
-                threads_attempted += 1
-                messages = client.get_messages(thread, amount=10)
-                if not messages:
-                    messages_empty += 1
-            except Exception:
-                messages = []
-                messages_empty += 1
-
-        if not messages:
-            logger.info(
-                "PlaywrightDM hook account=@%s thread_id=%s decision=skip_open_failed candidate=%s",
-                user,
-                getattr(thread, "id", ""),
-                candidate_index,
-            )
-            continue
-
-        processed_threads += 1
-        idx = processed_threads
-        print(style_text(f"Thread {idx}/{total_threads}", color=Fore.CYAN, bold=True))
-        print(style_text("abierto", color=Fore.GREEN))
-
-        thread_id = str(thread.id)
-        recipient_username = getattr(thread, "title", "unknown")
-        msg_fingerprint = ", ".join(
-            f"{getattr(m, 'id', '')}@{getattr(m, 'timestamp', '')}" for m in messages[:2]
-        )
-        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-            print(
-                style_text(
-                    f"[TRACE_ID PRE_SNAPSHOT] id={thread.id} pk={getattr(thread, 'pk', None)} key={_get_conversation_key(user, thread_id)} msg_count={len(messages)} sample={msg_fingerprint}",
-                    color=Fore.WHITE,
-                )
-            )
-
-        # Paso 6/7: CAPTURAR + PERSISTIR EN MEMORIA (OBLIGATORIO)
-        msgs_snapshot = [
-            {
-                "message_id": m.id,
-                "direction": getattr(m, "direction", "inbound"),
-                "text": m.text,
-                "timestamp_epoch": m.timestamp
-            }
-            for m in messages
-        ]
-        _update_conversation_state(user, thread_id, {
-            "recipient_username": recipient_username,
-            "last_interaction_at": now,
-            "source": "playwright",
-            "captured_at_epoch": time.time(),
-            "messages": msgs_snapshot
-        })
-        print(style_text(f"capturando contexto ({len(messages)} mensajes)", color=Fore.GREEN))
-        print(style_text("persistiendo memoria", color=Fore.GREEN))
+        recipient_username = str(row.get("recipient_username") or "unknown").strip() or "unknown"
+        print(style_text(f"🔹 Thread {idx}/{len(account_threads)} → @{recipient_username}", color=Fore.CYAN))
 
         if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
-            print(style_text(f"accion=IGNORAR (no permitido) ({time_str})", color=Fore.YELLOW))
-            # Regresar al inbox para el siguiente candidato
-            _safe_return_to_inbox()
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
             continue
 
-        # Paso 8: LEYENDO MEMORIA Y DECIDIENDO
-        print(style_text("leyendo memoria", color=Fore.WHITE))
-        last_inbound = _latest_inbound_message(messages, client.user_id)
-        if not last_inbound:
-            logger.info(
-                "PlaywrightDM hook account=@%s thread_id=%s decision=skip_no_inbound",
-                user,
-                thread_id,
-            )
-            _safe_return_to_inbox()
+        action, details = actions_by_thread.get(thread_id, ("skip", {"reason": "sin_plan"}))
+        if action == "wait":
+            minutes = max(0, int(details.get("minutes") or 0))
+            print(style_text(f"Acción: En espera (faltan {minutes} min)", color=Fore.YELLOW))
             continue
-        last_outbound = _latest_outbound_message(messages, client.user_id)
-        if last_outbound is not None and not _message_is_newer_than(last_inbound, last_outbound, messages):
-            logger.info(
-                "PlaywrightDM hook account=@%s thread_id=%s decision=skip_no_new_inbound_after_last_outbound",
-                user,
-                thread_id,
-            )
-            _safe_return_to_inbox()
+        if action == "followup_due":
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
             continue
-        last = last_inbound
-        last_seen_id = None
-        last_id = getattr(last, "id", None)
-        if last_id is None:
-            last_id = getattr(last, "message_id", None)
-        if last_id is None:
-            logger.info(
-                "PlaywrightDM hook account=@%s thread_id=%s latest_id=- last_seen=%s decision=skip_no_message_id",
-                user,
-                thread_id,
-                last_seen_id,
-            )
-            _safe_return_to_inbox()
-            continue
-        last_id_str = str(last_id)
-        sender_id = getattr(last, "user_id", None)
-        last_ts = _message_timestamp(last)
-        if max_age_seconds:
-            if last_ts is None or (now - last_ts) > max_age_seconds:
-                _safe_return_to_inbox()
-                continue
-
-        conv_state = _get_conversation_state(user, thread_id)
-        last_seen_id = conv_state.get("last_message_id_seen")
-        if last_seen_id is not None and str(last_seen_id) == last_id_str:
-            print(style_text(f"accion=IGNORAR (ya visto) ({datetime.now().strftime('%H:%M')})", color=Fore.YELLOW))
-            logger.info(
-                "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=skip_seen",
-                user,
-                thread_id,
-                last_id_str,
-                last_seen_id,
-            )
-            _safe_return_to_inbox()
+        if action != "reply":
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
             continue
 
-        recipient_username = None
-        if sender_id is not None:
-            recipient_username = _resolve_username(client, thread, sender_id) or str(sender_id)
-        if recipient_username is None:
-            recipient_username = conv_state.get("recipient_username") or "unknown"
-        logger.info(
-            "PlaywrightDM hook account=@%s thread_id=%s latest_id=%s last_seen=%s decision=persist",
-            user,
-            thread_id,
-            last_id_str,
-            last_seen_id,
-        )
+        memory_messages = details.get("messages")
+        if not isinstance(memory_messages, list) or not memory_messages:
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
+            continue
+        last_inbound = details.get("last_inbound")
+        if last_inbound is None:
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
+            continue
+
+        thread = _thread_from_memory_state(client, row)
+        if thread is None:
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
+            continue
+
+        print(style_text("Acción: Preparando respuesta", color=Fore.GREEN))
+        try:
+            opened = client._open_thread(thread)
+        except Exception:
+            opened = False
+        if not opened:
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
+            continue
+
+        _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
+        last_id = getattr(last_inbound, "id", None) or getattr(last_inbound, "message_id", None)
+        last_id_str = str(last_id or "").strip()
+        if not last_id_str:
+            print(style_text("Acción: Omitido", color=Fore.YELLOW))
+            continue
+
         _record_message_received(user, thread_id, last_id_str, recipient_username)
-        
-        convo = "\n".join(
-            [
-                f"{'YO' if _message_outbound_status(msg, client.user_id) is True else 'ELLOS'}: {msg.text or ''}"
-                for msg in reversed(messages)
-            ]
-        )
-        
-        last_sent_at = conv_state.get("last_message_sent_at")
-        last_received_at = conv_state.get("last_message_received_at")
-        time_since_last_sent = (now - last_sent_at) if last_sent_at else None
-        time_since_last_received = (now - last_received_at) if last_received_at else None
-        
+        convo = _conversation_text_from_memory(memory_messages, getattr(client, "user_id", ""))
+        conv_state = _get_conversation_state(user, thread_id)
+        now_local = time.time()
+        last_sent_at = _safe_float(conv_state.get("last_message_sent_at"))
+        last_received_at = _safe_float(conv_state.get("last_message_received_at"))
+        time_since_last_sent = (now_local - last_sent_at) if last_sent_at else None
+        time_since_last_received = (now_local - last_received_at) if last_received_at else None
         stage = _determine_conversation_stage(
             user,
             thread_id,
@@ -5797,23 +5522,24 @@ def _process_inbox(
             time_since_last_sent=time_since_last_sent,
             time_since_last_received=time_since_last_received,
         )
-        
         _update_conversation_state(user, thread_id, {"stage": stage}, recipient_username)
-        
-        status = _classify_response(last.text or "")
+
+        inbound_text = str(getattr(last_inbound, "text", "") or "")
+        status = _classify_response(inbound_text)
         if status and recipient_username:
-            msg_ts = getattr(last, "timestamp", None)
-            ts_value = None
-            if isinstance(msg_ts, datetime):
-                ts_value = int(msg_ts.timestamp())
-            log_conversation_status(user, recipient_username, status, timestamp=ts_value)
-            
+            ts_value = _message_timestamp(last_inbound)
+            log_conversation_status(
+                user,
+                recipient_username,
+                status,
+                timestamp=int(ts_value) if ts_value is not None else None,
+            )
             if status == "No interesado":
-                _update_conversation_state(user, thread_id, {"stage": _STAGE_CLOSED})
-                _safe_return_to_inbox()
+                _update_conversation_state(user, thread_id, {"stage": _STAGE_CLOSED}, recipient_username)
+                print(style_text("Acción: Omitido", color=Fore.YELLOW))
                 continue
-        
-        phone_numbers = _extract_phone_numbers(last.text or "")
+
+        phone_numbers = _extract_phone_numbers(inbound_text)
         if not phone_numbers:
             phone_numbers = _extract_phone_numbers(convo)
         calendar_message: Optional[str] = None
@@ -5844,174 +5570,101 @@ def _process_inbox(
             thread_id,
             conv_state,
             stage=stage,
-            recipient_username=recipient_username or "",
+            recipient_username=recipient_username,
         )
-
         try:
-            reply = _gen_response(
-                api_key,
-                system_prompt,
-                convo,
-                memory_context=memory_context,
-            )
-            
+            reply = _gen_response(api_key, system_prompt, convo, memory_context=memory_context)
             can_send, reason = _can_send_message(
                 user,
                 thread_id,
                 reply,
                 force=_FORCE_ALWAYS_RESPOND,
             )
-            now_time_str = datetime.now().strftime("%H:%M")
             if not can_send:
-                print(style_text(f"accion=IGNORAR ({now_time_str})", color=Fore.YELLOW))
                 logger.info(
-                    "Omitiendo envío para @%s → @%s: %s",
+                    "Omitiendo envío por memoria @%s -> @%s (thread %s): %s",
                     user,
                     recipient_username,
+                    thread_id,
                     reason,
                 )
-                if last_id:
-                    state[user][thread_id] = last_id
-                save_auto_state(state)
-                _safe_return_to_inbox()
+                print(style_text("Acción: Omitido", color=Fore.YELLOW))
                 continue
 
-            action_label = "RESPONDER" if stage != _STAGE_FOLLOWUP else "FOLLOWUP"
             stats.record_reply_attempt(user)
-            print(style_text(f"accion={action_label} ({now_time_str})", color=Fore.GREEN))
-            logger.info(
-                "Decision responder @%s thread=%s stage=%s reason=%s",
-                user,
-                thread_id,
-                stage,
-                reason,
-            )
-            
-            if messages_sent_this_scan > 0:
-                _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
-            
             message_id = client.send_message(thread, reply)
             if not message_id:
                 index = stats.record_response_error(user)
                 logger.warning(
-                    "Envio no verificado para @%s -> @%s (thread %s)",
+                    "Envio no verificado por memoria para @%s -> @%s (thread %s)",
                     user,
                     recipient_username,
                     thread_id,
                 )
-                print(
-                    style_text(
-                        f"respuesta no verificada a {_format_handle(recipient_username)}",
-                        color=Fore.YELLOW,
-                    )
-                )
                 _print_response_summary(index, user, recipient_username, False)
-                _safe_return_to_inbox()
+                print(style_text("Acción: Omitido", color=Fore.YELLOW))
                 continue
 
             _record_message_sent(user, thread_id, reply, str(message_id), recipient_username, is_followup=False)
-            messages_sent_this_scan += 1
-            print(style_text("persistiendo memoria", color=Fore.GREEN))
-            
             if calendar_message:
                 calendar_id = client.send_message(thread, calendar_message)
                 if calendar_id:
-                    _record_message_sent(user, thread_id, calendar_message, calendar_id, recipient_username, is_followup=False)
-                    _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
-            
-            _update_conversation_state(user, thread_id, {"stage": _STAGE_WAITING})
-            
-            logger.info(
-                "Mensaje enviado por @%s → @%s (último mensaje del lead hace %.1f horas)",
-                user,
-                recipient_username,
-                time_since_last_received / 3600.0 if time_since_last_received else 0,
-            )
-            
+                    _record_message_sent(
+                        user,
+                        thread_id,
+                        calendar_message,
+                        str(calendar_id),
+                        recipient_username,
+                        is_followup=False,
+                    )
+            _update_conversation_state(user, thread_id, {"stage": _STAGE_WAITING}, recipient_username)
+            messages_sent_this_cycle += 1
+            print(style_text("📤 Mensaje enviado correctamente", color=Fore.GREEN))
+            print(style_text("💾 Memoria actualizada", color=Fore.GREEN))
         except Exception as exc:
             setattr(exc, "_autoresponder_sender", user)
             setattr(exc, "_autoresponder_recipient", recipient_username)
             setattr(exc, "_autoresponder_message_attempt", True)
             raise
-        if last_id:
-            state[user][thread_id] = last_id
-        save_auto_state(state)
-        
+
         index = stats.record_success(user)
-        logger.info("Respuesta enviada por @%s en hilo %s (etapa: %s)", user, thread_id, stage)
-        print(style_text(f"respondido a {_format_handle(recipient_username)}", color=Fore.GREEN))
         _print_response_summary(index, user, recipient_username, True, calendar_status_line)
 
-        # Paso 9: Volver al inbox view (sin reload)
-        _safe_return_to_inbox()
-    close_discovery = getattr(discovered_threads, "close", None)
-    if callable(close_discovery):
-        try:
-            close_discovery()
-        except Exception:
-            pass
-    if discovery_reason == "iter_stream":
-        discovery_reason = str(getattr(client, "_last_thread_discovery_reason", "") or "").strip() or "other"
-        discovery_detail = str(getattr(client, "_last_thread_discovery_detail", "") or "").strip() or "-"
-    if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-        print(
-            style_text(
-                f"DISCOVERY_END target={discovery_target} discovered={candidate_count} reason={discovery_reason}",
-                color=Fore.CYAN,
-            )
-        )
-    if not loop_exit_reason:
-        if processed_threads >= total_threads:
-            loop_exit_reason = "reached_total_threads"
-            loop_exit_detail = "-"
-        elif stream_error is not None:
-            loop_exit_reason = "exception"
-            loop_exit_detail = f"stream_error:{type(stream_error).__name__}"
-        elif STOP_EVENT.is_set():
-            loop_exit_reason = "other"
-            loop_exit_detail = "stop_event_post_loop"
-        else:
-            loop_exit_reason = "discovery_exhausted"
-            loop_exit_detail = f"{discovery_reason}:{discovery_detail}"
-    if discovered_count <= 0:
-        print(style_text(f"[Barrido] Sin chats visibles para @{user}", color=Fore.YELLOW))
-        logger.warning(
-            "No threads visibles para @%s: ver screenshot/html en storage/logs (dm_debug_...)",
-            user,
-        )
-        try:
-            client.debug_dump_inbox("no_threads_found")
-        except Exception:
-            pass
-        _print_temp_scan_summary(loop_exit_reason, loop_exit_detail)
-        return
+    logger.info(
+        "Decision cycle memory-first account=@%s completado total=%s enviados=%s",
+        user,
+        len(account_threads),
+        messages_sent_this_cycle,
+    )
 
-    if stream_error is not None:
-        logger.warning(
-            "Error iterando threads para @%s después de %d candidatos: %s",
-            user,
-            discovered_count,
-            stream_error,
-            exc_info=not settings.quiet,
-        )
-        print(style_text(f"[Barrido] Error listando chats para @{user}", color=Fore.YELLOW))
-        try:
-            client.debug_dump_inbox("list_threads_error")
-        except Exception:
-            pass
 
-    if processed_threads < total_threads and not STOP_EVENT.is_set():
-        print(
-            style_text(
-                f"[Barrido] @{user}: se trabajaron {processed_threads} threads (objetivo {total_threads}, candidatos {candidate_count})",
-                color=Fore.YELLOW,
-            )
-        )
-
-    _print_temp_scan_summary(loop_exit_reason, loop_exit_detail)
-    print(style_text(f"[Barrido] Scan completo para @{user}", color=Fore.GREEN))
-    if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-        print(style_text(f"TRACE_CYCLE AFTER_SCAN user=@{user} now={time.time()} stop_event={STOP_EVENT.is_set()}", color=Fore.WHITE))
+def _process_inbox(
+    client,
+    user: str,
+    state: Dict[str, Dict[str, str]],
+    api_key: str,
+    system_prompt: str,
+    stats: BotStats,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    max_age_days: int = 7,
+    allowed_thread_ids: Optional[set[str]] = None,
+    threads_limit: int = 20,
+) -> None:
+    _ = threads_limit
+    decision_cycle_from_memory(
+        client,
+        user,
+        state,
+        api_key,
+        system_prompt,
+        stats,
+        delay_min=delay_min,
+        delay_max=delay_max,
+        max_age_days=max_age_days,
+        allowed_thread_ids=allowed_thread_ids,
+        followup_schedule_hours=None,
+    )
 
 def _print_bot_summary(stats: BotStats) -> None:
     def _format_elapsed(seconds: float) -> str:
@@ -6120,7 +5773,7 @@ def _activate_bot() -> None:
 
     ensure_logging(quiet=settings.quiet, log_dir=settings.log_dir, log_file=settings.log_file)
     reset_stop_event()
-    state = get_auto_state()
+    state: Dict[str, Dict[str, str]] = {}
     stats = BotStats(alias=alias)
     ACTIVE_ALIAS = alias
     listener = start_q_listener("Presiona Q para detener el auto-responder.", logger)
@@ -6136,6 +5789,7 @@ def _activate_bot() -> None:
     )
 
     account_queue = list(active_accounts)
+    initial_sync_done: set[str] = set()
     active_clients: Dict[str, object] = {}
     try:
         with _suppress_console_noise():
@@ -6163,6 +5817,9 @@ def _activate_bot() -> None:
                         allowed_thread_ids = _followup_allowed_thread_ids(user)
 
                     try:
+                        if user not in initial_sync_done and not STOP_EVENT.is_set():
+                            full_discovery_initial(client, user, threads_limit)
+                            initial_sync_done.add(user)
                         if not followup_only or allowed_thread_ids:
                             account_system_prompt = _resolve_system_prompt_for_user(
                                 user,
@@ -6170,8 +5827,8 @@ def _activate_bot() -> None:
                                 fallback_prompt=base_system_prompt,
                             )
                             if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-                                print(style_text(f"TRACE_CYCLE ENTER _process_inbox user=@{user} ts={time.time()}", color=Fore.WHITE))
-                            _process_inbox(
+                                print(style_text(f"TRACE_CYCLE ENTER decision_cycle_from_memory user=@{user} ts={time.time()}", color=Fore.WHITE))
+                            decision_cycle_from_memory(
                                 client,
                                 user,
                                 state,
@@ -6182,10 +5839,16 @@ def _activate_bot() -> None:
                                 delay_max,
                                 max_age_days,
                                 allowed_thread_ids=allowed_thread_ids if followup_only else None,
-                                threads_limit=threads_limit,
+                                followup_schedule_hours=followup_schedule_hours,
                             )
                             if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-                                print(style_text(f"TRACE_CYCLE EXIT _process_inbox user=@{user} ts={time.time()}", color=Fore.WHITE))
+                                print(style_text(f"TRACE_CYCLE EXIT decision_cycle_from_memory user=@{user} ts={time.time()}", color=Fore.WHITE))
+                        if not STOP_EVENT.is_set():
+                            incremental_discovery_sync(
+                                client,
+                                user,
+                                page_limit=max(20, int(threads_limit or 20)),
+                            )
                         if not STOP_EVENT.is_set():
                             followup_start_ts = time.time()
                             if _AUTORESPONDER_VERBOSE_TECH_LOGS:
@@ -6511,55 +6174,36 @@ def _process_followups_extended(
     followup_schedule_hours: Optional[List[int]] = None,
     stats: Optional[BotStats] = None,
 ) -> None:
-    # Implementaci�n extendida de seguimientos con memoria persistente
     if _AUTORESPONDER_VERBOSE_TECH_LOGS:
         print(style_text(f"TRACE_FU START _process_followups_extended accounts=@{user} followup_only=n/a ts={_time_for_state.time()}", color=Fore.WHITE))
     alias, entry = _followup_enabled_entry_for(user)
     if not alias or not entry or not entry.get("enabled"):
         if not _FORCE_ALWAYS_FOLLOWUP:
-            if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-                print(style_text(f"TRACE_FU RETURN reason=followups_disabled user=@{user} ts={_time_for_state.time()}", color=Fore.WHITE))
             return
         alias = alias or ACTIVE_ALIAS or user
         entry = _get_followup_entry(alias) if alias else {}
     prompt_text = str(entry.get("prompt") or _DEFAULT_FOLLOWUP_PROMPT)
     if not prompt_text.strip():
-        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-            print(style_text(f"TRACE_FU RETURN reason=empty_prompt user=@{user} ts={_time_for_state.time()}", color=Fore.WHITE))
         return
 
-    conv_state = _load_conversation_state()
-    conv_state = _clean_conversation_state(conv_state)
-
+    conv_state = _clean_conversation_state(_load_conversation_state())
     history_source = entry.get("history")
     history: _Dict_for_state[str, dict] = dict(history_source) if isinstance(history_source, dict) else {}
-
     now_ts = _time_for_state.time()
     max_age_seconds = max(0, int(max_age_days)) * 24 * 3600 if max_age_days is not None else 0
     account_norm = _normalize_username(user)
-
     updated_history = False
     updated_state = False
 
-    discovery_target = min(5000, max(int(threads_limit or 1) * 2, int(threads_limit or 1) + 12))
-    try:
-        threads = client.list_threads(amount=discovery_target, filter_unread=False)
-    except Exception as exc:
-        logger.debug(
-            "No se pudieron obtener hilos para seguimiento de @%s: %s",
-            user,
-            exc,
-            exc_info=False,
-        )
-        if _AUTORESPONDER_VERBOSE_TECH_LOGS:
-            print(style_text(f"TRACE_FU RETURN reason=list_threads_error user=@{user} ts={_time_for_state.time()} err={exc}", color=Fore.WHITE))
-        return
-    fu_candidates = len(threads) if isinstance(threads, list) else 0
+    memory_threads = _account_conversations_from_memory(user, refresh=True)
+    if threads_limit and int(threads_limit) > 0:
+        memory_threads = memory_threads[: max(1, int(threads_limit))]
+    fu_candidates = len(memory_threads)
     fu_processed = 0
     fu_sent = 0
     fu_last_heartbeat = _time_for_state.time()
 
-    for thread in threads:
+    for row in memory_threads:
         if STOP_EVENT.is_set():
             break
         fu_processed += 1
@@ -6567,32 +6211,15 @@ def _process_followups_extended(
         if (fu_processed % 10 == 0 or (now_hb_ts - fu_last_heartbeat) >= 60) and _AUTORESPONDER_VERBOSE_TECH_LOGS:
             print(style_text(f"TRACE_FU HEARTBEAT processed={fu_processed} skipped={max(0, fu_processed - fu_sent)} candidates={fu_candidates} ts={now_hb_ts}", color=Fore.WHITE))
             fu_last_heartbeat = now_hb_ts
-        thread_id = getattr(thread, "id", None)
+
+        thread_id = str(row.get("thread_id") or "").strip()
         if not thread_id:
-            _append_message_log(
-                {
-                    "action": "followup_pre_skip",
-                    "reason": "pre_skip_no_thread_id",
-                    "account": user,
-                    "thread_id": str(thread_id or ""),
-                    "unread_int": None,
-                    "recipient_id": None,
-                    "loop_index": fu_processed,
-                }
-            )
             continue
-        thread_snippet = str(getattr(thread, "snippet", "") or "").strip()
-        if not thread_snippet:
-            try:
-                cache_meta = getattr(client, "_thread_cache_meta", {}) or {}
-                meta_entry = cache_meta.get(str(thread_id), {}) if isinstance(cache_meta, dict) else {}
-                if isinstance(meta_entry, dict):
-                    thread_snippet = str(meta_entry.get("snippet") or "").strip()
-            except Exception:
-                thread_snippet = ""
-        unread_count = getattr(thread, "unread_count", None)
+        recipient_username = str(row.get("recipient_username") or "").strip() or "unknown"
+        recipient_id = str(row.get("recipient_id") or "").strip() or recipient_username
+        thread_snippet = str(row.get("snippet") or "").strip()
         try:
-            unread_int = int(unread_count)
+            unread_int = int(row.get("unread_count") or 0)
         except Exception:
             unread_int = 0
         if unread_int > 0:
@@ -6601,39 +6228,7 @@ def _process_followups_extended(
                     "action": "followup_pre_skip",
                     "reason": "pre_skip_unread_thread",
                     "account": user,
-                    "thread_id": str(thread_id),
-                    "unread_int": unread_int,
-                    "recipient_id": None,
-                    "loop_index": fu_processed,
-                }
-            )
-            continue
-
-        participants = getattr(thread, "users", None)
-        recipient_id: str | None = None
-        recipient_username = ""
-        if isinstance(participants, list):
-            for participant in participants:
-                pk_val = getattr(participant, "pk", None) or getattr(participant, "id", None)
-                pk = str(pk_val) if pk_val is not None else ""
-                if pk and pk != str(client.user_id):
-                    recipient_id = pk
-                    recipient_username = getattr(participant, "username", pk)
-                    break
-        if not recipient_id:
-            fallback_title = str(getattr(thread, "title", "") or "").strip()
-            fallback_norm = _normalize_username(fallback_title)
-            self_norm = _normalize_username(str(client.user_id))
-            if fallback_norm and fallback_norm not in {account_norm, self_norm, "unknown"}:
-                recipient_id = fallback_title
-                recipient_username = fallback_title
-        if not recipient_id:
-            _append_message_log(
-                {
-                    "action": "followup_pre_skip",
-                    "reason": "pre_skip_no_recipient",
-                    "account": user,
-                    "thread_id": str(thread_id),
+                    "thread_id": thread_id,
                     "unread_int": unread_int,
                     "recipient_id": recipient_id,
                     "loop_index": fu_processed,
@@ -6641,58 +6236,33 @@ def _process_followups_extended(
             )
             continue
 
-        try:
-            messages = client.get_messages(thread, amount=20)
-        except Exception as exc:
-            logger.debug(
-                "No se pudieron obtener mensajes del hilo %s para seguimiento: %s",
-                thread_id,
-                exc,
-                exc_info=False,
-            )
-            continue
-        thread_id = str(getattr(thread, "id", "") or thread_id or "")
+        messages = _memory_messages_from_state(row, getattr(client, "user_id", ""))
         if not messages:
             continue
-
-        latest_ts = None
-        for msg in messages:
-            msg_ts = _message_timestamp(msg)
-            if msg_ts is None:
-                continue
-            latest_ts = msg_ts if latest_ts is None else max(latest_ts, msg_ts)
+        all_ts_values = [ts for ts in (_safe_float(getattr(msg, "timestamp", None)) for msg in messages) if ts is not None]
+        latest_ts = max(all_ts_values) if all_ts_values else None
         if max_age_seconds and (latest_ts is None or now_ts - latest_ts > max_age_seconds):
             continue
 
-        def _msg_ts(msg: object) -> float | None:
-            ts_obj = getattr(msg, "timestamp", None)
-            if isinstance(ts_obj, _datetime_for_state):
-                return ts_obj.timestamp()
-            try:
-                return float(ts_obj)
-            except Exception:
-                return None
-
-        outbound_ts_values = []
-        inbound_ts_values = []
-        all_ts_values = []
-        for msg in messages:
-            msg_ts = _msg_ts(msg)
-            if msg_ts is None:
-                continue
-            all_ts_values.append(msg_ts)
-            if _same_user_id(getattr(msg, 'user_id', ''), client.user_id):
-                outbound_ts_values.append(msg_ts)
-            else:
-                inbound_ts_values.append(msg_ts)
-
+        outbound_ts_values = [
+            _safe_float(getattr(msg, "timestamp", None))
+            for msg in messages
+            if _message_outbound_status(msg, client.user_id) is True
+        ]
+        outbound_ts_values = [ts for ts in outbound_ts_values if ts is not None]
+        inbound_ts_values = [
+            _safe_float(getattr(msg, "timestamp", None))
+            for msg in messages
+            if _message_outbound_status(msg, client.user_id) is False
+        ]
+        inbound_ts_values = [ts for ts in inbound_ts_values if ts is not None]
         if not outbound_ts_values:
             _append_message_log(
                 {
                     "action": "followup_skip",
                     "reason": "skip_no_outbound_messages",
                     "account": user,
-                    "thread_id": str(thread_id),
+                    "thread_id": thread_id,
                     "lead": recipient_username or str(recipient_id),
                 }
             )
@@ -6700,24 +6270,12 @@ def _process_followups_extended(
 
         conv_key = f"{account_norm}|{thread_id}"
         engine_state = _get_conversation_state(user, thread_id)
-        last_sent_at = engine_state.get("last_message_sent_at")
-        last_received_at = engine_state.get("last_message_received_at")
+        last_sent_at = _safe_float(engine_state.get("last_message_sent_at"))
+        last_received_at = _safe_float(engine_state.get("last_message_received_at"))
         history_entry = history.get(conv_key, {}) if isinstance(history, dict) else {}
 
-        def _safe_float_ts(value):
-            try:
-                ts_value = float(value)
-            except Exception:
-                return None
-            return ts_value if ts_value > 0 else None
-
-        state_last_sent_ts = _safe_float_ts(last_sent_at)
-        history_last_sent_ts = (
-            _safe_float_ts(history_entry.get("last_sent_ts"))
-            if isinstance(history_entry, dict)
-            else None
-        )
-
+        state_last_sent_ts = _safe_float(last_sent_at)
+        history_last_sent_ts = _safe_float(history_entry.get("last_sent_ts")) if isinstance(history_entry, dict) else None
         last_outbound_ts = max(outbound_ts_values)
         last_inbound_ts = max(inbound_ts_values) if inbound_ts_values else None
 
@@ -6729,12 +6287,6 @@ def _process_followups_extended(
             older_outbound_ts = [ts for ts in outbound_ts_values if ts < (now_ts - 120)]
             if older_outbound_ts:
                 last_outbound_ts = max(older_outbound_ts)
-        if last_outbound_ts and now_ts - last_outbound_ts < 60:
-            if snippet_age_seconds is not None and snippet_age_seconds >= 60:
-                inferred_ts = now_ts - float(snippet_age_seconds)
-                if inferred_ts > 0:
-                    last_outbound_ts = inferred_ts
-                    fallback_suspected = True
         if last_outbound_ts and now_ts - last_outbound_ts < 60:
             replacement_candidates = [ts for ts in (state_last_sent_ts, history_last_sent_ts) if ts]
             replacement_candidates.extend(ts for ts in outbound_ts_values if ts < (now_ts - 120))
@@ -6752,11 +6304,10 @@ def _process_followups_extended(
                     "action": "followup_skip",
                     "reason": "skip_last_outbound_lt_60s_or_fallback_suspected",
                     "account": user,
-                    "thread_id": str(thread_id),
+                    "thread_id": thread_id,
                     "lead": recipient_username or str(recipient_id),
                     "fallback_suspected": fallback_suspected,
                     "snippet_age_seconds": int(snippet_age_seconds) if snippet_age_seconds is not None else None,
-                    "snippet": (thread_snippet[:80] if thread_snippet else ""),
                 }
             )
             continue
@@ -6766,28 +6317,18 @@ def _process_followups_extended(
                     "action": "followup_skip",
                     "reason": "skip_latest_is_inbound_or_lead_replied",
                     "account": user,
-                    "thread_id": str(thread_id),
+                    "thread_id": thread_id,
                     "lead": recipient_username or str(recipient_id),
                 }
             )
             continue
-
-        inbound_messages = [
-            msg
-            for msg in messages
-            if not _same_user_id(getattr(msg, 'user_id', ''), client.user_id) and isinstance(getattr(msg, "text", None), str)
-        ]
-        has_inbound = bool(inbound_messages)
-        if has_inbound and last_inbound_ts and now_ts - last_inbound_ts < 60:
-            continue
-
         if last_received_at and last_sent_at and last_received_at > last_sent_at:
             _append_message_log(
                 {
                     "action": "followup_skip",
                     "reason": "lead_replied_after_last_bot_message",
                     "account": user,
-                    "thread_id": str(thread_id),
+                    "thread_id": thread_id,
                     "lead": recipient_username or str(recipient_id),
                 }
             )
@@ -6798,7 +6339,7 @@ def _process_followups_extended(
                     "action": "followup_skip",
                     "reason": "last_bot_message_too_recent",
                     "account": user,
-                    "thread_id": str(thread_id),
+                    "thread_id": thread_id,
                     "lead": recipient_username or str(recipient_id),
                     "seconds_since_last_sent": int(now_ts - last_sent_at),
                 }
@@ -6827,17 +6368,7 @@ def _process_followups_extended(
         business_stage = _infer_followup_business_stage(messages, client.user_id)
         cycle_anchor_ts = float(last_outbound_ts or 0.0)
         if cycle_anchor_ts <= 0:
-            _append_message_log(
-                {
-                    "action": "followup_skip",
-                    "reason": "missing_cycle_anchor_ts",
-                    "account": user,
-                    "thread_id": str(thread_id),
-                    "lead": recipient_username or str(recipient_id),
-                }
-            )
             continue
-
         try:
             stored_anchor_ts = float(conv_record.get("cycle_anchor_ts", 0) or 0)
         except Exception:
@@ -6852,36 +6383,18 @@ def _process_followups_extended(
             conv_record["cerrado"] = False
             conv_record["ultima_actualizacion_ts"] = now_ts
             updated_state = True
-
         conv_record["etapa_negocio_actual"] = business_stage
-
         if conv_record.get("cerrado"):
             continue
-
-        if has_inbound and last_inbound_ts and last_outbound_ts and last_inbound_ts > last_outbound_ts:
-            conv_record["seguimiento_actual"] = 0
-            conv_record["cycle_followup_count"] = 0
-            conv_record["cycle_last_sent_ts"] = 0.0
-            conv_record["cycle_last_eval_ts"] = 0.0
-            conv_record["ultimo_contacto_ts"] = last_inbound_ts or now_ts
-            conv_record["ultima_actualizacion_ts"] = now_ts
-            updated_state = True
-
         try:
-            last_eval_float = float(
-                conv_record.get("cycle_last_eval_ts", conv_record.get("last_eval_ts", 0)) or 0
-            )
+            last_eval_float = float(conv_record.get("cycle_last_eval_ts", conv_record.get("last_eval_ts", 0)) or 0)
         except Exception:
             last_eval_float = 0.0
         if now_ts - last_eval_float < _FOLLOWUP_MIN_INTERVAL:
             continue
 
-        followups_sent = int(
-            conv_record.get("cycle_followup_count", conv_record.get("seguimiento_actual", 0)) or 0
-        )
-        last_followup_ts = conv_record.get(
-            "cycle_last_sent_ts", conv_record.get("last_sent_ts", 0.0)
-        ) or 0.0
+        followups_sent = int(conv_record.get("cycle_followup_count", conv_record.get("seguimiento_actual", 0)) or 0)
+        last_followup_ts = conv_record.get("cycle_last_sent_ts", conv_record.get("last_sent_ts", 0.0)) or 0.0
         try:
             last_followup_float = float(last_followup_ts)
         except Exception:
@@ -6896,42 +6409,10 @@ def _process_followups_extended(
                 conv_record["ultima_actualizacion_ts"] = now_ts
                 convs[conv_key] = conv_record
                 updated_state = True
-                _append_message_log(
-                    {
-                        "action": "followup_skip",
-                        "reason": "max_followups_reached",
-                        "account": user,
-                        "thread_id": str(thread_id),
-                        "lead": recipient_username or str(recipient_id),
-                        "etapa_negocio": business_stage,
-                    }
-                )
-                continue
-            if not cycle_anchor_ts:
-                _append_message_log(
-                    {
-                        "action": "followup_skip",
-                        "reason": "missing_first_sent_ts",
-                        "account": user,
-                        "thread_id": str(thread_id),
-                        "lead": recipient_username or str(recipient_id),
-                    }
-                )
                 continue
             hours_since_anchor = (now_ts - cycle_anchor_ts) / 3600.0
             required_hours = float(schedule[followups_sent])
             if hours_since_anchor < required_hours:
-                _append_message_log(
-                    {
-                        "action": "followup_skip",
-                        "reason": "schedule_not_reached",
-                        "account": user,
-                        "thread_id": str(thread_id),
-                        "lead": recipient_username or str(recipient_id),
-                        "hours_since_initial": round(hours_since_anchor, 2),
-                        "required_hours": required_hours,
-                    }
-                )
                 continue
 
         if last_followup_float:
@@ -6941,31 +6422,11 @@ def _process_followups_extended(
                 next_stage = followups_sent + 1
                 if next_stage > 1 and len(schedule) >= next_stage:
                     min_gap_hours = schedule[next_stage - 1] - schedule[next_stage - 2]
-            if min_gap_hours is None:
-                min_gap_known = _MIN_TIME_FOR_FOLLOWUP
-            else:
-                min_gap_known = max(1, int(min_gap_hours * 3600))
+            min_gap_known = _MIN_TIME_FOR_FOLLOWUP if min_gap_hours is None else max(1, int(min_gap_hours * 3600))
             if time_since_last_followup < min_gap_known:
-                _append_message_log(
-                    {
-                        "action": "followup_skip",
-                        "reason": "min_interval_not_met",
-                        "account": user,
-                        "thread_id": str(thread_id),
-                        "lead": recipient_username or str(recipient_id),
-                        "seconds_since_last_followup": int(time_since_last_followup),
-                    }
-                )
                 continue
 
-        conversation_lines: _List_for_state[str] = []
-        for msg in reversed(messages[:40]):
-            text_value = getattr(msg, "text", "") or ""
-            prefix = "YO" if _message_outbound_status(msg, client.user_id) is True else "ELLOS"
-            conversation_lines.append(f"{prefix}: {text_value}")
-        # Construimos el texto de la conversaci�n uniendo l�neas
-        conversation_text = "\n".join(conversation_lines[-40:])
-
+        conversation_text = _conversation_text_from_memory(messages[:40], getattr(client, "user_id", ""))
         metadata = {
             "alias": alias,
             "cuenta_origen": f"@{user}",
@@ -6975,44 +6436,15 @@ def _process_followups_extended(
             "etapa_negocio": business_stage,
             "intento_followup_siguiente": followups_sent + 1,
             "horas_objetivo": required_hours if required_hours is not None else "sin_regla",
-            "segundos_desde_ultimo_seguimiento": int(now_ts - last_followup_float)
-            if last_followup_float
-            else "nunca",
-            "segundos_desde_ultima_respuesta": int(now_ts - last_inbound_ts)
-            if last_inbound_ts
-            else "desconocido",
-            "segundos_desde_ultimo_mensaje_enviado": int(now_ts - last_outbound_ts)
-            if last_outbound_ts
-            else "desconocido",
+            "segundos_desde_ultimo_seguimiento": int(now_ts - last_followup_float) if last_followup_float else "nunca",
+            "segundos_desde_ultima_respuesta": int(now_ts - last_inbound_ts) if last_inbound_ts else "desconocido",
+            "segundos_desde_ultimo_mensaje_enviado": int(now_ts - last_outbound_ts) if last_outbound_ts else "desconocido",
         }
-
-        _append_message_log(
-            {
-                "action": "followup_eval",
-                "account": user,
-                "thread_id": str(thread_id),
-                "lead": recipient_username or str(recipient_id),
-                "seguimientos_previos": followups_sent,
-                "etapa_negocio": business_stage,
-                "intento_followup_siguiente": followups_sent + 1,
-                "horas_objetivo": required_hours if required_hours is not None else "sin_regla",
-            }
-        )
         decision = _followup_decision(api_key, prompt_text, conversation_text, metadata)
         conv_record["last_eval_ts"] = now_ts
         conv_record["cycle_last_eval_ts"] = now_ts
         updated_state = True
-
         if not decision:
-            _append_message_log(
-                {
-                    "action": "followup_skip",
-                    "reason": "no_decision",
-                    "account": user,
-                    "thread_id": str(thread_id),
-                    "lead": recipient_username or str(recipient_id),
-                }
-            )
             convs[conv_key] = conv_record
             record = history.get(conv_key, {})
             record["last_eval_ts"] = now_ts
@@ -7022,46 +6454,21 @@ def _process_followups_extended(
             updated_history = True
             continue
 
-        message_text, stage_requested = decision
+        message_text, _stage_requested = decision
         stage_int = followups_sent + 1
-        try:
-            requested_int = int(stage_requested)
-        except Exception:
-            requested_int = stage_int
-        if requested_int != stage_int:
-            logger.info(
-                "followup_stage_override account=@%s thread=%s etapa_negocio=%s requested=%s expected=%s",
-                user,
-                thread_id,
-                business_stage,
-                requested_int,
-                stage_int,
-            )
-
-        logger.info(
-            "Decision seguimiento @%s thread=%s stage=%s etapa_negocio=%s reason=%s",
-            user,
-            thread_id,
-            stage_int,
-            business_stage,
-            "ok",
-        )
         if stats is not None:
             stats.record_followup_attempt(user)
-
         if fu_sent > 0:
             _sleep_between_replies_sync(delay_min, delay_max, label="reply_delay")
 
+        thread = _thread_from_memory_state(client, row)
+        if thread is None:
+            continue
         try:
+            if not client._open_thread(thread):
+                continue
             message_id = client.send_message(thread, message_text)
         except Exception as exc:
-            logger.warning(
-                "No se pudo enviar seguimiento automatico a %s desde @%s: %s",
-                recipient_username or recipient_id,
-                user,
-                exc,
-                exc_info=False,
-            )
             conv_record["last_error"] = str(exc)
             convs[conv_key] = conv_record
             updated_state = True
@@ -7073,22 +6480,25 @@ def _process_followups_extended(
             updated_history = True
             continue
         if not message_id:
-            logger.warning(
-                "Seguimiento no verificado para @%s -> @%s (thread %s)",
-                user,
-                recipient_username or recipient_id,
-                thread_id,
-            )
             continue
 
+        _record_message_sent(
+            user,
+            thread_id,
+            message_text,
+            str(message_id),
+            recipient_username,
+            is_followup=True,
+            followup_stage=stage_int,
+        )
         _append_message_log(
             {
                 "action": "followup_sent",
                 "account": user,
-                "thread_id": str(thread_id),
+                "thread_id": thread_id,
                 "lead": recipient_username or str(recipient_id),
                 "followup_stage": stage_int,
-                "message_id": message_id or "",
+                "message_id": str(message_id),
                 "message_text": message_text,
             }
         )
@@ -7107,7 +6517,7 @@ def _process_followups_extended(
         record = history.get(conv_key, {})
         record["count"] = stage_int
         record["last_sent_ts"] = now_ts
-        record["last_message_id"] = message_id or ""
+        record["last_message_id"] = str(message_id)
         record["etapa_negocio"] = business_stage
         record["cycle_anchor_ts"] = cycle_anchor_ts
         record["cycle_followup_count"] = stage_int
@@ -7116,23 +6526,17 @@ def _process_followups_extended(
         updated_history = True
         if stats is not None:
             stats.record_followup_success(user)
+        print(style_text(f"Seguimiento | @{user} -> {_format_handle(recipient_username)} | etapa {stage_int}", color=Fore.MAGENTA))
 
-        try:
-            print(
-                style_text(
-                    f"Seguimiento | @{user} -> {_format_handle(recipient_username)} | etapa {stage_int}",
-                    color=Fore.MAGENTA,
-                )
-            )
-        except Exception:
-            print(f"Seguimiento | @{user} -> {_format_handle(recipient_username)} | etapa {stage_int}")
-
-    # Guardamos cambios al terminar
     if updated_state:
         _save_conversation_state(conv_state)
     if updated_history:
         _set_followup_entry(alias, {"history": history})
 
-# Sustituimos la implementaci�n original por la extendida
+
+# Sustituimos la implementación original por la extendida
 _process_followups = _process_followups_extended
+
+
+
 

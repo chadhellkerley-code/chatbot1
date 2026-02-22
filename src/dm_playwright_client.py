@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, List, Optional
+from urllib.parse import urlencode
 
 from ui import Fore, style_text
 
@@ -428,6 +429,162 @@ class PlaywrightDMClient:
     def ensure_ready(self) -> None:
         self._ensure_page()
         self._open_inbox()
+
+    def fetch_inbox_threads_page(
+        self,
+        *,
+        cursor: str = "",
+        limit: int = 20,
+        message_limit: int = 20,
+    ) -> dict[str, Any]:
+        page = self._ensure_page()
+        self._open_inbox()
+        self._register_response_listener()
+
+        safe_limit = max(1, min(200, int(limit or 20)))
+        safe_message_limit = max(1, min(80, int(message_limit or 20)))
+        urls = _build_inbox_endpoint_candidates(
+            cursor=str(cursor or "").strip(),
+            limit=safe_limit,
+            message_limit=safe_message_limit,
+        )
+        if not urls:
+            raise RuntimeError("No hay endpoints disponibles para discovery del inbox.")
+
+        fetch_result = page.evaluate(
+            """async ({ urls }) => {
+                const responseSummary = {
+                    ok: false,
+                    status: 0,
+                    url: "",
+                    error: "",
+                    payload: null,
+                };
+                const cookieText = String(document.cookie || "");
+                const csrfMatch = cookieText.match(/(?:^|;\\s*)csrftoken=([^;]+)/i);
+                const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1] || "") : "";
+                const headers = {
+                    "accept": "application/json, text/plain, */*",
+                    "x-requested-with": "XMLHttpRequest",
+                    "x-ig-app-id": "936619743392459",
+                };
+                if (csrfToken) {
+                    headers["x-csrftoken"] = csrfToken;
+                }
+                for (const endpoint of (Array.isArray(urls) ? urls : [])) {
+                    try {
+                        const res = await fetch(endpoint, {
+                            method: "GET",
+                            credentials: "include",
+                            headers,
+                        });
+                        const status = Number(res.status || 0);
+                        const bodyText = await res.text();
+                        let parsed = null;
+                        try {
+                            parsed = JSON.parse(bodyText);
+                        } catch (_) {
+                            parsed = null;
+                        }
+                        if (parsed && typeof parsed === "object") {
+                            const hasThreads =
+                                Array.isArray(parsed?.inbox?.threads)
+                                || Array.isArray(parsed?.threads)
+                                || Array.isArray(parsed?.data?.inbox?.threads)
+                                || String(bodyText || "").indexOf("thread_id") >= 0;
+                            if (res.ok || hasThreads) {
+                                return {
+                                    ok: true,
+                                    status,
+                                    url: String(endpoint || ""),
+                                    error: "",
+                                    payload: parsed,
+                                };
+                            }
+                        }
+                        if (!responseSummary.error) {
+                            responseSummary.error = `status=${status}`;
+                        }
+                        responseSummary.status = status;
+                        responseSummary.url = String(endpoint || "");
+                    } catch (err) {
+                        responseSummary.error = String(err || "fetch_error");
+                        responseSummary.url = String(endpoint || "");
+                    }
+                }
+                return responseSummary;
+            }""",
+            {"urls": urls},
+        )
+        if not isinstance(fetch_result, dict):
+            raise RuntimeError("Respuesta invalida del endpoint de inbox (tipo inesperado).")
+        if not bool(fetch_result.get("ok")):
+            raise RuntimeError(
+                f"Endpoint inbox sin respuesta valida para @{self.username}: "
+                f"{fetch_result.get('error') or 'unknown_error'}"
+            )
+
+        payload = fetch_result.get("payload")
+        source_url = str(fetch_result.get("url") or "")
+        status_code = int(fetch_result.get("status") or 0)
+        if not isinstance(payload, (dict, list)):
+            raise RuntimeError(
+                f"Payload de inbox invalido para @{self.username} (status={status_code}, url={source_url})."
+            )
+
+        try:
+            self._ingest_api_payload(payload, source_url=source_url)
+        except Exception:
+            pass
+
+        snapshots = _extract_inbox_threads_from_payload(
+            payload,
+            self_user_id=str(self.user_id or ""),
+            self_username=self.username,
+            message_limit=safe_message_limit,
+        )
+        for snapshot in snapshots:
+            thread_id = str(snapshot.get("thread_id") or "").strip()
+            if not thread_id:
+                continue
+            recipient_username = str(snapshot.get("recipient_username") or "").strip()
+            recipient_id = str(snapshot.get("recipient_id") or "").strip() or recipient_username or thread_id
+            title = str(snapshot.get("title") or "").strip() or recipient_username or "unknown"
+            snippet = str(snapshot.get("snippet") or "").strip()
+            unread_count = snapshot.get("unread_count", 0)
+            try:
+                unread_int = max(0, int(unread_count))
+            except Exception:
+                unread_int = 0
+            link = THREAD_URL_TEMPLATE.format(thread_id=thread_id)
+            thread = ThreadLike(
+                id=thread_id,
+                pk=thread_id,
+                users=[UserLike(pk=recipient_id, id=recipient_id, username=recipient_username or recipient_id)],
+                unread_count=unread_int,
+                link=link,
+                title=title,
+                snippet=snippet,
+                source_index=-1,
+            )
+            self._thread_cache[thread_id] = thread
+            self._thread_cache_meta[thread_id] = {
+                "title": title,
+                "snippet": snippet,
+                "link": link,
+                "idx": -1,
+                "selector": "endpoint_api",
+                "key_source": "endpoint_api",
+            }
+
+        next_cursor, has_more = _extract_inbox_cursor(payload)
+        return {
+            "threads": snapshots,
+            "cursor": next_cursor,
+            "has_more": bool(has_more),
+            "source_url": source_url,
+            "status": status_code,
+        }
 
     def list_threads(self, amount: int = 20, filter_unread: bool = False) -> List[ThreadLike]:
         for _attempt in range(3):
@@ -3212,6 +3369,314 @@ def _is_message_api_url(url: str) -> bool:
     if "/graphql/query" in lowered:
         return True
     return any(hint in lowered for hint in _DM_RESPONSE_URL_HINTS if hint not in {"/api/graphql/", "/api/graphql"})
+
+
+def _build_inbox_endpoint_candidates(
+    *,
+    cursor: str,
+    limit: int,
+    message_limit: int,
+) -> list[str]:
+    safe_limit = max(1, min(200, int(limit or 20)))
+    safe_message_limit = max(1, min(80, int(message_limit or 20)))
+    cursor_value = str(cursor or "").strip()
+
+    variants: list[dict[str, str]] = [
+        {
+            "limit": str(safe_limit),
+            "thread_message_limit": str(safe_message_limit),
+        },
+        {
+            "limit": str(safe_limit),
+            "thread_message_limit": str(safe_message_limit),
+            "persistentBadging": "true",
+            "visual_message_return_type": "unseen",
+        },
+        {
+            "limit": str(safe_limit),
+            "thread_message_limit": str(safe_message_limit),
+            "folder": "",
+        },
+    ]
+    if cursor_value:
+        for params in variants:
+            params["cursor"] = cursor_value
+
+    endpoints: list[str] = []
+    endpoint_bases = (
+        "/api/v1/direct_v2/inbox/",
+        "/api/v1/direct_v2/inbox",
+        "/api/v1/direct_v2/threads/",
+    )
+    for params in variants:
+        query = urlencode(params, doseq=True)
+        for base in endpoint_bases:
+            url = f"{base}?{query}" if query else base
+            if url not in endpoints:
+                endpoints.append(url)
+    return endpoints
+
+
+def _extract_inbox_cursor(payload: Any) -> tuple[str, bool]:
+    cursor_value = ""
+    has_more_value: Optional[bool] = None
+    stack: list[Any] = [payload]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, list):
+            for item in current:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+            continue
+        if not isinstance(current, dict):
+            continue
+
+        for key in ("oldest_cursor", "next_cursor", "end_cursor", "cursor", "max_id"):
+            if key not in current:
+                continue
+            value = _coerce_str(current.get(key))
+            if value:
+                cursor_value = value
+                break
+
+        for key in (
+            "has_older",
+            "has_older_threads",
+            "has_next_page",
+            "has_next",
+            "has_more",
+            "more_available",
+        ):
+            if key not in current:
+                continue
+            raw = current.get(key)
+            if isinstance(raw, bool):
+                has_more_value = raw if has_more_value is None else (has_more_value or raw)
+            else:
+                lowered = _coerce_str(raw).lower()
+                if lowered in {"1", "true", "yes", "si", "on"}:
+                    has_more_value = True if has_more_value is None else has_more_value or True
+                elif lowered in {"0", "false", "no", "off"} and has_more_value is None:
+                    has_more_value = False
+
+        for value in current.values():
+            if isinstance(value, (dict, list)):
+                stack.append(value)
+
+    if has_more_value is None:
+        has_more_value = bool(cursor_value)
+    return cursor_value, bool(has_more_value)
+
+
+def _extract_inbox_threads_from_payload(
+    payload: Any,
+    *,
+    self_user_id: str,
+    self_username: str,
+    message_limit: int = 20,
+) -> list[dict[str, Any]]:
+    safe_message_limit = max(1, min(80, int(message_limit or 20)))
+
+    parsed_messages, _missing = _extract_api_messages_from_payload(
+        payload,
+        self_user_id=self_user_id,
+    )
+    messages_by_thread: dict[str, list[dict[str, Any]]] = {}
+    for item in parsed_messages:
+        thread_id = str(item.thread_id or "").strip()
+        if not thread_id:
+            continue
+        bucket = messages_by_thread.setdefault(thread_id, [])
+        bucket.append(
+            {
+                "message_id": str(item.item_id or "").strip(),
+                "sender_id": str(item.sender_id or "").strip(),
+                "direction": "outbound" if str(item.direction or "").strip().lower() == "outbound" else "inbound",
+                "text": str(item.text or ""),
+                "timestamp_epoch": float(item.timestamp) if item.timestamp else None,
+            }
+        )
+    for bucket in messages_by_thread.values():
+        bucket.sort(
+            key=lambda msg: (
+                float(msg.get("timestamp_epoch") or 0.0),
+                str(msg.get("message_id") or ""),
+            ),
+            reverse=True,
+        )
+
+    thread_nodes: dict[str, dict[str, Any]] = {}
+    thread_scores: dict[str, int] = {}
+    for node, _context_thread_id in _iter_payload_nodes(payload):
+        thread_id = _extract_thread_id_from_node(node)
+        if not thread_id:
+            continue
+        score = 0
+        for key in (
+            "users",
+            "participants",
+            "items",
+            "thread_title",
+            "title",
+            "thread_name",
+            "snippet",
+            "unread_count",
+            "viewer_unseen_count",
+            "last_activity_at",
+            "last_activity_at_ms",
+            "last_permanent_item",
+        ):
+            if key in node:
+                score += 1
+        if score <= 0 and thread_id not in messages_by_thread:
+            continue
+        previous_score = thread_scores.get(thread_id, -1)
+        if score >= previous_score:
+            thread_scores[thread_id] = score
+            thread_nodes[thread_id] = node
+
+    self_id_value = str(self_user_id or "").strip()
+    self_username_norm = str(self_username or "").strip().lower()
+
+    snapshots: list[dict[str, Any]] = []
+    seen_snapshot_ids: set[str] = set()
+    thread_ids = set(thread_nodes.keys()) | set(messages_by_thread.keys())
+    for thread_id in thread_ids:
+        if not thread_id or thread_id in seen_snapshot_ids:
+            continue
+        seen_snapshot_ids.add(thread_id)
+        node = thread_nodes.get(thread_id, {})
+
+        participants_raw = node.get("users")
+        if not isinstance(participants_raw, list):
+            participants_raw = node.get("participants")
+        participants: list[dict[str, str]] = []
+        if isinstance(participants_raw, list):
+            for participant in participants_raw:
+                if not isinstance(participant, dict):
+                    continue
+                participant_id = _coerce_str(
+                    participant.get("pk")
+                    or participant.get("id")
+                    or participant.get("user_id")
+                    or participant.get("interop_messaging_user_fbid")
+                )
+                participant_username = _coerce_str(
+                    participant.get("username")
+                    or participant.get("full_name")
+                    or participant.get("name")
+                    or participant_id
+                )
+                if not participant_id and participant_username:
+                    participant_id = participant_username
+                if not participant_username and participant_id:
+                    participant_username = participant_id
+                if participant_id or participant_username:
+                    participants.append(
+                        {
+                            "id": participant_id,
+                            "username": participant_username,
+                        }
+                    )
+
+        recipient_id = ""
+        recipient_username = ""
+        for participant in participants:
+            participant_id = _coerce_str(participant.get("id"))
+            participant_username = _coerce_str(participant.get("username"))
+            participant_username_norm = participant_username.lower()
+            if participant_id and self_id_value and participant_id == self_id_value:
+                continue
+            if participant_username_norm and self_username_norm and participant_username_norm == self_username_norm:
+                continue
+            recipient_id = participant_id or participant_username
+            recipient_username = participant_username or participant_id
+            if recipient_id or recipient_username:
+                break
+
+        title = _coerce_str(
+            node.get("thread_title")
+            or node.get("title")
+            or node.get("thread_name")
+            or node.get("thread_label")
+        )
+        if not recipient_username:
+            recipient_username = title
+        if not recipient_id:
+            recipient_id = recipient_username
+        if not title:
+            title = recipient_username or thread_id
+
+        unread_int = 0
+        for key in ("unread_count", "viewer_unseen_count", "pending_count", "unseen_count"):
+            if key not in node:
+                continue
+            value = node.get(key)
+            try:
+                unread_int = max(unread_int, int(value))
+            except Exception:
+                continue
+
+        snippet = _coerce_str(
+            node.get("snippet")
+            or node.get("thread_preview")
+            or node.get("thread_snippet")
+            or node.get("preview")
+        )
+        if not snippet:
+            last_item = node.get("last_permanent_item")
+            if isinstance(last_item, dict):
+                snippet = _extract_message_text_from_api_node(last_item)
+
+        messages = list(messages_by_thread.get(thread_id, []))
+        if not snippet and messages:
+            snippet = _coerce_str(messages[0].get("text"))
+
+        activity_ts_values: list[float] = []
+        for key in (
+            "last_activity_at_ms",
+            "last_activity_at",
+            "last_activity_timestamp",
+            "updated_at",
+            "latest_activity",
+        ):
+            value = node.get(key)
+            if isinstance(value, dict):
+                for nested in value.values():
+                    ts_value = _coerce_timestamp_seconds(nested)
+                    if ts_value is not None:
+                        activity_ts_values.append(ts_value)
+            else:
+                ts_value = _coerce_timestamp_seconds(value)
+                if ts_value is not None:
+                    activity_ts_values.append(ts_value)
+        for msg in messages[:safe_message_limit]:
+            ts_value = _coerce_timestamp_seconds(msg.get("timestamp_epoch"))
+            if ts_value is not None:
+                activity_ts_values.append(ts_value)
+        last_activity_ts = max(activity_ts_values) if activity_ts_values else None
+
+        snapshots.append(
+            {
+                "thread_id": thread_id,
+                "recipient_id": recipient_id or recipient_username or thread_id,
+                "recipient_username": recipient_username or title or "unknown",
+                "title": title or recipient_username or "unknown",
+                "snippet": snippet or "",
+                "unread_count": unread_int,
+                "last_activity_at": last_activity_ts,
+                "messages": messages[:safe_message_limit],
+            }
+        )
+
+    snapshots.sort(
+        key=lambda snap: (
+            float(snap.get("last_activity_at") or 0.0),
+            str(snap.get("thread_id") or ""),
+        ),
+        reverse=True,
+    )
+    return snapshots
 
 
 def _extract_api_messages_from_payload(
