@@ -112,8 +112,6 @@ MAX_SYSTEM_PROMPT_CHARS = 50000
 _AUTORESPONDER_STUB_WARNED = False
 _OPENAI_REPLY_FALLBACK = "Gracias por tu mensaje. Como te puedo ayudar?"
 _OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
-_OPENROUTER_DEFAULT_MODEL = "openai/gpt-oss-120b:free"
-_OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -144,15 +142,7 @@ def _resolve_ai_api_key(env_values: Optional[Dict[str, str]] = None) -> str:
         or os.getenv("OPENAI_API_KEY")
         or ""
     )
-    openai_key = str(openai_key).strip()
-    if openai_key:
-        return openai_key
-    return _read_env_value(values, "OPENROUTER_API_KEY")
-
-
-def _is_openrouter_key(api_key: str) -> bool:
-    key = (api_key or "").strip().lower()
-    return key.startswith("sk-or-") or key.startswith("or-v1-")
+    return str(openai_key).strip()
 
 
 def _resolve_ai_base_url(
@@ -161,21 +151,7 @@ def _resolve_ai_base_url(
     env_values: Optional[Dict[str, str]] = None,
 ) -> str:
     values = env_values or read_env_local()
-    explicit_base = _read_env_value(values, "OPENAI_BASE_URL")
-    if explicit_base:
-        return explicit_base
-
-    openrouter_key = _read_env_value(values, "OPENROUTER_API_KEY")
-    is_openrouter = _is_openrouter_key(api_key) or (
-        bool(openrouter_key) and openrouter_key == api_key
-    )
-    if not is_openrouter:
-        return ""
-    return _read_env_value(
-        values,
-        "OPENROUTER_BASE_URL",
-        default=_OPENROUTER_DEFAULT_BASE_URL,
-    )
+    return _read_env_value(values, "OPENAI_BASE_URL")
 
 
 def _resolve_ai_model(
@@ -187,23 +163,13 @@ def _resolve_ai_model(
     explicit_model = _read_env_value(values, "OPENAI_MODEL")
     if explicit_model:
         return explicit_model
-
-    openrouter_model = _read_env_value(values, "OPENROUTER_MODEL")
-    openrouter_key = _read_env_value(values, "OPENROUTER_API_KEY")
-    is_openrouter = _is_openrouter_key(api_key) or (
-        bool(openrouter_key) and openrouter_key == api_key
-    )
-    if is_openrouter:
-        return openrouter_model or _OPENROUTER_DEFAULT_MODEL
     return _OPENAI_DEFAULT_MODEL
 
 
 def _resolve_ai_runtime(api_key: str) -> tuple[str, str]:
     values = read_env_local()
     model = _resolve_ai_model(api_key, env_values=values)
-    base_url = _resolve_ai_base_url(api_key, env_values=values)
-    provider = "OpenRouter" if base_url and "openrouter.ai" in base_url.lower() else "OpenAI"
-    return provider, model
+    return "OpenAI", model
 
 
 def _build_openai_client(api_key: str) -> object:
@@ -214,17 +180,30 @@ def _build_openai_client(api_key: str) -> object:
     kwargs: Dict[str, object] = {"api_key": api_key}
     if base_url:
         kwargs["base_url"] = base_url
-        if "openrouter.ai" in base_url.lower():
-            default_headers: Dict[str, str] = {}
-            referer = _read_env_value(values, "OPENROUTER_HTTP_REFERER")
-            title = _read_env_value(values, "OPENROUTER_X_TITLE")
-            if referer:
-                default_headers["HTTP-Referer"] = referer
-            if title:
-                default_headers["X-Title"] = title
-            if default_headers:
-                kwargs["default_headers"] = default_headers
     return OpenAI(**kwargs)
+
+
+def _probe_ai_runtime(api_key: str) -> tuple[bool, str]:
+    try:
+        client = _build_openai_client(api_key)
+        model = _resolve_ai_model(api_key)
+        _openai_generate_text(
+            client,
+            system_prompt="Responde solo: ok",
+            user_content="hola",
+            model=model,
+            temperature=0.0,
+            max_output_tokens=12,
+        )
+        return True, "ok"
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status in {401, 403}:
+            return False, (
+                "No se pudo autenticar con IA (401/403). "
+                "Revisá OPENAI_API_KEY y OPENAI_MODEL configurados."
+            )
+        return False, f"No se pudo validar IA antes de iniciar: {exc}"
 
 
 def _extract_openai_text(response: object) -> str:
@@ -1076,6 +1055,8 @@ def _can_send_message(
     
     messages_sent = state.get("messages_sent", [])
     message_normalized = message_text.strip().lower()
+    if not message_normalized:
+        return False, "Respuesta vacia/no generada por IA"
     
     for sent_msg in messages_sent:
         if sent_msg.get("text", "").strip().lower() == message_normalized:
@@ -2489,6 +2470,28 @@ def _gen_response(
     *,
     memory_context: str = "",
 ) -> str:
+    def _is_openai_auth_error(exc: Exception) -> bool:
+        status_raw = getattr(exc, "status_code", None)
+        try:
+            status_code = int(status_raw)
+        except Exception:
+            status_code = 0
+        if status_code in {401, 403}:
+            return True
+        if status_code == 404:
+            text_404 = _normalize_text_for_match(str(exc))
+            return "model" in text_404 and "not found" in text_404
+        text = _normalize_text_for_match(str(exc))
+        auth_tokens = (
+            "user not found",
+            "invalid api key",
+            "incorrect api key",
+            "authentication",
+            "unauthorized",
+            "forbidden",
+        )
+        return any(token in text for token in auth_tokens)
+
     try:
         client = _build_openai_client(api_key)
         model = _resolve_ai_model(api_key)
@@ -2531,11 +2534,16 @@ def _gen_response(
             repaired = _sanitize_generated_message(previous_raw_output)
             if repaired and not _generated_message_issues(repaired):
                 return repaired
-        return _OPENAI_REPLY_FALLBACK
+        logger.warning("Salida IA invalida para respuesta; se omite envio para evitar mensaje fuera de prompt.")
+        return ""
     except Exception as e:  # pragma: no cover - depende de red externa
+        status_code = getattr(e, "status_code", None)
         logger.warning("Fallo al generar respuesta con OpenAI: %s", e, exc_info=False)
-        warn(f"[OPENAI FALLBACK] error={e} status={getattr(e, 'status_code', None)}")
-        return _OPENAI_REPLY_FALLBACK
+        if _is_openai_auth_error(e):
+            warn(f"[OPENAI ERROR] auth/config error={e} status={status_code}; se omite envio.")
+        else:
+            warn(f"[OPENAI ERROR] error={e} status={status_code}; se omite envio.")
+        return ""
 
 
 def _choose_targets(alias: str) -> list[str]:
@@ -4597,7 +4605,6 @@ def _configure_api_key() -> None:
     print(f"Actual: {(_mask_key(current_key) or '(sin definir)')}")
     print(f"Proveedor detectado: {current_provider}")
     print(f"Modelo actual: {current_model}")
-    print("Tip: para usar OpenRouter como principal, deja OPENAI_API_KEY vacia y define OPENROUTER_API_KEY.")
     print()
     new_key = ask("Nueva API Key (vaca�o para cancelar): ").strip()
     if not new_key:
@@ -6045,7 +6052,12 @@ def _activate_bot() -> None:
     global ACTIVE_ALIAS
     api_key, _ = _load_preferences()
     if not api_key:
-        warn("Configura OPENAI_API_KEY o OPENROUTER_API_KEY antes de activar el bot.")
+        warn("Configura OPENAI_API_KEY antes de activar el bot.")
+        press_enter()
+        return
+    runtime_ok, runtime_reason = _probe_ai_runtime(api_key)
+    if not runtime_ok:
+        warn(runtime_reason)
         press_enter()
         return
 

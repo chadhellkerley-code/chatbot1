@@ -140,29 +140,29 @@
     },
     "tester|fu-1": {
       "seguimiento_actual": 1,
-      "last_sent_ts": 1771773419.1431599,
-      "last_eval_ts": 1771773419.1431599,
-      "cycle_anchor_ts": 1771758899.1431599,
+      "last_sent_ts": 1771784943.888605,
+      "last_eval_ts": 1771784943.888605,
+      "cycle_anchor_ts": 1771770423.888605,
       "cycle_followup_count": 1,
-      "cycle_last_sent_ts": 1771773419.1431599,
-      "cycle_last_eval_ts": 1771773419.1431599,
+      "cycle_last_sent_ts": 1771784943.888605,
+      "cycle_last_eval_ts": 1771784943.888605,
       "etapa_negocio_actual": 0,
-      "ultimo_contacto_ts": 1771773419.1431599,
+      "ultimo_contacto_ts": 1771784943.888605,
       "cerrado": false,
-      "ultima_actualizacion_ts": 1771773419.1431599
+      "ultima_actualizacion_ts": 1771784943.888605
     },
     "tester|fu-2": {
       "seguimiento_actual": 1,
-      "last_sent_ts": 1771773419.1431599,
-      "last_eval_ts": 1771773419.1431599,
-      "cycle_anchor_ts": 1771758899.232108,
+      "last_sent_ts": 1771784943.888605,
+      "last_eval_ts": 1771784943.888605,
+      "cycle_anchor_ts": 1771770424.0133662,
       "cycle_followup_count": 1,
-      "cycle_last_sent_ts": 1771773419.1431599,
-      "cycle_last_eval_ts": 1771773419.1431599,
+      "cycle_last_sent_ts": 1771784943.888605,
+      "cycle_last_eval_ts": 1771784943.888605,
       "etapa_negocio_actual": 0,
-      "ultimo_contacto_ts": 1771773419.1431599,
+      "ultimo_contacto_ts": 1771784943.888605,
       "cerrado": false,
-      "ultima_actualizacion_ts": 1771773419.1431599
+      "ultima_actualizacion_ts": 1771784943.888605
     },
     "matiid.life1|104789137583521": {
       "seguimiento_actual": 0,
@@ -321,17 +321,17 @@
       "ultima_actualizacion_ts": 1771627701.9807715
     },
     "matiid.life1|340282366841710301244260099563639356300": {
-      "seguimiento_actual": 0,
-      "last_sent_ts": 0.0,
-      "last_eval_ts": 1771627701.9807715,
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1771787004.9270394,
+      "last_eval_ts": 1771787004.9270394,
       "cycle_anchor_ts": 1771422928.164,
-      "cycle_followup_count": 0,
-      "cycle_last_sent_ts": 0.0,
-      "cycle_last_eval_ts": 1771627701.9807715,
+      "cycle_followup_count": 1,
+      "cycle_last_sent_ts": 1771787004.9270394,
+      "cycle_last_eval_ts": 1771787004.9270394,
       "etapa_negocio_actual": 0,
-      "ultimo_contacto_ts": 0.0,
+      "ultimo_contacto_ts": 1771787004.9270394,
       "cerrado": false,
-      "ultima_actualizacion_ts": 1771627701.9807715
+      "ultima_actualizacion_ts": 1771787004.9270394
     },
     "matiid.life1|340282366841710301244259994396813204058": {
       "seguimiento_actual": 0,
@@ -347,30 +347,30 @@
       "ultima_actualizacion_ts": 1771627701.9807715
     },
     "matiid.life1|340282366841710301244260126251200025598": {
-      "seguimiento_actual": 0,
-      "last_sent_ts": 0.0,
-      "last_eval_ts": 1771627701.9807715,
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1771787004.9270394,
+      "last_eval_ts": 1771787004.9270394,
       "cycle_anchor_ts": 1771417624.28,
-      "cycle_followup_count": 0,
-      "cycle_last_sent_ts": 0.0,
-      "cycle_last_eval_ts": 1771627701.9807715,
+      "cycle_followup_count": 1,
+      "cycle_last_sent_ts": 1771787004.9270394,
+      "cycle_last_eval_ts": 1771787004.9270394,
       "etapa_negocio_actual": 0,
-      "ultimo_contacto_ts": 0.0,
+      "ultimo_contacto_ts": 1771787004.9270394,
       "cerrado": false,
-      "ultima_actualizacion_ts": 1771627701.9807715
+      "ultima_actualizacion_ts": 1771787004.9270394
     },
     "matiid.life1|340282366841710301244276135741226133547": {
-      "seguimiento_actual": 0,
-      "last_sent_ts": 0.0,
-      "last_eval_ts": 1771627701.9807715,
+      "seguimiento_actual": 1,
+      "last_sent_ts": 1771787004.9270394,
+      "last_eval_ts": 1771787004.9270394,
       "cycle_anchor_ts": 1771201038.982,
-      "cycle_followup_count": 0,
-      "cycle_last_sent_ts": 0.0,
-      "cycle_last_eval_ts": 1771627701.9807715,
+      "cycle_followup_count": 1,
+      "cycle_last_sent_ts": 1771787004.9270394,
+      "cycle_last_eval_ts": 1771787004.9270394,
       "etapa_negocio_actual": 0,
-      "ultimo_contacto_ts": 0.0,
+      "ultimo_contacto_ts": 1771787004.9270394,
       "cerrado": false,
-      "ultima_actualizacion_ts": 1771627701.9807715
+      "ultima_actualizacion_ts": 1771787004.9270394
     }
   }
 }

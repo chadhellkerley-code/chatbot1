@@ -7144,3 +7144,63 @@ Call log:
 2026-02-22T16:47:26Z login_start username=maatmdlife1 headless=True
 2026-02-22T16:47:30Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=13084
 2026-02-22T16:47:42Z session_check_ok reason=auth_cookies
+2026-02-22T16:49:55Z login_start username=maatmdlife1 headless=True
+2026-02-22T16:49:59Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=12922
+2026-02-22T16:50:08Z session_check_ok reason=auth_cookies
+2026-02-22T16:53:09Z login_start username=maatmdlife1 headless=True
+2026-02-22T16:53:10Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=31269
+2026-02-22T16:53:16Z session_check_ok reason=auth_cookies
+2026-02-22T16:55:58Z login_start username=matiiddlife headless=True
+2026-02-22T16:55:59Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiiddlife\storage_state.json size=15701
+2026-02-22T16:56:05Z session_check_ok reason=auth_cookies
+2026-02-22T16:57:32Z session_check_start username=matidiazlife headless=True
+2026-02-22T16:57:41Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-22T16:59:22Z login_start username=matiiddlife headless=True
+2026-02-22T16:59:28Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiiddlife\storage_state.json size=57890
+2026-02-22T16:59:41Z session_check_ok reason=auth_cookies
+2026-02-22T17:03:14Z login_start username=matiiddlife headless=True
+2026-02-22T17:03:16Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiiddlife\storage_state.json size=15542
+2026-02-22T17:03:27Z session_check_ok reason=auth_cookies
+2026-02-22T17:06:41Z login_start username=matiiddlife headless=True
+2026-02-22T17:06:43Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiiddlife\storage_state.json size=42256
+2026-02-22T17:06:58Z session_check_ok reason=auth_cookies
+2026-02-22T17:10:48Z login_start username=matiiddlife headless=True
+2026-02-22T17:10:50Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiiddlife\storage_state.json size=42256
+2026-02-22T17:11:04Z session_check_ok reason=auth_cookies
+2026-02-22T17:15:14Z login_start username=matiimdl headless=True
+2026-02-22T17:15:16Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiimdl\storage_state.json size=11921
+2026-02-22T17:15:24Z session_check_ok reason=auth_cookies
+2026-02-22T17:17:14Z login_start username=matiimdl headless=True
+2026-02-22T17:17:17Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiimdl\storage_state.json size=11798
+2026-02-22T17:17:26Z session_check_ok reason=auth_cookies
+2026-02-22T17:20:22Z login_start username=matiimdl headless=True
+2026-02-22T17:20:25Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiimdl\storage_state.json size=30753
+2026-02-22T17:20:34Z session_check_ok reason=auth_cookies
+2026-02-22T17:23:17Z login_start username=matiimdl headless=True
+2026-02-22T17:23:20Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiimdl\storage_state.json size=34914
+2026-02-22T17:23:34Z session_check_ok reason=auth_cookies
+2026-02-22T17:27:57Z login_start username=matiimdl headless=True
+2026-02-22T17:28:00Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matiimdl\storage_state.json size=34914
+2026-02-22T17:28:14Z session_check_ok reason=auth_cookies
+2026-02-22T17:32:30Z login_start username=mattmddlife1 headless=True
+2026-02-22T17:32:32Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mattmddlife1\storage_state.json size=57793
+2026-02-22T17:32:47Z session_check_ok reason=auth_cookies
+2026-02-22T17:35:47Z login_start username=mattmddlife1 headless=True
+2026-02-22T17:36:01Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mattmddlife1\storage_state.json size=57793
+2026-02-22T17:36:40Z session_check_ok reason=auth_cookies
+2026-02-22T17:39:32Z login_start username=mattmddlife1 headless=True
+2026-02-22T17:39:38Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mattmddlife1\storage_state.json size=57793
+2026-02-22T17:39:59Z session_check_ok reason=auth_cookies
+2026-02-22T18:26:09Z login_start username=mattmdlife1 headless=True
+2026-02-22T18:26:13Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mattmdlife1\storage_state.json size=21802
+2026-02-22T18:26:40Z session_check_ok reason=auth_cookies
+2026-02-22T18:29:35Z login_start username=mattmdlife1 headless=True
+2026-02-22T18:29:39Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mattmdlife1\storage_state.json size=21802
+2026-02-22T18:30:05Z session_check_ok reason=auth_cookies
+2026-02-22T18:34:31Z login_start username=mattmdlife1 headless=True
+2026-02-22T18:34:39Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mattmdlife1\storage_state.json size=21802
+2026-02-22T18:35:13Z session_check_ok reason=auth_cookies
+2026-02-22T18:38:18Z session_check_start username=matiid.life1 headless=True
+2026-02-22T18:39:44Z session_check_ok reason=auth_cookies url=chrome-error://chromewebdata/
+2026-02-22T18:59:50Z session_check_start username=matiid.life1 headless=True
+2026-02-22T19:00:17Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/

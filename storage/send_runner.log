@@ -1835,3 +1835,22 @@
 2026-02-22T16:43:34Z event=message account=maatmdlife1 lead=nahuel.emiliano2002 status=sent reason=Enviado en modo humano
 2026-02-22T16:45:27Z event=message account=maatmdlife1 lead=zahirmassuh status=sent reason=Enviado en modo humano
 2026-02-22T16:48:33Z event=message account=maatmdlife1 lead=marcossvillavicencio status=sent reason=Enviado en modo humano
+2026-02-22T16:50:49Z event=message account=maatmdlife1 lead=pauduenaspou status=sent reason=Enviado en modo humano
+2026-02-22T16:53:49Z event=message account=maatmdlife1 lead=celesterrosas status=sent reason=Enviado en modo humano
+2026-02-22T16:56:35Z event=message account=matiiddlife lead=ronanbuscemi status=sent reason=Enviado en modo humano
+2026-02-22T17:00:57Z event=message account=matiiddlife lead=1saizuleta status=sent reason=Enviado en modo humano
+2026-02-22T17:04:04Z event=message account=matiiddlife lead=facuucottet status=sent reason=Enviado en modo humano
+2026-02-22T17:08:28Z event=message account=matiiddlife lead=ferdeweycloser status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T17:12:36Z event=message account=matiiddlife lead=h.moraga status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T17:16:02Z event=message account=matiimdl lead=elchanguito_herrera status=sent reason=Enviado en modo humano
+2026-02-22T17:17:56Z event=message account=matiimdl lead=pablo_motivation status=sent reason=Enviado en modo humano
+2026-02-22T17:21:06Z event=message account=matiimdl lead=sohayebr status=sent reason=Enviado en modo humano
+2026-02-22T17:25:06Z event=message account=matiimdl lead=valentino.olmedo status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T17:29:44Z event=message account=matiimdl lead=benja_lepratti_ status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T17:34:21Z event=message account=mattmddlife1 lead=marcelobarcia_ti status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T17:38:22Z event=message account=mattmddlife1 lead=frannfavaretto_ status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T17:41:55Z event=message account=mattmddlife1 lead=lautaaagg status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T18:28:23Z event=message account=mattmdlife1 lead=mau.capobianco status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T18:31:51Z event=message account=mattmdlife1 lead=vegadavidd status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T18:37:00Z event=message account=mattmdlife1 lead=jhonruizmr status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-22T18:37:02Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=16 sent_unverified=0 errors=10 remaining=1582

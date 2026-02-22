@@ -328,18 +328,18 @@
       "history": {
         "tester|fu-1": {
           "count": 1,
-          "last_sent_ts": 1771773419.1431599,
+          "last_sent_ts": 1771784943.888605,
           "last_message_id": "fu-1",
           "etapa_negocio": 0,
-          "cycle_anchor_ts": 1771758899.1431599,
+          "cycle_anchor_ts": 1771770423.888605,
           "cycle_followup_count": 1
         },
         "tester|fu-2": {
           "count": 1,
-          "last_sent_ts": 1771773419.1431599,
+          "last_sent_ts": 1771784943.888605,
           "last_message_id": "fu-2",
           "etapa_negocio": 0,
-          "cycle_anchor_ts": 1771758899.232108,
+          "cycle_anchor_ts": 1771770424.0133662,
           "cycle_followup_count": 1
         }
       }
@@ -415,7 +415,11 @@
         "matiid.life1|340282366841710301244260099563639356300": {
           "last_eval_ts": 1771627701.9807715,
           "etapa_negocio": 0,
-          "cycle_anchor_ts": 1771422928.164
+          "cycle_anchor_ts": 1771422928.164,
+          "count": 1,
+          "last_sent_ts": 1771787004.9270394,
+          "last_message_id": "c28633fefe37ffc5cfc26fb621d36e9da14a45ad",
+          "cycle_followup_count": 1
         },
         "matiid.life1|340282366841710301244259994396813204058": {
           "last_eval_ts": 1771627701.9807715,
@@ -425,12 +429,20 @@
         "matiid.life1|340282366841710301244260126251200025598": {
           "last_eval_ts": 1771627701.9807715,
           "etapa_negocio": 0,
-          "cycle_anchor_ts": 1771417624.28
+          "cycle_anchor_ts": 1771417624.28,
+          "count": 1,
+          "last_sent_ts": 1771787004.9270394,
+          "last_message_id": "1ee0344c805ddc1a91b026a5b944ebd289fff5b6",
+          "cycle_followup_count": 1
         },
         "matiid.life1|340282366841710301244276135741226133547": {
           "last_eval_ts": 1771627701.9807715,
           "etapa_negocio": 0,
-          "cycle_anchor_ts": 1771201038.982
+          "cycle_anchor_ts": 1771201038.982,
+          "count": 1,
+          "last_sent_ts": 1771787004.9270394,
+          "last_message_id": "98f2ce122479d2cc15c7b94037d3134ceee57ccb",
+          "cycle_followup_count": 1
         }
       }
     }

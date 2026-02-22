@@ -704,3 +704,88 @@ def test_followup_prefers_account_alias_when_active_alias_is_all(monkeypatch):
 
     assert alias == "ventas"
     assert entry.get("prompt") == "alias"
+
+
+def test_gen_response_returns_empty_on_openai_auth_error(monkeypatch):
+    class _AuthError(Exception):
+        def __init__(self):
+            super().__init__("Error code: 401 - {'error': {'message': 'User not found.'}}")
+            self.status_code = 401
+
+    monkeypatch.setattr(responder, "_build_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(responder, "_resolve_ai_model", lambda _api_key: "fake-model")
+    monkeypatch.setattr(responder, "_openai_generate_text", lambda *_a, **_k: (_ for _ in ()).throw(_AuthError()))
+
+    result = responder._gen_response(
+        api_key="k",
+        system_prompt="Responder como closer",
+        convo_text="ELLOS: Hola",
+        memory_context="stage_actual=active",
+    )
+
+    assert result == ""
+
+
+def test_can_send_message_rejects_empty_ai_output(monkeypatch):
+    monkeypatch.setattr(
+        responder,
+        "_get_conversation_state",
+        lambda *_a, **_k: {"messages_sent": [], "stage": responder._STAGE_ACTIVE},
+    )
+
+    can_send, reason = responder._can_send_message(
+        account="acc",
+        thread_id="th",
+        message_text="   ",
+        force=False,
+    )
+
+    assert can_send is False
+    assert "vacia" in reason.lower()
+
+
+def test_probe_ai_runtime_returns_false_on_auth_error(monkeypatch):
+    class _AuthError(Exception):
+        def __init__(self):
+            super().__init__("Error code: 401")
+            self.status_code = 401
+
+    monkeypatch.setattr(responder, "_build_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(responder, "_resolve_ai_model", lambda _api_key: "fake-model")
+    monkeypatch.setattr(responder, "_openai_generate_text", lambda *_a, **_k: (_ for _ in ()).throw(_AuthError()))
+
+    ok, reason = responder._probe_ai_runtime("k")
+
+    assert ok is False
+    assert "401" in reason
+
+
+def test_probe_ai_runtime_returns_true_when_generation_works(monkeypatch):
+    monkeypatch.setattr(responder, "_build_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(responder, "_resolve_ai_model", lambda _api_key: "fake-model")
+    monkeypatch.setattr(responder, "_openai_generate_text", lambda *_a, **_k: "ok")
+
+    ok, reason = responder._probe_ai_runtime("k")
+
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_resolve_ai_api_key_uses_openai_only(monkeypatch):
+    monkeypatch.setattr(responder, "SETTINGS", SimpleNamespace(openai_api_key=""))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    key = responder._resolve_ai_api_key(
+        {"OPENAI_API_KEY": "sk-openai-123", "OPENROUTER_API_KEY": "sk-or-999"}
+    )
+
+    assert key == "sk-openai-123"
+
+
+def test_resolve_ai_api_key_does_not_fallback_to_openrouter(monkeypatch):
+    monkeypatch.setattr(responder, "SETTINGS", SimpleNamespace(openai_api_key=""))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    key = responder._resolve_ai_api_key({"OPENROUTER_API_KEY": "sk-or-999"})
+
+    assert key == ""
