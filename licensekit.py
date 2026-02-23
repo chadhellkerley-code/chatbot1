@@ -1,4 +1,4 @@
-# licensekit.py
+﻿# licensekit.py
 # -*- coding: utf-8 -*-
 """Herramientas de gestión y entrega de licencias."""
 
@@ -1203,6 +1203,58 @@ def _build_universal_executable() -> None:
     press_enter()
 
 
+def _build_owner_macos_universal_executable() -> None:
+    try:
+        from tools.build_owner_macos_universal import build_owner_macos_universal
+    except Exception as exc:  # pragma: no cover - entorno sin modulo
+        warn(f"No se pudo importar el builder owner macOS: {exc}")
+        press_enter()
+        return
+
+    banner()
+    print(full_line())
+    print(style_text("Ejecutable owner universal macOS", color=Fore.CYAN, bold=True))
+    print(full_line())
+    print("Objetivo: macOS Big Sur (11) o superior")
+    print("Arquitectura: universal2 (Intel + Apple Silicon)")
+    print("1) Onefile (recomendado)")
+    print("2) Onedir")
+    build_mode = ask("Opcion: ").strip()
+    if build_mode not in {"1", "2"}:
+        warn("Opcion invalida.")
+        press_enter()
+        return
+
+    include_browsers = (
+        ask("Incluir Chromium de Playwright dentro del bundle? (s/N): ").strip().lower() == "s"
+    )
+    timeout_default = 7200
+    timeout_value = ask_int(
+        f"Timeout PyInstaller en segundos (default {timeout_default}): ",
+        min_value=600,
+        default=timeout_default,
+    )
+
+    artifact_name = ask(
+        "Nombre del artefacto (Enter = insta_owner_universal_macos): "
+    ).strip() or "insta_owner_universal_macos"
+
+    print("Iniciando build owner macOS universal...")
+    success, artifact_path, message = build_owner_macos_universal(
+        name=artifact_name,
+        onefile=(build_mode == "1"),
+        bundle_playwright_browsers=include_browsers,
+        timeout_seconds=timeout_value,
+    )
+    if success:
+        ok(message)
+        if artifact_path is not None:
+            print(f"Artefacto: {artifact_path}")
+        if not include_browsers:
+            print("Nota: para Playwright en destino ejecutar: python -m playwright install chromium")
+    else:
+        warn(message)
+    press_enter()
 def _create_backend_license_and_files() -> None:
     banner()
     print(full_line())
@@ -1378,9 +1430,7 @@ def menu_deliver() -> None:
         print("2) Generar archivo de licencia (backend)")
         print("3) Crear nueva licencia local (sin ZIP)")
         print("4) Ver todas las licencias (sincronizar con backend)")
-        print("5) Eliminar o extender licencia")
-        print("6) Generar ejecutable universal (backend)")
-        print("7) Volver")
+        print("5) Eliminar o extender licencia")        print("6) Generar ejecutable universal (backend)")`n        print("7) Generar ejecutable owner universal (macOS Big Sur+)")`n        print("8) Volver")
         print()
         choice = ask("Opcion: ").strip()
         if choice == "1":
@@ -1392,11 +1442,7 @@ def menu_deliver() -> None:
         elif choice == "4":
             _show_active_licenses()
         elif choice == "5":
-            _manage_license_simple()
-        elif choice == "6":
-            _build_universal_executable()
-        elif choice == "7":
-            break
+            _manage_license_simple()        elif choice == "6":`n            _build_universal_executable()`n        elif choice == "7":`n            _build_owner_macos_universal_executable()`n        elif choice == "8":`n            break
         else:
             warn("Opcion invalida.")
             press_enter()
@@ -1421,3 +1467,4 @@ def package_license(license_key: str) -> Tuple[bool, Optional[Path], str]:
     if not record:
         return False, None, "Licencia no encontrada."
     return _package_license_local(record)
+
