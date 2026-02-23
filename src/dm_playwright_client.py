@@ -69,6 +69,16 @@ _COMPOSER_SELECTORS = (
     "div[role='textbox'][contenteditable='true']",
     "div[contenteditable='true']",
 )
+_SEND_BUTTON_SELECTORS = (
+    "div[role='main'] button:has-text('Enviar')",
+    "div[role='main'] div[role='button']:has-text('Enviar')",
+    "button:has-text('Enviar')",
+    "div[role='button']:has-text('Enviar')",
+    "button[aria-label='Enviar']",
+    "button[aria-label='Send']",
+    "div[role='button'][aria-label='Enviar']",
+    "div[role='button'][aria-label='Send']",
+)
 
 _UNREAD_HINTS = ("unread", "sin leer", "no leido", "no leido")
 _NOTE_PHRASES = (
@@ -137,6 +147,12 @@ _DM_THREAD_NETWORK_SYNC_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_THREAD_NETWORK_SYNC_TIMEOUT_MS",
     1_800,
     min_value=1_000,
+    max_value=20_000,
+)
+_DM_INBOX_FAST_GOTO_TIMEOUT_MS = _env_int(
+    "AUTORESPONDER_DM_INBOX_FAST_GOTO_TIMEOUT_MS",
+    9_000,
+    min_value=3_000,
     max_value=20_000,
 )
 _DM_API_CACHE_MAX_PER_THREAD = _env_int(
@@ -317,7 +333,7 @@ class MessageLike:
     user_id: str
     text: str
     timestamp: Optional[float]
-    direction: str = "inbound"  # "inbound" or "outbound"
+    direction: str = "inbound"  # "inbound", "outbound" or "unknown"
 
 
 @dataclass(frozen=True)
@@ -428,7 +444,7 @@ class PlaywrightDMClient:
 
     def ensure_ready(self) -> None:
         self._ensure_page()
-        self._open_inbox()
+        self._ensure_inbox_workspace_fast()
 
     def fetch_inbox_threads_page(
         self,
@@ -436,13 +452,22 @@ class PlaywrightDMClient:
         cursor: str = "",
         limit: int = 20,
         message_limit: int = 20,
+        request_timeout_ms: int = 4500,
+        total_timeout_ms: int = 9000,
+        include_visible_href_resolution: bool = True,
+        ingest_payload_cache: bool = False,
     ) -> dict[str, Any]:
+        self._ensure_inbox_workspace_fast()
         page = self._ensure_page()
-        self._open_inbox()
         self._register_response_listener()
 
         safe_limit = max(1, min(200, int(limit or 20)))
         safe_message_limit = max(1, min(80, int(message_limit or 20)))
+        safe_request_timeout_ms = max(1000, min(15_000, int(request_timeout_ms or 4500)))
+        safe_total_timeout_ms = max(
+            safe_request_timeout_ms,
+            min(30_000, int(total_timeout_ms or 9000)),
+        )
         urls = _build_inbox_endpoint_candidates(
             cursor=str(cursor or "").strip(),
             limit=safe_limit,
@@ -452,13 +477,17 @@ class PlaywrightDMClient:
             raise RuntimeError("No hay endpoints disponibles para discovery del inbox.")
 
         fetch_result = page.evaluate(
-            """async ({ urls }) => {
+            """async ({ urls, requestTimeoutMs, totalTimeoutMs }) => {
                 const responseSummary = {
                     ok: false,
                     status: 0,
                     url: "",
                     error: "",
                     payload: null,
+                };
+                const startedAt = Date.now();
+                const isOverTotalBudget = () => {
+                    return Number(Date.now() - startedAt) >= Number(totalTimeoutMs || 0);
                 };
                 const cookieText = String(document.cookie || "");
                 const csrfMatch = cookieText.match(/(?:^|;\\s*)csrftoken=([^;]+)/i);
@@ -472,11 +501,19 @@ class PlaywrightDMClient:
                     headers["x-csrftoken"] = csrfToken;
                 }
                 for (const endpoint of (Array.isArray(urls) ? urls : [])) {
+                    if (isOverTotalBudget()) {
+                        responseSummary.error = responseSummary.error || `timeout_total_${Number(totalTimeoutMs || 0)}ms`;
+                        break;
+                    }
+                    let timeoutHandle = null;
                     try {
+                        const controller = new AbortController();
+                        timeoutHandle = setTimeout(() => controller.abort(), Number(requestTimeoutMs || 0));
                         const res = await fetch(endpoint, {
                             method: "GET",
                             credentials: "include",
                             headers,
+                            signal: controller.signal,
                         });
                         const status = Number(res.status || 0);
                         const bodyText = await res.text();
@@ -508,13 +545,26 @@ class PlaywrightDMClient:
                         responseSummary.status = status;
                         responseSummary.url = String(endpoint || "");
                     } catch (err) {
-                        responseSummary.error = String(err || "fetch_error");
+                        const errName = String((err && err.name) || "");
+                        if (errName.toLowerCase() === "aborterror") {
+                            responseSummary.error = `timeout_fetch_${Number(requestTimeoutMs || 0)}ms`;
+                        } else {
+                            responseSummary.error = String(err || "fetch_error");
+                        }
                         responseSummary.url = String(endpoint || "");
+                    } finally {
+                        if (timeoutHandle) {
+                            clearTimeout(timeoutHandle);
+                        }
                     }
                 }
                 return responseSummary;
             }""",
-            {"urls": urls},
+            {
+                "urls": urls,
+                "requestTimeoutMs": safe_request_timeout_ms,
+                "totalTimeoutMs": safe_total_timeout_ms,
+            },
         )
         if not isinstance(fetch_result, dict):
             raise RuntimeError("Respuesta invalida del endpoint de inbox (tipo inesperado).")
@@ -532,31 +582,87 @@ class PlaywrightDMClient:
                 f"Payload de inbox invalido para @{self.username} (status={status_code}, url={source_url})."
             )
 
-        try:
-            self._ingest_api_payload(payload, source_url=source_url)
-        except Exception:
-            pass
+        if ingest_payload_cache:
+            try:
+                self._ingest_api_payload(payload, source_url=source_url)
+            except Exception:
+                pass
 
         snapshots = _extract_inbox_threads_from_payload(
             payload,
             self_user_id=str(self.user_id or ""),
             self_username=self.username,
             message_limit=safe_message_limit,
+            thread_limit=safe_limit,
         )
+        visible_hrefs = {}
+        should_resolve_hrefs = bool(include_visible_href_resolution)
+        if should_resolve_hrefs:
+            should_resolve_hrefs = any(
+                (not _normalize_direct_link(str(snap.get("thread_href") or "").strip()))
+                or (not _is_probably_web_thread_id(str(snap.get("thread_id_real") or "").strip()))
+                for snap in snapshots
+                if isinstance(snap, dict)
+            )
+        if should_resolve_hrefs:
+            try:
+                visible_hrefs = self._collect_visible_inbox_thread_hrefs(
+                    limit=max(10, min(40, safe_limit * 2))
+                )
+            except Exception:
+                visible_hrefs = {}
         for snapshot in snapshots:
-            thread_id = str(snapshot.get("thread_id") or "").strip()
+            recipient_username = str(snapshot.get("recipient_username") or "").strip()
+            title = str(snapshot.get("title") or "").strip()
+            thread_href = _normalize_direct_link(str(snapshot.get("thread_href") or "").strip())
+            thread_id_real = str(snapshot.get("thread_id_real") or "").strip()
+            api_thread_id = str(snapshot.get("thread_id_api") or snapshot.get("thread_id") or "").strip()
+            if (not thread_id_real or not _is_probably_web_thread_id(thread_id_real)) and thread_href:
+                extracted_href_id = _extract_thread_id(thread_href)
+                if _is_probably_web_thread_id(extracted_href_id):
+                    thread_id_real = extracted_href_id
+            if not thread_href:
+                for lookup_key in (recipient_username, title):
+                    norm_key = _normalize_key_source(str(lookup_key or ""))
+                    if not norm_key:
+                        continue
+                    match = visible_hrefs.get(norm_key) or {}
+                    href_candidate = _normalize_direct_link(str(match.get("thread_href") or ""))
+                    href_id = _extract_thread_id(href_candidate)
+                    if href_candidate and _is_probably_web_thread_id(href_id):
+                        thread_href = href_candidate
+                        if not thread_id_real or not _is_probably_web_thread_id(thread_id_real):
+                            thread_id_real = href_id
+                        break
+            if (not thread_id_real or not _is_probably_web_thread_id(thread_id_real)) and _is_probably_web_thread_id(api_thread_id):
+                thread_id_real = api_thread_id
+            if not thread_href and thread_id_real and _is_probably_web_thread_id(thread_id_real):
+                thread_href = THREAD_URL_TEMPLATE.format(thread_id=thread_id_real)
+
+            thread_id = str(thread_id_real or api_thread_id).strip()
             if not thread_id:
                 continue
-            recipient_username = str(snapshot.get("recipient_username") or "").strip()
+            snapshot["thread_id"] = thread_id
+            snapshot["thread_id_real"] = thread_id_real or thread_id
+            snapshot["thread_href"] = thread_href
+            snapshot["thread_id_api"] = api_thread_id
             recipient_id = str(snapshot.get("recipient_id") or "").strip() or recipient_username or thread_id
-            title = str(snapshot.get("title") or "").strip() or recipient_username or "unknown"
+            title = title or recipient_username or "unknown"
             snippet = str(snapshot.get("snippet") or "").strip()
             unread_count = snapshot.get("unread_count", 0)
             try:
                 unread_int = max(0, int(unread_count))
             except Exception:
                 unread_int = 0
-            link = THREAD_URL_TEMPLATE.format(thread_id=thread_id)
+            link = thread_href or THREAD_URL_TEMPLATE.format(thread_id=thread_id)
+            logger.info(
+                "PlaywrightDM discovery_thread_identity account=@%s thread_id_real=%s href=%s username=%s api_thread_id=%s",
+                self.username,
+                snapshot.get("thread_id_real") or "",
+                snapshot.get("thread_href") or "",
+                recipient_username or title or "unknown",
+                api_thread_id,
+            )
             thread = ThreadLike(
                 id=thread_id,
                 pk=thread_id,
@@ -1049,6 +1155,196 @@ class PlaywrightDMClient:
             logger.error("PlaywrightDM open_thread cache_miss thread_id=%s", key)
             return False
         return self._open_thread(thread)
+
+    def open_thread_by_href(self, href: str) -> bool:
+        href_value = _normalize_direct_link(str(href or "").strip())
+        thread_id = _extract_thread_id(href_value)
+        if not href_value or not thread_id:
+            logger.error(
+                "PlaywrightDM open_thread_by_href_invalid account=@%s href=%s",
+                self.username,
+                href,
+            )
+            return False
+
+        page = self._ensure_page()
+        if not self._is_in_direct_workspace(page):
+            self._ensure_inbox_workspace_fast()
+            page = self._ensure_page()
+        pre_url = page.url or ""
+        try:
+            page.goto(href_value, wait_until="domcontentloaded", timeout=45_000)
+        except PlaywrightTimeoutError:
+            pass
+        except Exception as exc:
+            logger.error(
+                "PlaywrightDM open_thread_by_href_goto_error account=@%s href=%s error=%s",
+                self.username,
+                href_value,
+                exc,
+            )
+            return False
+
+        self._dismiss_overlays(page)
+        visual_ok, state = self._wait_for_visual_thread_sync(
+            page,
+            timeout_ms=_DM_THREAD_VISUAL_SYNC_TIMEOUT_MS,
+            require_both=False,
+            stable_hits_required=1,
+        )
+        post_url = str(state.get("post_url") or (page.url or ""))
+        post_thread_id = str(state.get("post_thread_id") or _extract_thread_id(post_url)).strip()
+        resolved_thread_id = post_thread_id or thread_id
+        if not visual_ok:
+            post_url_now = str(page.url or post_url)
+            post_thread_id_now = str(_extract_thread_id(post_url_now) or post_thread_id).strip()
+            expected_ids = set(self._expand_thread_ids([thread_id]))
+            opened_ids = set(self._expand_thread_ids([post_thread_id_now]))
+            composer = self._find_composer(page)
+            composer_visible = False
+            if composer is not None:
+                try:
+                    composer_visible = bool(composer.is_visible())
+                except Exception:
+                    composer_visible = False
+            message_panel_visible = self._message_panel_visible(page)
+            if expected_ids.intersection(opened_ids) and (composer_visible or message_panel_visible):
+                visual_ok = True
+                post_url = post_url_now
+                post_thread_id = post_thread_id_now
+                resolved_thread_id = post_thread_id or thread_id
+                logger.warning(
+                    "PlaywrightDM open_thread_by_href_soft_accept account=@%s href=%s post_url=%s composer_visible=%s message_panel_visible=%s",
+                    self.username,
+                    href_value,
+                    post_url,
+                    composer_visible,
+                    message_panel_visible,
+                )
+            else:
+                logger.error(
+                    "PlaywrightDM open_thread_by_href_visual_sync_error account=@%s href=%s pre_url=%s post_url=%s",
+                    self.username,
+                    href_value,
+                    pre_url,
+                    post_url,
+                )
+                return False
+
+        self._register_thread_aliases(thread_id, resolved_thread_id)
+        self._current_thread_id = resolved_thread_id
+
+        existing = self._thread_cache.get(resolved_thread_id) or self._thread_cache.get(thread_id)
+        if existing is None:
+            existing = ThreadLike(
+                id=resolved_thread_id,
+                pk=resolved_thread_id,
+                users=[],
+                unread_count=0,
+                link=href_value,
+                title="",
+                snippet="",
+                source_index=-1,
+            )
+        else:
+            existing.link = href_value
+            self._sync_thread_id(existing, resolved_thread_id)
+        self._thread_cache[resolved_thread_id] = existing
+        meta = dict(self._thread_cache_meta.get(resolved_thread_id, {}))
+        meta.update(
+            {
+                "link": href_value,
+                "idx": -1,
+                "selector": "href_direct",
+                "key_source": "href_direct",
+            }
+        )
+        self._thread_cache_meta[resolved_thread_id] = meta
+        try:
+            self._assert_logged_in(page)
+            self._refresh_thread_participants(page, existing)
+        except Exception:
+            pass
+        logger.info(
+            "PlaywrightDM open_thread_by_href_ok account=@%s href=%s thread_id=%s",
+            self.username,
+            href_value,
+            resolved_thread_id,
+        )
+        return True
+
+    def _collect_visible_inbox_thread_hrefs(self, *, limit: int = 80) -> dict[str, dict[str, str]]:
+        self._ensure_inbox_workspace_fast()
+        page = self._ensure_page()
+        rows = None
+        selected_selector = ""
+        for selector in self._row_selector_candidates():
+            try:
+                candidate = page.locator(selector)
+                if candidate.count() > 0:
+                    rows = candidate
+                    selected_selector = selector
+                    break
+            except Exception:
+                continue
+        if rows is None:
+            return {}
+
+        try:
+            total = rows.count()
+        except Exception:
+            total = 0
+        max_rows = max(0, min(int(limit), int(total)))
+        resolved: dict[str, dict[str, str]] = {}
+        for idx in range(max_rows):
+            row = rows.nth(idx)
+            try:
+                row_valid = self._row_is_valid(row, selector=selected_selector, fast=True)
+            except TypeError:
+                row_valid = self._row_is_valid(row, selector=selected_selector)
+            except Exception:
+                row_valid = True
+            if not row_valid:
+                continue
+
+            href = ""
+            try:
+                href = (row.get_attribute("href") or "").strip()
+            except Exception:
+                href = ""
+            if "/direct/t/" not in href:
+                try:
+                    href = (
+                        row.locator("a[href*='/direct/t/']").first.get_attribute("href")
+                        or ""
+                    ).strip()
+                except Exception:
+                    href = ""
+            href_value = _normalize_direct_link(href)
+            thread_id = _extract_thread_id(href_value)
+            if not href_value or not thread_id or not _is_probably_web_thread_id(thread_id):
+                continue
+
+            row_lines = self._row_lines(row)
+            names = []
+            if row_lines:
+                names.append(str(row_lines[0] or "").strip())
+            preview = self._row_preview(row)
+            if preview:
+                names.append(str(preview).strip())
+            names = [name for name in names if name]
+            if not names:
+                continue
+            for name in names:
+                key = _normalize_key_source(name)
+                if not key or key in resolved:
+                    continue
+                resolved[key] = {
+                    "thread_id_real": thread_id,
+                    "thread_href": href_value,
+                    "username": name,
+                }
+        return resolved
 
     # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_anchors(...)
@@ -1684,7 +1980,12 @@ class PlaywrightDMClient:
                     self.username,
                 )
                 continue
-            direction = "outbound" if api_msg.direction == "outbound" else "inbound"
+            if api_msg.direction == "outbound":
+                direction = "outbound"
+            elif api_msg.direction == "inbound":
+                direction = "inbound"
+            else:
+                direction = "unknown"
             if direction == "outbound":
                 user_id = self.user_id
             else:
@@ -1757,7 +2058,22 @@ class PlaywrightDMClient:
 
     def send_message(self, thread: ThreadLike, text: str) -> Optional[str]:
         page = self._ensure_page()
-        self._open_thread(thread)
+        current_url = page.url or ""
+        current_thread_id = _extract_thread_id(current_url)
+        expected_ids = set(self._expected_thread_ids(thread, post_thread_id=current_thread_id, click_href=""))
+        already_on_target = bool(current_thread_id and (not expected_ids or current_thread_id in expected_ids))
+        if not already_on_target:
+            opened = self._open_thread(thread)
+            if not opened:
+                logger.warning(
+                    "PlaywrightDM send_message_open_failed thread=%s @%s url=%s expected=%s",
+                    thread.id,
+                    self.username,
+                    current_url,
+                    sorted(expected_ids),
+                )
+                return None
+            page = self._ensure_page()
 
         composer = self._find_composer(page)
         if composer is None:
@@ -1773,6 +2089,8 @@ class PlaywrightDMClient:
             return None
 
         message_id = self._verify_sent(thread, text)
+        if not message_id and self._click_send_button(page):
+            message_id = self._verify_sent(thread, text)
         if message_id:
             logger.info("PlaywrightDM envio_ok thread=%s msg_id=%s", thread.id, message_id)
         else:
@@ -2061,8 +2379,16 @@ class PlaywrightDMClient:
                 continue
         return False
 
-    def _wait_for_visual_thread_sync(self, page: Page, *, timeout_ms: int) -> tuple[bool, dict[str, object]]:
+    def _wait_for_visual_thread_sync(
+        self,
+        page: Page,
+        *,
+        timeout_ms: int,
+        require_both: bool = True,
+        stable_hits_required: int = 2,
+    ) -> tuple[bool, dict[str, object]]:
         deadline = time.time() + max(0.0, float(timeout_ms) / 1000.0)
+        required_hits = max(1, int(stable_hits_required or 1))
         stable_hits = 0
         last_state: dict[str, object] = {
             "post_url": page.url or "",
@@ -2088,9 +2414,14 @@ class PlaywrightDMClient:
                 "composer_visible": composer_visible,
                 "message_panel_visible": message_panel_visible,
             }
-            if composer_visible and message_panel_visible:
+            visual_ready = False
+            if require_both:
+                visual_ready = composer_visible and message_panel_visible
+            else:
+                visual_ready = bool(post_thread_id) and (composer_visible or message_panel_visible)
+            if visual_ready:
                 stable_hits += 1
-                if stable_hits >= 2:
+                if stable_hits >= required_hits:
                     return True, last_state
             else:
                 stable_hits = 0
@@ -2236,6 +2567,53 @@ class PlaywrightDMClient:
             reverse=True,
         )
         return ordered
+
+    def _ensure_inbox_workspace_fast(self) -> None:
+        """
+        Prepara contexto mínimo para fetch por endpoint sin esperar filas del inbox.
+        Evita bloqueos largos del flujo memory-first.
+        """
+        page = self._ensure_page()
+        current_url = str(page.url or "")
+        is_direct_workspace = ("/direct/inbox/" in current_url) or ("/direct/t/" in current_url)
+        if not is_direct_workspace:
+            try:
+                page.goto(
+                    INBOX_URL,
+                    wait_until="domcontentloaded",
+                    timeout=_DM_INBOX_FAST_GOTO_TIMEOUT_MS,
+                )
+            except PlaywrightTimeoutError:
+                logger.warning(
+                    "PlaywrightDM inbox_fast_goto_timeout account=@%s timeout_ms=%s",
+                    self.username,
+                    _DM_INBOX_FAST_GOTO_TIMEOUT_MS,
+                )
+            except Exception:
+                pass
+        self._dismiss_overlays(page)
+        if not self._account_status_checked:
+            status = detect_account_status_sync(page)
+            self._account_status_checked = True
+            log_account_status(self.username, status)
+            try:
+                import health_store
+
+                health_store.update_from_playwright_status(self.username, status, reason=status)
+            except Exception:
+                pass
+            if status != "alive":
+                logger.warning(
+                    "PlaywrightDM account_status_stop account=@%s status=%s url=%s",
+                    self.username,
+                    status,
+                    page.url,
+                )
+                self.close()
+                raise RuntimeError(
+                    f"Cuenta @{self.username} no disponible para operar. Estado detectado: {status}."
+                )
+        self._assert_logged_in(page)
 
     def _open_inbox(self, force_reload: bool = False) -> None:
         page = self._ensure_page()
@@ -3182,6 +3560,23 @@ class PlaywrightDMClient:
                 continue
         return None
 
+    def _click_send_button(self, page: Page) -> bool:
+        for selector in _SEND_BUTTON_SELECTORS:
+            try:
+                loc = page.locator(selector)
+                if loc.count() <= 0:
+                    continue
+                btn = loc.first
+                try:
+                    btn.click(timeout=1_500)
+                    return True
+                except Exception:
+                    btn.click(timeout=1_500, force=True)
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _refresh_thread_participants(self, page: Page, thread: ThreadLike) -> None:
         username = _extract_header_username(page, self.username)
         if not username:
@@ -3468,42 +3863,87 @@ def _extract_inbox_cursor(payload: Any) -> tuple[str, bool]:
     return cursor_value, bool(has_more_value)
 
 
+def _extract_messages_from_thread_node(
+    thread_node: dict[str, Any],
+    *,
+    thread_id: str,
+    self_user_id: str,
+    message_limit: int,
+) -> list[dict[str, Any]]:
+    safe_message_limit = max(1, min(80, int(message_limit or 20)))
+    self_user_ids = {str(self_user_id or "").strip()}
+    self_user_ids.discard("")
+    candidates: list[dict[str, Any]] = []
+
+    for key in ("items", "thread_items", "messages", "entries"):
+        raw = thread_node.get(key)
+        if not isinstance(raw, list):
+            continue
+        for item in raw[: safe_message_limit * 3]:
+            if isinstance(item, dict):
+                candidates.append(item)
+
+    for key in ("last_permanent_item", "last_item", "last_message"):
+        raw = thread_node.get(key)
+        if isinstance(raw, dict):
+            candidates.append(raw)
+
+    dedup: dict[str, dict[str, Any]] = {}
+    for node in candidates:
+        parsed, _missing = _extract_api_message_from_node(
+            node,
+            context_thread_id=thread_id,
+            self_user_id=self_user_id,
+            self_user_ids=self_user_ids,
+        )
+        if parsed is None or parsed.timestamp is None:
+            continue
+        msg_id = str(parsed.item_id or "").strip()
+        if not msg_id:
+            continue
+        direction_value = str(parsed.direction or "").strip().lower()
+        if direction_value == "outbound":
+            direction = "outbound"
+        elif direction_value == "inbound":
+            direction = "inbound"
+        else:
+            direction = "unknown"
+        normalized = {
+            "message_id": msg_id,
+            "sender_id": str(parsed.sender_id or "").strip(),
+            "direction": direction,
+            "text": str(parsed.text or ""),
+            "timestamp_epoch": float(parsed.timestamp),
+        }
+        previous = dedup.get(msg_id)
+        if previous is None:
+            dedup[msg_id] = normalized
+            continue
+        prev_ts = float(previous.get("timestamp_epoch") or 0.0)
+        if float(normalized.get("timestamp_epoch") or 0.0) >= prev_ts:
+            dedup[msg_id] = normalized
+
+    messages = list(dedup.values())
+    messages.sort(
+        key=lambda msg: (
+            float(msg.get("timestamp_epoch") or 0.0),
+            str(msg.get("message_id") or ""),
+        ),
+        reverse=True,
+    )
+    return messages[:safe_message_limit]
+
+
 def _extract_inbox_threads_from_payload(
     payload: Any,
     *,
     self_user_id: str,
     self_username: str,
     message_limit: int = 20,
+    thread_limit: int = 0,
 ) -> list[dict[str, Any]]:
     safe_message_limit = max(1, min(80, int(message_limit or 20)))
-
-    parsed_messages, _missing = _extract_api_messages_from_payload(
-        payload,
-        self_user_id=self_user_id,
-    )
-    messages_by_thread: dict[str, list[dict[str, Any]]] = {}
-    for item in parsed_messages:
-        thread_id = str(item.thread_id or "").strip()
-        if not thread_id:
-            continue
-        bucket = messages_by_thread.setdefault(thread_id, [])
-        bucket.append(
-            {
-                "message_id": str(item.item_id or "").strip(),
-                "sender_id": str(item.sender_id or "").strip(),
-                "direction": "outbound" if str(item.direction or "").strip().lower() == "outbound" else "inbound",
-                "text": str(item.text or ""),
-                "timestamp_epoch": float(item.timestamp) if item.timestamp else None,
-            }
-        )
-    for bucket in messages_by_thread.values():
-        bucket.sort(
-            key=lambda msg: (
-                float(msg.get("timestamp_epoch") or 0.0),
-                str(msg.get("message_id") or ""),
-            ),
-            reverse=True,
-        )
+    safe_thread_limit = max(0, int(thread_limit or 0))
 
     thread_nodes: dict[str, dict[str, Any]] = {}
     thread_scores: dict[str, int] = {}
@@ -3528,7 +3968,7 @@ def _extract_inbox_threads_from_payload(
         ):
             if key in node:
                 score += 1
-        if score <= 0 and thread_id not in messages_by_thread:
+        if score <= 0:
             continue
         previous_score = thread_scores.get(thread_id, -1)
         if score >= previous_score:
@@ -3540,7 +3980,7 @@ def _extract_inbox_threads_from_payload(
 
     snapshots: list[dict[str, Any]] = []
     seen_snapshot_ids: set[str] = set()
-    thread_ids = set(thread_nodes.keys()) | set(messages_by_thread.keys())
+    thread_ids = list(thread_nodes.keys())
     for thread_id in thread_ids:
         if not thread_id or thread_id in seen_snapshot_ids:
             continue
@@ -3628,9 +4068,22 @@ def _extract_inbox_threads_from_payload(
             if isinstance(last_item, dict):
                 snippet = _extract_message_text_from_api_node(last_item)
 
-        messages = list(messages_by_thread.get(thread_id, []))
+        messages = _extract_messages_from_thread_node(
+            node,
+            thread_id=thread_id,
+            self_user_id=self_user_id,
+            message_limit=safe_message_limit,
+        )
         if not snippet and messages:
             snippet = _coerce_str(messages[0].get("text"))
+
+        thread_href = _extract_thread_href_from_node(node)
+        thread_id_from_href = _extract_thread_id(thread_href)
+        if not _is_probably_web_thread_id(thread_id_from_href):
+            thread_id_from_href = ""
+            thread_href = ""
+        thread_id_real = thread_id_from_href if thread_id_from_href else (thread_id if _is_probably_web_thread_id(thread_id) else "")
+        canonical_thread_id = thread_id_real or thread_id
 
         activity_ts_values: list[float] = []
         for key in (
@@ -3658,7 +4111,10 @@ def _extract_inbox_threads_from_payload(
 
         snapshots.append(
             {
-                "thread_id": thread_id,
+                "thread_id": canonical_thread_id,
+                "thread_id_api": thread_id,
+                "thread_id_real": thread_id_real,
+                "thread_href": thread_href,
                 "recipient_id": recipient_id or recipient_username or thread_id,
                 "recipient_username": recipient_username or title or "unknown",
                 "title": title or recipient_username or "unknown",
@@ -3676,6 +4132,8 @@ def _extract_inbox_threads_from_payload(
         ),
         reverse=True,
     )
+    if safe_thread_limit > 0:
+        snapshots = snapshots[:safe_thread_limit]
     return snapshots
 
 
@@ -3778,19 +4236,50 @@ def _extract_api_message_from_node(
 ) -> tuple[Optional[_APIMessageRecord], Optional[dict[str, str]]]:
     thread_id = _extract_thread_id_from_node(node) or str(context_thread_id or "").strip()
     sender_id = _extract_sender_id_from_node(node)
-    item_id = _extract_item_id_from_node(node)
+    explicit_item_id = _extract_explicit_item_id_from_node(node)
+    item_id = explicit_item_id or _extract_item_id_from_node(node)
     timestamp = _extract_timestamp_from_node(node)
     text = _extract_message_text_from_api_node(node)
     has_sender_hint = bool(sender_id or any(key in node for key in _DM_SENDER_ID_KEYS + ("sender", "user", "actor", "from")))
+    raw_direction = _coerce_str(
+        node.get("direction")
+        or node.get("message_direction")
+        or node.get("folder")
+        or node.get("type")
+    ).lower()
+    has_direction_hint = raw_direction in {
+        "outbound",
+        "outgoing",
+        "sent",
+        "viewer",
+        "inbound",
+        "incoming",
+        "received",
+    } or any(
+        isinstance(node.get(key), bool)
+        for key in ("is_sent_by_viewer", "sent_by_viewer", "is_outgoing", "outgoing", "from_viewer")
+    )
+    raw_message_kind = _coerce_str(node.get("item_type") or node.get("message_type")).lower()
+    has_message_kind = bool(raw_message_kind and raw_message_kind not in {
+        "thread",
+        "inbox",
+        "conversation",
+        "container",
+        "list",
+        "node",
+    })
+    has_client_context = bool(_coerce_str(node.get("client_context")))
+    has_text = bool(str(text or "").strip())
 
     message_identity = bool(
-        item_id
-        or _coerce_str(node.get("item_type"))
-        or _coerce_str(node.get("message_type"))
-        or _coerce_str(node.get("client_context"))
-        or (text and has_sender_hint)
+        has_text
+        or bool(explicit_item_id)
+        or has_message_kind
+        or has_client_context
     )
     if not message_identity:
+        return None, None
+    if not has_sender_hint and not has_direction_hint:
         return None, None
     if not thread_id:
         return None, None
@@ -3813,7 +4302,7 @@ def _extract_api_message_from_node(
     normalized_sender_id = sender_id
     if direction == "outbound":
         normalized_sender_id = str(self_user_id or "").strip() or normalized_sender_id
-    if not normalized_sender_id:
+    elif direction == "inbound" and not normalized_sender_id:
         normalized_sender_id = "peer"
     normalized_item_id = item_id
     if not normalized_item_id:
@@ -3835,19 +4324,70 @@ def _extract_api_message_from_node(
     )
 
 
+def _is_probably_web_thread_id(value: str) -> bool:
+    token = str(value or "").strip()
+    if not token:
+        return False
+    if not token.isdigit():
+        return False
+    return 6 <= len(token) <= 20
+
+
+def _prefer_thread_id_candidate(candidates: list[str]) -> str:
+    cleaned = [str(item or "").strip() for item in candidates if str(item or "").strip()]
+    if not cleaned:
+        return ""
+    for item in cleaned:
+        if _is_probably_web_thread_id(item):
+            return item
+    return cleaned[0]
+
+
+def _extract_thread_href_from_node(node: dict[str, Any]) -> str:
+    keys = (
+        "thread_url",
+        "thread_href",
+        "thread_link",
+        "canonical_url",
+        "permalink",
+        "url",
+        "path",
+        "link",
+    )
+    for key in keys:
+        value = _coerce_str(node.get(key))
+        if "/direct/t/" in value:
+            return _normalize_direct_link(value)
+
+    for nested_key in ("thread", "conversation", "entity"):
+        nested = node.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in keys:
+            value = _coerce_str(nested.get(key))
+            if "/direct/t/" in value:
+                return _normalize_direct_link(value)
+    return ""
+
+
 def _extract_thread_id_from_node(node: dict[str, Any]) -> str:
+    candidates: list[str] = []
     for key in _DM_THREAD_ID_KEYS:
         value = _coerce_str(node.get(key))
         if value:
-            return value
+            candidates.append(value)
     for nested_key in ("thread", "conversation"):
         nested = node.get(nested_key)
         if isinstance(nested, dict):
             for key in _DM_THREAD_ID_KEYS + ("id",):
                 value = _coerce_str(nested.get(key))
                 if value:
-                    return value
-    return ""
+                    candidates.append(value)
+    href_value = _extract_thread_href_from_node(node)
+    href_thread_id = _extract_thread_id(href_value)
+    if href_thread_id:
+        candidates.insert(0, href_thread_id)
+    return _prefer_thread_id_candidate(candidates)
 
 
 def _extract_sender_id_from_node(node: dict[str, Any]) -> str:
@@ -3867,6 +4407,14 @@ def _extract_sender_id_from_node(node: dict[str, Any]) -> str:
 
 def _extract_item_id_from_node(node: dict[str, Any]) -> str:
     for key in _DM_ITEM_ID_KEYS:
+        value = _coerce_str(node.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _extract_explicit_item_id_from_node(node: dict[str, Any]) -> str:
+    for key in ("item_id", "itemid", "message_id", "messageid"):
         value = _coerce_str(node.get(key))
         if value:
             return value
@@ -3965,7 +4513,7 @@ def _resolve_direction_from_node(
     aliases.discard("")
     if sender_id and str(sender_id).strip() in aliases:
         return "outbound"
-    return "inbound"
+    return "unknown"
 
 
 def _extract_payload_self_user_ids(payload: Any) -> set[str]:

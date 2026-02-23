@@ -1854,3 +1854,107 @@
 2026-02-22T18:31:51Z event=message account=mattmdlife1 lead=vegadavidd status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
 2026-02-22T18:37:00Z event=message account=mattmdlife1 lead=jhonruizmr status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
 2026-02-22T18:37:02Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=16 sent_unverified=0 errors=10 remaining=1582
+2026-02-23T05:14:35Z event=start account=- lead=- status=started reason=accounts=1 leads=998 total=45 concurrency=1 per_account=45
+2026-02-23T05:17:12Z event=message account=matidiazlife lead=roussmartinezgomez status=sent reason=Enviado en modo humano
+2026-02-23T05:21:13Z event=message account=matidiazlife lead=edwin.serrano31 status=sent reason=Enviado en modo humano
+2026-02-23T05:24:19Z event=message account=matidiazlife lead=mencar20julia status=sent reason=Enviado en modo humano
+2026-02-23T05:27:32Z event=message account=matidiazlife lead=dornelas.mia status=sent reason=Enviado en modo humano
+2026-02-23T05:30:10Z event=message account=matidiazlife lead=tusitioimport status=sent reason=Enviado en modo humano
+2026-02-23T05:34:31Z event=message account=matidiazlife lead=old.souls.records status=sent reason=Enviado en modo humano
+2026-02-23T05:36:51Z event=message account=matidiazlife lead=guay.designstudio status=sent reason=Enviado en modo humano
+2026-02-23T05:38:59Z event=message account=matidiazlife lead=stellartravelmty status=sent reason=Enviado en modo humano
+2026-02-23T05:43:41Z event=message account=matidiazlife lead=g_arthurs status=sent reason=Enviado en modo humano
+2026-02-23T05:46:58Z event=message account=matidiazlife lead=mariliperaltaoficial status=sent reason=Enviado en modo humano
+2026-02-23T05:51:16Z event=message account=matidiazlife lead=kamachostudio status=sent reason=Enviado en modo humano
+2026-02-23T05:54:03Z event=message account=matidiazlife lead=martha.mejiaflores status=sent reason=Enviado en modo humano
+2026-02-23T05:58:19Z event=message account=matidiazlife lead=tuestilobrilla_ status=sent reason=Enviado en modo humano
+2026-02-23T06:03:14Z event=message account=matidiazlife lead=vero.tinez305 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T06:06:36Z event=message account=matidiazlife lead=sarahyng.daza status=error reason=Composer no encontrado.
+2026-02-23T06:09:41Z event=message account=matidiazlife lead=taty_acevedook status=sent reason=Enviado en modo humano
+2026-02-23T06:15:24Z event=message account=matidiazlife lead=esteticaedna_ec status=sent reason=Enviado en modo humano
+2026-02-23T06:20:26Z event=message account=matidiazlife lead=artkimia_resin status=sent reason=Enviado en modo humano
+2026-02-23T06:24:32Z event=message account=matidiazlife lead=jairoacharrism.oficial status=sent reason=Enviado en modo humano
+2026-02-23T06:30:43Z event=message account=matidiazlife lead=andrebucu status=sent reason=Enviado en modo humano
+2026-02-23T06:35:58Z event=message account=matidiazlife lead=ichigo.marketing status=skipped reason=Perfil sin botón de mensaje / no permite DM
+2026-02-23T06:42:12Z event=message account=matidiazlife lead=saamarconsultorialegal status=sent reason=Enviado en modo humano
+2026-02-23T06:46:38Z event=message account=matidiazlife lead=magicplay90 status=sent reason=Enviado en modo humano
+2026-02-23T06:51:52Z event=message account=matidiazlife lead=iki__beauty status=sent reason=Enviado en modo humano
+2026-02-23T06:58:23Z event=message account=matidiazlife lead=mat_rg00 status=sent reason=Enviado en modo humano
+2026-02-23T07:03:36Z event=message account=matidiazlife lead=mariamarin.growth status=sent reason=Enviado en modo humano
+2026-02-23T07:09:36Z event=message account=matidiazlife lead=alquimia.360_ status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T07:13:23Z event=message account=matidiazlife lead=juliomartasanchez status=sent reason=Enviado en modo humano
+2026-02-23T07:19:14Z event=message account=matidiazlife lead=chris_brandvp status=sent reason=Enviado en modo humano
+2026-02-23T07:23:33Z event=message account=matidiazlife lead=rele_vant_ status=error reason=_dm_log() got multiple values for argument 'stage'
+2026-02-23T07:27:33Z event=message account=matidiazlife lead=revva_studio status=sent reason=Enviado en modo humano
+2026-02-23T07:31:36Z event=message account=matidiazlife lead=the_beauty_houses10 status=sent reason=Enviado en modo humano
+2026-02-23T07:36:16Z event=message account=matidiazlife lead=digitalshey status=sent reason=Enviado en modo humano
+2026-02-23T07:40:31Z event=message account=matidiazlife lead=arcoiris35536258 status=sent reason=Enviado en modo humano
+2026-02-23T07:44:12Z event=message account=matidiazlife lead=lauzanotta_marketing status=sent reason=Enviado en modo humano
+2026-02-23T07:47:58Z event=message account=matidiazlife lead=arturo_perez_r status=sent reason=Enviado en modo humano
+2026-02-23T07:50:53Z event=message account=matidiazlife lead=droes_agenciadigital status=sent reason=Enviado en modo humano
+2026-02-23T07:55:25Z event=message account=matidiazlife lead=emprende.cjs status=sent reason=Enviado en modo humano
+2026-02-23T08:00:00Z event=message account=matidiazlife lead=mariolibermind status=sent reason=Enviado en modo humano
+2026-02-23T08:03:23Z event=message account=matidiazlife lead=co_chiart status=sent reason=Enviado en modo humano
+2026-02-23T08:06:05Z event=message account=matidiazlife lead=ngmastudio status=sent reason=Enviado en modo humano
+2026-02-23T08:08:53Z event=message account=matidiazlife lead=pacheco.bass status=sent reason=Enviado en modo humano
+2026-02-23T08:13:08Z event=message account=matidiazlife lead=danielhfoto status=sent reason=Enviado en modo humano
+2026-02-23T08:15:42Z event=message account=matidiazlife lead=supernovamktpro status=sent reason=Enviado en modo humano
+2026-02-23T08:18:53Z event=message account=matidiazlife lead=ecovisionopt status=sent reason=Enviado en modo humano
+2026-02-23T08:18:53Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=40 sent_unverified=0 errors=4 remaining=953
+2026-02-23T12:50:29Z event=start account=- lead=- status=started reason=accounts=3 leads=1578 total=30 concurrency=1 per_account=10
+2026-02-23T12:53:52Z event=message account=mati.diazlife3 lead=geralois status=sent reason=Enviado en modo humano
+2026-02-23T12:57:42Z event=message account=mati.diazlife3 lead=santybyrne status=sent reason=Enviado en modo humano
+2026-02-23T13:00:14Z event=message account=mati.diazlife3 lead=_francomicaela status=sent reason=Enviado en modo humano
+2026-02-23T13:03:53Z event=message account=mati.diazlife3 lead=javier_t17 status=sent reason=Enviado en modo humano
+2026-02-23T13:07:45Z event=message account=mati.diazlife3 lead=josue_mindset status=sent reason=Enviado en modo humano
+2026-02-23T13:11:42Z event=message account=mati.diazlife3 lead=marianocarmona97 status=sent reason=Enviado en modo humano
+2026-02-23T13:14:27Z event=message account=mati.diazlife3 lead=marc42a status=sent reason=Enviado en modo humano
+2026-02-23T13:17:18Z event=message account=mati.diazlife3 lead=saber.morabit status=sent reason=Enviado en modo humano
+2026-02-23T13:20:56Z event=message account=mati.diazlife3 lead=elsamuels4 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T13:23:46Z event=message account=mati.diazlife3 lead=santinoboga_ status=sent reason=Enviado en modo humano
+2026-02-23T13:27:36Z event=message account=maatmdlife lead=keving.oficial status=sent reason=Enviado en modo humano
+2026-02-23T13:30:30Z event=message account=maatmdlife lead=jossender status=sent reason=Enviado en modo humano
+2026-02-23T13:34:45Z event=message account=maatmdlife lead=meligry status=sent reason=Enviado en modo humano
+2026-02-23T13:38:37Z event=message account=maatmdlife lead=santidavidse status=sent reason=Enviado en modo humano
+2026-02-23T13:43:16Z event=message account=maatmdlife lead=martiinborghi status=sent reason=Enviado en modo humano
+2026-02-23T13:46:46Z event=message account=maatmdlife lead=alanvillagrann status=sent reason=Enviado en modo humano
+2026-02-23T13:50:34Z event=message account=maatmdlife lead=addicteddany status=sent reason=Enviado en modo humano
+2026-02-23T13:53:51Z event=message account=maatmdlife lead=fernando.pintos98 status=sent reason=Enviado en modo humano
+2026-02-23T13:57:05Z event=message account=maatmdlife lead=giusseppemeza status=sent reason=Enviado en modo humano
+2026-02-23T13:59:16Z event=message account=maatmdlife lead=angelobellott status=sent reason=Enviado en modo humano
+2026-02-23T14:03:48Z event=message account=maatmdlife1 lead=medicenpelusa_ status=sent reason=Enviado en modo humano
+2026-02-23T14:08:25Z event=message account=maatmdlife1 lead=reizermarin status=sent reason=Enviado en modo humano
+2026-02-23T14:10:28Z event=start account=- lead=- status=started reason=accounts=7 leads=1554 total=35 concurrency=7 per_account=5
+2026-02-23T14:11:46Z event=message account=maatmdlife1 lead=tomaszerboni status=sent reason=Enviado en modo humano
+2026-02-23T14:18:21Z event=message account=cam.martti lead=tonii.frati status=sent reason=Enviado en modo humano
+2026-02-23T14:18:21Z event=message account=mateoo.zennit lead=ivancast.jpg status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://accountscenter.instagram.com/", waiting until "load"
+2026-02-23T14:18:21Z event=message account=matii.dolss lead=giraldoxs status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"   -   - navigating to "https://accountscenter.instagram.com/", waiting until "load"
+2026-02-23T14:19:52Z event=message account=Martin.Andess lead=tomaszerboni status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T14:20:08Z event=message account=carls.ortga lead=marketing_con_fran status=sent reason=Enviado en modo humano
+2026-02-23T14:20:12Z event=message account=mati.jaiime lead=drazicflores status=sent reason=Enviado en modo humano
+2026-02-23T14:20:13Z event=message account=maatmdlife1 lead=marketing_con_fran status=sent reason=Enviado en modo humano
+2026-02-23T14:20:13Z event=message account=martinkerley lead=ferquiroz022 status=sent reason=Enviado en modo humano
+2026-02-23T14:25:55Z event=message account=maatmdlife1 lead=drazicflores status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"   -   - navigating to "https://accountscenter.instagram.com/", waiting until "load"
+2026-02-23T14:26:17Z event=message account=mateoo.zennit lead=cristinavargasoficial status=sent reason=Enviado en modo humano
+2026-02-23T14:26:17Z event=message account=martinkerley lead=anibal_coquito_ status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"   -   - navigating to "https://accountscenter.instagram.com/", waiting until "load"
+2026-02-23T14:26:17Z event=message account=matii.dolss lead=juanpi.cordovap status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T14:26:33Z event=message account=cam.martti lead=brianllanes_sistemas status=sent reason=Enviado en modo humano
+2026-02-23T14:26:33Z event=message account=carls.ortga lead=gonza_alm05 status=sent reason=Enviado en modo humano
+2026-02-23T14:27:13Z event=message account=mati.jaiime lead=ianlastmann status=sent reason=Enviado en modo humano
+2026-02-23T14:27:24Z event=message account=Martin.Andess lead=dannarodriguez222 status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T14:30:58Z event=message account=martinkerley lead=rexinmundox status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"   -   - navigating to "https://accountscenter.instagram.com/", waiting until "load"
+2026-02-23T14:31:45Z event=message account=carls.ortga lead=soybrunolaureiro status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"   -   - navigating to "https://accountscenter.instagram.com/", waiting until "load"
+2026-02-23T14:31:46Z event=message account=Martin.Andess lead=tomas_kucich status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"
+2026-02-23T14:32:24Z event=message account=maatmdlife1 lead=tonii.frati status=sent reason=Enviado en modo humano
+2026-02-23T14:33:17Z event=message account=mati.jaiime lead=gustavoalcalam status=error reason=Browser.new_context: Timeout 30000ms exceeded. Call log:   - navigating to "https://www.instagram.com/", waiting until "load"   -   - navigating to "https://www.fbsbx.com/", waiting until "load"   -   - navigating to "https://www.facebook.com/", waiting until "load"
+2026-02-23T14:33:17Z event=message account=matii.dolss lead=aaaxelarias status=error reason=No se encontro boton 'Enviar mensaje' en el perfil del usuario.
+2026-02-23T14:33:17Z event=message account=cam.martti lead=juanjo_penayoch status=sent reason=Enviado en modo humano
+2026-02-23T14:34:37Z event=message account=martinkerley lead=fleitas.19 status=sent reason=Enviado en modo humano
+2026-02-23T14:35:16Z event=message account=maatmdlife1 lead=ferquiroz022 status=sent reason=Enviado en modo humano
+2026-02-23T14:38:09Z event=message account=maatmdlife1 lead=ivancast.jpg status=sent reason=Enviado en modo humano
+2026-02-23T14:42:33Z event=message account=maatmdlife1 lead=giraldoxs status=sent reason=Enviado en modo humano
+2026-02-23T14:46:23Z event=message account=maatmdlife1 lead=brianllanes_sistemas status=sent reason=Enviado en modo humano
+2026-02-23T14:46:23Z event=stop account=- lead=- status=stopped reason=se alcanzó el límite de envíos por cuenta sent=28 sent_unverified=0 errors=2 remaining=1548
+2026-02-23T14:48:51Z event=message account=mateoo.zennit lead=leonelozzc status=error reason=No se pudo tipear el mensaje (composer inestable / re-render continuo).
+2026-02-23T14:51:35Z event=message account=mati.jaiime lead=joaco.avilaa status=sent reason=Enviado en modo humano
+2026-02-23T14:54:28Z event=message account=mati.jaiime lead=mateo.suarezross status=sent reason=Enviado en modo humano

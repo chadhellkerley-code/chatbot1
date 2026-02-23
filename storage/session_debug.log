@@ -7204,3 +7204,360 @@ Call log:
 2026-02-22T18:39:44Z session_check_ok reason=auth_cookies url=chrome-error://chromewebdata/
 2026-02-22T18:59:50Z session_check_start username=matiid.life1 headless=True
 2026-02-22T19:00:17Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-22T23:42:41Z session_check_start username=matiid.life1 headless=True
+2026-02-22T23:42:52Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T00:30:07Z session_check_start username=matiid.life1 headless=True
+2026-02-23T00:30:26Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T01:25:08Z session_check_start username=matiid.life1 headless=True
+2026-02-23T01:25:19Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T01:41:51Z session_check_start username=matiid.life1 headless=True
+2026-02-23T01:42:02Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T01:58:10Z session_check_start username=matidiazlife headless=True
+2026-02-23T01:58:24Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T02:00:47Z session_check_start username=matiid.life1 headless=True
+2026-02-23T02:00:58Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T02:22:23Z session_check_start username=matiid.life1 headless=True
+2026-02-23T02:22:34Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T02:39:24Z session_check_start username=matiid.life1 headless=True
+2026-02-23T02:39:34Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T03:05:48Z session_check_start username=matiid.life1 headless=True
+2026-02-23T03:05:59Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T03:34:06Z session_check_start username=matiid.life1 headless=True
+2026-02-23T03:34:20Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T03:57:50Z session_check_start username=matiid.life1 headless=True
+2026-02-23T03:58:13Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T04:43:45Z session_check_start username=matiid.life1 headless=True
+2026-02-23T04:43:56Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T05:01:45Z session_check_start username=matiid.life1 headless=True
+2026-02-23T05:01:54Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T05:13:59Z session_check_start username=matidiazlife headless=True
+2026-02-23T05:14:08Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T05:16:33Z login_start username=matidiazlife headless=True
+2026-02-23T05:16:35Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=264697
+2026-02-23T05:16:41Z session_check_ok reason=auth_cookies
+2026-02-23T05:20:33Z login_start username=matidiazlife headless=True
+2026-02-23T05:20:34Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=289930
+2026-02-23T05:20:41Z session_check_ok reason=auth_cookies
+2026-02-23T05:23:41Z login_start username=matidiazlife headless=True
+2026-02-23T05:23:43Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=59481
+2026-02-23T05:23:49Z session_check_ok reason=auth_cookies
+2026-02-23T05:26:46Z login_start username=matidiazlife headless=True
+2026-02-23T05:26:47Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=22906
+2026-02-23T05:26:58Z session_check_ok reason=auth_cookies
+2026-02-23T05:29:33Z login_start username=matidiazlife headless=True
+2026-02-23T05:29:34Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=9001
+2026-02-23T05:29:40Z session_check_ok reason=auth_cookies
+2026-02-23T05:33:49Z login_start username=matidiazlife headless=True
+2026-02-23T05:33:51Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=36408
+2026-02-23T05:33:57Z session_check_ok reason=auth_cookies
+2026-02-23T05:36:13Z login_start username=matidiazlife headless=True
+2026-02-23T05:36:14Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=59329
+2026-02-23T05:36:20Z session_check_ok reason=auth_cookies
+2026-02-23T05:38:18Z login_start username=matidiazlife headless=True
+2026-02-23T05:38:20Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=82158
+2026-02-23T05:38:26Z session_check_ok reason=auth_cookies
+2026-02-23T05:42:36Z login_start username=matidiazlife headless=True
+2026-02-23T05:42:47Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=43094
+2026-02-23T05:42:59Z session_check_ok reason=auth_cookies
+2026-02-23T05:45:41Z login_start username=matidiazlife headless=True
+2026-02-23T05:45:44Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=20807
+2026-02-23T05:45:52Z session_check_ok reason=auth_cookies
+2026-02-23T05:50:01Z login_start username=matidiazlife headless=True
+2026-02-23T05:50:05Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=42402
+2026-02-23T05:50:17Z session_check_ok reason=auth_cookies
+2026-02-23T05:53:03Z login_start username=matidiazlife headless=True
+2026-02-23T05:53:06Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=24136
+2026-02-23T05:53:18Z session_check_ok reason=auth_cookies
+2026-02-23T05:56:36Z login_start username=matidiazlife headless=True
+2026-02-23T05:56:39Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=9129
+2026-02-23T05:56:53Z session_check_ok reason=auth_cookies
+2026-02-23T06:01:27Z login_start username=matidiazlife headless=True
+2026-02-23T06:01:30Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=35387
+2026-02-23T06:01:43Z session_check_ok reason=auth_cookies
+2026-02-23T06:04:55Z login_start username=matidiazlife headless=True
+2026-02-23T06:04:58Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=35387
+2026-02-23T06:05:10Z session_check_ok reason=auth_cookies
+2026-02-23T06:08:07Z login_start username=matidiazlife headless=True
+2026-02-23T06:08:11Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=35387
+2026-02-23T06:08:31Z session_check_ok reason=auth_cookies
+2026-02-23T06:13:30Z login_start username=matidiazlife headless=True
+2026-02-23T06:13:34Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10454
+2026-02-23T06:14:26Z session_check_ok reason=auth_cookies
+2026-02-23T06:18:38Z login_start username=matidiazlife headless=True
+2026-02-23T06:18:43Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=26429
+2026-02-23T06:18:56Z session_check_ok reason=auth_cookies
+2026-02-23T06:22:45Z login_start username=matidiazlife headless=True
+2026-02-23T06:22:51Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10326
+2026-02-23T06:23:16Z session_check_ok reason=auth_cookies
+2026-02-23T06:28:17Z login_start username=matidiazlife headless=True
+2026-02-23T06:28:22Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=34527
+2026-02-23T06:28:43Z session_check_ok reason=auth_cookies
+2026-02-23T06:33:01Z login_start username=matidiazlife headless=True
+2026-02-23T06:33:06Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=19116
+2026-02-23T06:33:36Z session_check_ok reason=auth_cookies
+2026-02-23T06:40:01Z login_start username=matidiazlife headless=True
+2026-02-23T06:40:10Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=19116
+2026-02-23T06:40:35Z session_check_ok reason=auth_cookies
+2026-02-23T06:44:18Z login_start username=matidiazlife headless=True
+2026-02-23T06:44:24Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=24921
+2026-02-23T06:44:41Z session_check_ok reason=auth_cookies
+2026-02-23T06:49:52Z login_start username=matidiazlife headless=True
+2026-02-23T06:50:03Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=16921
+2026-02-23T06:50:33Z session_check_ok reason=auth_cookies
+2026-02-23T06:55:39Z login_start username=matidiazlife headless=True
+2026-02-23T06:55:44Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=20968
+2026-02-23T06:56:23Z session_check_ok reason=auth_cookies
+2026-02-23T07:01:07Z login_start username=matidiazlife headless=True
+2026-02-23T07:01:12Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10453
+2026-02-23T07:01:39Z session_check_ok reason=auth_cookies
+2026-02-23T07:05:43Z login_start username=matidiazlife headless=True
+2026-02-23T07:05:50Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=21807
+2026-02-23T07:06:32Z session_check_ok reason=auth_cookies
+2026-02-23T07:11:29Z login_start username=matidiazlife headless=True
+2026-02-23T07:11:34Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=21807
+2026-02-23T07:11:54Z session_check_ok reason=auth_cookies
+2026-02-23T07:17:14Z login_start username=matidiazlife headless=True
+2026-02-23T07:17:19Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=71010
+2026-02-23T07:17:58Z session_check_ok reason=auth_cookies
+2026-02-23T07:21:15Z login_start username=matidiazlife headless=True
+2026-02-23T07:21:19Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=11192
+2026-02-23T07:22:02Z session_check_ok reason=auth_cookies
+2026-02-23T07:25:18Z login_start username=matidiazlife headless=True
+2026-02-23T07:25:24Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=11192
+2026-02-23T07:26:07Z session_check_ok reason=auth_cookies
+2026-02-23T07:30:56Z login_start username=matidiazlife headless=True
+2026-02-23T07:30:58Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=11190
+2026-02-23T07:31:04Z session_check_ok reason=auth_cookies
+2026-02-23T07:35:35Z login_start username=matidiazlife headless=True
+2026-02-23T07:35:37Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=36211
+2026-02-23T07:35:45Z session_check_ok reason=auth_cookies
+2026-02-23T07:39:50Z login_start username=matidiazlife headless=True
+2026-02-23T07:39:52Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=16361
+2026-02-23T07:39:58Z session_check_ok reason=auth_cookies
+2026-02-23T07:43:36Z login_start username=matidiazlife headless=True
+2026-02-23T07:43:38Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=41808
+2026-02-23T07:43:44Z session_check_ok reason=auth_cookies
+2026-02-23T07:47:18Z login_start username=matidiazlife headless=True
+2026-02-23T07:47:19Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=12482
+2026-02-23T07:47:25Z session_check_ok reason=auth_cookies
+2026-02-23T07:50:14Z login_start username=matidiazlife headless=True
+2026-02-23T07:50:16Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10454
+2026-02-23T07:50:22Z session_check_ok reason=auth_cookies
+2026-02-23T07:54:43Z login_start username=matidiazlife headless=True
+2026-02-23T07:54:44Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10454
+2026-02-23T07:54:50Z session_check_ok reason=auth_cookies
+2026-02-23T07:59:24Z login_start username=matidiazlife headless=True
+2026-02-23T07:59:26Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10454
+2026-02-23T07:59:31Z session_check_ok reason=auth_cookies
+2026-02-23T08:02:42Z login_start username=matidiazlife headless=True
+2026-02-23T08:02:43Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=65585
+2026-02-23T08:02:49Z session_check_ok reason=auth_cookies
+2026-02-23T08:05:29Z login_start username=matidiazlife headless=True
+2026-02-23T08:05:31Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10455
+2026-02-23T08:05:36Z session_check_ok reason=auth_cookies
+2026-02-23T08:08:13Z login_start username=matidiazlife headless=True
+2026-02-23T08:08:14Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=39039
+2026-02-23T08:08:21Z session_check_ok reason=auth_cookies
+2026-02-23T08:12:34Z login_start username=matidiazlife headless=True
+2026-02-23T08:12:35Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10328
+2026-02-23T08:12:41Z session_check_ok reason=auth_cookies
+2026-02-23T08:15:02Z login_start username=matidiazlife headless=True
+2026-02-23T08:15:03Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=52321
+2026-02-23T08:15:09Z session_check_ok reason=auth_cookies
+2026-02-23T08:18:18Z login_start username=matidiazlife headless=True
+2026-02-23T08:18:19Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matidiazlife\storage_state.json size=10615
+2026-02-23T08:18:25Z session_check_ok reason=auth_cookies
+2026-02-23T12:46:57Z session_check_start username=mati.diazlife3 headless=True
+2026-02-23T12:47:18Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T12:47:32Z session_check_start username=maatmdlife1 headless=True
+2026-02-23T12:47:52Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T12:47:53Z session_check_start username=maatmdlife headless=True
+2026-02-23T12:48:05Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T12:53:15Z login_start username=mati.diazlife3 headless=True
+2026-02-23T12:53:16Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=6111
+2026-02-23T12:53:25Z session_check_ok reason=auth_cookies
+2026-02-23T12:57:00Z login_start username=mati.diazlife3 headless=True
+2026-02-23T12:57:02Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=5630
+2026-02-23T12:57:11Z session_check_ok reason=auth_cookies
+2026-02-23T12:59:30Z login_start username=mati.diazlife3 headless=True
+2026-02-23T12:59:31Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=5630
+2026-02-23T12:59:41Z session_check_ok reason=auth_cookies
+2026-02-23T13:03:01Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:03:03Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=61790
+2026-02-23T13:03:11Z session_check_ok reason=auth_cookies
+2026-02-23T13:06:40Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:06:42Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=5630
+2026-02-23T13:06:55Z session_check_ok reason=auth_cookies
+2026-02-23T13:10:50Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:10:52Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=19966
+2026-02-23T13:11:03Z session_check_ok reason=auth_cookies
+2026-02-23T13:13:38Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:13:40Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=19966
+2026-02-23T13:13:49Z session_check_ok reason=auth_cookies
+2026-02-23T13:16:07Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:16:13Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=72720
+2026-02-23T13:16:32Z session_check_ok reason=auth_cookies
+2026-02-23T13:19:22Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:19:24Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=5629
+2026-02-23T13:19:35Z session_check_ok reason=auth_cookies
+2026-02-23T13:22:36Z login_start username=mati.diazlife3 headless=True
+2026-02-23T13:22:38Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.diazlife3\storage_state.json size=5629
+2026-02-23T13:22:46Z session_check_ok reason=auth_cookies
+2026-02-23T13:27:01Z login_start username=maatmdlife headless=True
+2026-02-23T13:27:02Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=38056
+2026-02-23T13:27:08Z session_check_ok reason=auth_cookies
+2026-02-23T13:29:51Z login_start username=maatmdlife headless=True
+2026-02-23T13:29:53Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=64411
+2026-02-23T13:29:59Z session_check_ok reason=auth_cookies
+2026-02-23T13:33:59Z login_start username=maatmdlife headless=True
+2026-02-23T13:34:00Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=26914
+2026-02-23T13:34:07Z session_check_ok reason=auth_cookies
+2026-02-23T13:38:00Z login_start username=maatmdlife headless=True
+2026-02-23T13:38:01Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=24973
+2026-02-23T13:38:07Z session_check_ok reason=auth_cookies
+2026-02-23T13:42:40Z login_start username=maatmdlife headless=True
+2026-02-23T13:42:41Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=43025
+2026-02-23T13:42:47Z session_check_ok reason=auth_cookies
+2026-02-23T13:46:06Z login_start username=maatmdlife headless=True
+2026-02-23T13:46:08Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=17800
+2026-02-23T13:46:17Z session_check_ok reason=auth_cookies
+2026-02-23T13:49:50Z login_start username=maatmdlife headless=True
+2026-02-23T13:49:53Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=35134
+2026-02-23T13:50:01Z session_check_ok reason=auth_cookies
+2026-02-23T13:53:09Z login_start username=maatmdlife headless=True
+2026-02-23T13:53:11Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=14863
+2026-02-23T13:53:18Z session_check_ok reason=auth_cookies
+2026-02-23T13:56:31Z login_start username=maatmdlife headless=True
+2026-02-23T13:56:33Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=14864
+2026-02-23T13:56:39Z session_check_ok reason=auth_cookies
+2026-02-23T13:58:39Z login_start username=maatmdlife headless=True
+2026-02-23T13:58:40Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife\storage_state.json size=14256
+2026-02-23T13:58:46Z session_check_ok reason=auth_cookies
+2026-02-23T14:03:10Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:03:12Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=83022
+2026-02-23T14:03:17Z session_check_ok reason=auth_cookies
+2026-02-23T14:05:51Z session_check_start username=carls.ortga headless=True
+2026-02-23T14:06:04Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T14:06:05Z session_check_start username=cam.martti headless=True
+2026-02-23T14:06:17Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T14:06:18Z session_check_start username=martinkerley headless=True
+2026-02-23T14:06:32Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T14:06:33Z session_check_start username=mateoo.zennit headless=True
+2026-02-23T14:06:45Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T14:06:46Z session_check_start username=matii.dolss headless=True
+2026-02-23T14:07:05Z session_check_ok reason=auth_cookies url=https://www.instagram.com/accounts/suspended/?next=https%3A%2F%2Fwww.instagram.com%2Fdirect%2Finbox%2F%3F__coig_ufac%3D1
+2026-02-23T14:07:06Z session_check_start username=Martin.Andess headless=True
+2026-02-23T14:07:24Z session_check_ok reason=auth_cookies url=https://www.instagram.com/accounts/suspended/?next=https%3A%2F%2Fwww.instagram.com%2Fdirect%2Finbox%2F%3F__coig_ufac%3D1
+2026-02-23T14:07:25Z session_check_start username=mati.jaiime headless=True
+2026-02-23T14:07:36Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T14:07:47Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:07:49Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=114266
+2026-02-23T14:07:55Z session_check_ok reason=auth_cookies
+2026-02-23T14:11:07Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:11:09Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=53476
+2026-02-23T14:11:15Z session_check_ok reason=auth_cookies
+2026-02-23T14:12:12Z login_start username=cam.martti headless=True
+2026-02-23T14:12:14Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\cam.martti\storage_state.json size=19755
+2026-02-23T14:12:24Z session_check_ok reason=auth_cookies
+2026-02-23T14:12:52Z login_start username=martinkerley headless=True
+2026-02-23T14:12:55Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\martinkerley\storage_state.json size=10651
+2026-02-23T14:12:59Z login_start username=mateoo.zennit headless=True
+2026-02-23T14:13:02Z login_start username=mati.jaiime headless=True
+2026-02-23T14:13:06Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mateoo.zennit\storage_state.json size=8494
+2026-02-23T14:13:10Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.jaiime\storage_state.json size=13223
+2026-02-23T14:13:15Z login_start username=carls.ortga headless=True
+2026-02-23T14:13:22Z login_start username=matii.dolss headless=True
+2026-02-23T14:13:23Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\carls.ortga\storage_state.json size=20402
+2026-02-23T14:13:32Z login_start username=Martin.Andess headless=True
+2026-02-23T14:13:38Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\Martin.Andess\storage_state.json size=39235
+2026-02-23T14:13:46Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matii.dolss\storage_state.json size=11327
+2026-02-23T14:14:04Z session_check_ok reason=auth_cookies
+2026-02-23T14:14:27Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:14:40Z session_check_ok reason=auth_cookies
+2026-02-23T14:15:17Z session_check_ok reason=auth_cookies
+2026-02-23T14:16:25Z session_check_ok reason=auth_cookies
+2026-02-23T14:16:55Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=15077
+2026-02-23T14:19:00Z session_check_ok reason=auth_cookies
+2026-02-23T14:20:38Z login_start username=mateoo.zennit headless=True
+2026-02-23T14:20:41Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mateoo.zennit\storage_state.json size=8494
+2026-02-23T14:20:51Z session_check_ok reason=auth_cookies
+2026-02-23T14:20:55Z login_start username=matii.dolss headless=True
+2026-02-23T14:21:02Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matii.dolss\storage_state.json size=11327
+2026-02-23T14:21:25Z session_check_ok reason=auth_cookies
+2026-02-23T14:21:29Z login_start username=cam.martti headless=True
+2026-02-23T14:21:37Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\cam.martti\storage_state.json size=11902
+2026-02-23T14:21:51Z login_start username=carls.ortga headless=True
+2026-02-23T14:21:57Z session_check_ok reason=auth_cookies
+2026-02-23T14:22:00Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\carls.ortga\storage_state.json size=11249
+2026-02-23T14:22:28Z login_start username=Martin.Andess headless=True
+2026-02-23T14:22:34Z login_start username=martinkerley headless=True
+2026-02-23T14:22:38Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\Martin.Andess\storage_state.json size=39235
+2026-02-23T14:22:47Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:22:51Z session_check_ok reason=auth_cookies
+2026-02-23T14:23:03Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\martinkerley\storage_state.json size=10651
+2026-02-23T14:23:11Z login_start username=mati.jaiime headless=True
+2026-02-23T14:23:41Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=20883
+2026-02-23T14:24:49Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.jaiime\storage_state.json size=10692
+2026-02-23T14:25:19Z session_check_ok reason=auth_cookies
+2026-02-23T14:26:25Z session_check_ok reason=auth_cookies
+2026-02-23T14:27:50Z login_start username=matii.dolss headless=True
+2026-02-23T14:27:53Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\matii.dolss\storage_state.json size=11327
+2026-02-23T14:27:59Z login_start username=martinkerley headless=True
+2026-02-23T14:28:04Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\martinkerley\storage_state.json size=10651
+2026-02-23T14:28:04Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:28:09Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=20883
+2026-02-23T14:28:10Z login_start username=cam.martti headless=True
+2026-02-23T14:28:12Z session_check_ok reason=auth_cookies
+2026-02-23T14:28:18Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\cam.martti\storage_state.json size=12217
+2026-02-23T14:28:24Z login_start username=mateoo.zennit headless=True
+2026-02-23T14:28:28Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mateoo.zennit\storage_state.json size=8522
+2026-02-23T14:28:42Z login_start username=carls.ortga headless=True
+2026-02-23T14:28:51Z session_check_ok reason=auth_cookies
+2026-02-23T14:28:56Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\carls.ortga\storage_state.json size=11249
+2026-02-23T14:29:01Z login_start username=Martin.Andess headless=True
+2026-02-23T14:29:19Z login_start username=mati.jaiime headless=True
+2026-02-23T14:29:29Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\Martin.Andess\storage_state.json size=39235
+2026-02-23T14:29:42Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.jaiime\storage_state.json size=11207
+2026-02-23T14:30:18Z session_check_ok reason=auth_cookies
+2026-02-23T14:30:58Z session_check_ok reason=auth_cookies
+2026-02-23T14:33:44Z login_start username=martinkerley headless=True
+2026-02-23T14:33:47Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\martinkerley\storage_state.json size=10651
+2026-02-23T14:33:58Z session_check_ok reason=auth_cookies
+2026-02-23T14:34:37Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:34:40Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=28161
+2026-02-23T14:34:47Z session_check_ok reason=auth_cookies
+2026-02-23T14:37:05Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:37:07Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=15076
+2026-02-23T14:37:14Z session_check_ok reason=auth_cookies
+2026-02-23T14:37:27Z login_start username=carls.ortga headless=True
+2026-02-23T14:37:30Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\carls.ortga\storage_state.json size=11249
+2026-02-23T14:37:50Z session_check_ok reason=auth_cookies
+2026-02-23T14:41:50Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:41:52Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=41382
+2026-02-23T14:42:03Z session_check_ok reason=auth_cookies
+2026-02-23T14:45:34Z login_start username=maatmdlife1 headless=True
+2026-02-23T14:45:36Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\maatmdlife1\storage_state.json size=22907
+2026-02-23T14:45:52Z session_check_ok reason=auth_cookies
+2026-02-23T14:50:31Z login_start username=mati.jaiime headless=True
+2026-02-23T14:50:33Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.jaiime\storage_state.json size=11207
+2026-02-23T14:50:50Z session_check_ok reason=auth_cookies
+2026-02-23T14:53:33Z login_start username=mati.jaiime headless=True
+2026-02-23T14:53:37Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\mati.jaiime\storage_state.json size=6875
+2026-02-23T14:53:50Z session_check_ok reason=auth_cookies
+2026-02-23T14:56:13Z login_start username=cam.martti headless=True
+2026-02-23T14:56:49Z session_loaded path=C:\Users\PC\Desktop\chatbot\profiles\cam.martti\storage_state.json size=12217
+2026-02-23T14:57:04Z session_check_ok reason=auth_cookies
+2026-02-23T15:00:10Z session_check_start username=matidiazlife headless=True
+2026-02-23T15:00:19Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T15:33:59Z session_check_start username=matidiazlife headless=True
+2026-02-23T15:34:06Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T15:58:34Z session_check_start username=matidiazlife headless=True
+2026-02-23T15:58:44Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T16:42:08Z session_check_start username=matidiazlife headless=True
+2026-02-23T16:42:22Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T17:37:15Z session_check_start username=matidiazlife headless=True
+2026-02-23T17:37:32Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T17:42:09Z session_check_start username=matidiazlife headless=True
+2026-02-23T17:42:19Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/
+2026-02-23T18:02:26Z session_check_start username=matidiazlife headless=True
+2026-02-23T18:02:37Z session_check_ok reason=auth_cookies url=https://www.instagram.com/direct/inbox/

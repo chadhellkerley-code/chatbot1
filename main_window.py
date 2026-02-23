@@ -20,6 +20,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFrame,
@@ -139,6 +140,10 @@ _LEADS_USERNAMES_LOADED_RE = re.compile(
 _LEADS_EXPORT_ALIAS_RE = re.compile(
     r"leads guardados en alias\s+['\"](?P<alias>[^'\"]+)['\"]",
     re.IGNORECASE,
+)
+_SUMMARY_TIME_RE = re.compile(r"\b\d{1,2}:\d{2}:\d{2}\b")
+_SUMMARY_PER_ACCOUNT_RE = re.compile(
+    r"@?(?P<user>[A-Za-z0-9._-]+)\s*(?:->|=>|:)\s*(?P<time>\d{1,2}:\d{2}:\d{2})"
 )
 
 
@@ -344,6 +349,125 @@ class EngineStateManager(QObject):
         self.event_handled.emit(event_type, self.current_state.value)
 
 
+class ClickableMetricCard(QFrame):
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
+class AutoResponderSummaryDialog(QDialog):
+    def __init__(self, summary: dict[str, Any], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("AutoResponderSummaryDialog")
+        self.setWindowTitle("Resumen final — Auto-Responder")
+        self.setModal(True)
+        self.setMinimumWidth(640)
+        self.setFont(QFont("Segoe UI Emoji", 10))
+        self.setStyleSheet(
+            """
+            QDialog#AutoResponderSummaryDialog {
+                background-color: #0b1220;
+                color: #e2e8f0;
+                border: 1px solid #1e293b;
+                border-radius: 12px;
+            }
+            QLabel#AutoResponderSummaryTitle {
+                font-size: 21px;
+                font-weight: 700;
+                color: #f8fafc;
+            }
+            QLabel#AutoResponderSummaryBody {
+                font-size: 14px;
+                color: #cbd5e1;
+            }
+            QPlainTextEdit#AutoResponderSummaryAccounts {
+                background-color: #111827;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                color: #e2e8f0;
+                padding: 8px;
+            }
+            QPushButton#AutoResponderSummaryAccept {
+                background-color: #2563eb;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 18px;
+                font-weight: 700;
+            }
+            QPushButton#AutoResponderSummaryAccept:hover {
+                background-color: #1d4ed8;
+            }
+            """
+        )
+
+        def _text_or_dash(value: Any) -> str:
+            text = str(value).strip() if value is not None else ""
+            return text if text else "—"
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        title = QLabel("✅ Resumen final — Auto-Responder")
+        title.setObjectName("AutoResponderSummaryTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        alias_line = QLabel(f"Alias: {_text_or_dash(summary.get('alias'))}")
+        alias_line.setObjectName("AutoResponderSummaryBody")
+
+        totals_lines = [
+            f"Cuentas usadas: {_text_or_dash(summary.get('accounts_used'))}",
+            f"Respuestas intentadas: {_text_or_dash(summary.get('replies_attempted'))}",
+            f"Respuestas enviadas: {_text_or_dash(summary.get('replies_sent'))}",
+            f"Follow-up intentados: {_text_or_dash(summary.get('followups_attempted'))}",
+            f"Follow-up enviados: {_text_or_dash(summary.get('followups_sent'))}",
+            f"Errores: {_text_or_dash(summary.get('errors'))}",
+        ]
+        totals_label = QLabel("\n".join(totals_lines))
+        totals_label.setObjectName("AutoResponderSummaryBody")
+        totals_label.setWordWrap(True)
+
+        times_lines = [f"Tiempo total: {_text_or_dash(summary.get('total_time'))}", "Tiempo por cuenta:"]
+        times_label = QLabel("\n".join(times_lines))
+        times_label.setObjectName("AutoResponderSummaryBody")
+        times_label.setWordWrap(True)
+
+        per_account = summary.get("per_account_time") or []
+        per_account_lines: list[str] = []
+        if isinstance(per_account, list):
+            for row in per_account:
+                if not isinstance(row, (tuple, list)) or len(row) < 2:
+                    continue
+                user_text = str(row[0] or "").strip()
+                user_text = user_text if user_text.startswith("@") else f"@{user_text}" if user_text else "@—"
+                per_account_lines.append(f"{user_text} → {str(row[1] or '—').strip() or '—'}")
+        if not per_account_lines:
+            per_account_lines = ["—"]
+
+        per_account_box = QPlainTextEdit()
+        per_account_box.setObjectName("AutoResponderSummaryAccounts")
+        per_account_box.setReadOnly(True)
+        per_account_box.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        per_account_box.setMaximumBlockCount(800)
+        per_account_box.setMinimumHeight(140)
+        per_account_box.setPlainText("\n".join(per_account_lines))
+
+        accept_button = QPushButton("Aceptar")
+        accept_button.setObjectName("AutoResponderSummaryAccept")
+        accept_button.clicked.connect(self.accept)
+
+        layout.addWidget(title)
+        layout.addWidget(alias_line)
+        layout.addWidget(totals_label)
+        layout.addWidget(times_label)
+        layout.addWidget(per_account_box)
+        layout.addWidget(accept_button, 0, Qt.AlignCenter)
+
+
 class MainWindow(QMainWindow):
     backend_done = Signal(int)
     backend_failed = Signal(str)
@@ -448,6 +572,7 @@ class MainWindow(QMainWindow):
         self._leads_completion_announced = False
 
         self._metric_values: dict[str, QLabel] = {}
+        self._booked_today_rows: list[dict[str, Any]] = []
         self._menu_option_buttons: list[QPushButton] = []
         self._sidebar_buttons: dict[str, QPushButton] = {}
         self._active_sidebar_key = "dashboard"
@@ -485,6 +610,20 @@ class MainWindow(QMainWindow):
         self._send_setup_use_saved_templates = False
         self._auto_fill_active = False
         self._auto_fill_queue: list[str] = []
+        self._autoresponder_activate_option_value = ""
+        self._autoresponder_setup_auto_fill_active = False
+        self._autoresponder_setup_queue: list[str] = []
+        self._autoresponder_selected_accounts: list[str] = []
+        self._autoresponder_selected_hours: set[int] = {4, 8, 12, 24}
+        self._autoresponder_followup_only = False
+        self._autoresponder_target_index_by_key: dict[str, int] = {}
+        self._autoresponder_loading_overlay_active = False
+        self._autoresponder_summary_expected = False
+        self._autoresponder_summary_capture_active = False
+        self._autoresponder_summary_modal_shown = False
+        self._autoresponder_summary_lines: deque[str] = deque(maxlen=260)
+        self._autoresponder_last_summary: dict[str, Any] = {}
+        self._backend_recent_lines: deque[str] = deque(maxlen=420)
         self._engine_state_manager: Optional[EngineStateManager] = None
         if USE_ENGINE_STATE_MANAGER:
             self._engine_state_manager = EngineStateManager(self)
@@ -628,13 +767,23 @@ class MainWindow(QMainWindow):
         spinner.setRange(0, 0)
         spinner.setTextVisible(False)
         spinner.setFixedWidth(190)
+        self._shared_loading_spinner = spinner
 
         label = QLabel("Cargando...")
         label.setObjectName("SendLoadingLabel")
         label.setAlignment(Qt.AlignCenter)
+        self._shared_loading_title_label = label
+
+        detail_label = QLabel("")
+        detail_label.setObjectName("MutedText")
+        detail_label.setAlignment(Qt.AlignCenter)
+        detail_label.setWordWrap(True)
+        detail_label.hide()
+        self._shared_loading_detail_label = detail_label
 
         card_layout.addWidget(spinner, 0, Qt.AlignCenter)
         card_layout.addWidget(label, 0, Qt.AlignCenter)
+        card_layout.addWidget(detail_label, 0, Qt.AlignCenter)
         center_layout.addWidget(card, 0, Qt.AlignCenter)
 
         overlay_layout.addStretch(1)
@@ -649,15 +798,57 @@ class MainWindow(QMainWindow):
         self._send_loading_overlay.setGeometry(viewport.rect())
 
     def _show_send_loading_overlay(self) -> None:
+        self._show_shared_loading_overlay(
+            title="Cargando...",
+            detail_text="",
+            autoresponder_mode=False,
+        )
+
+    def _show_autoresponder_loading_overlay(self) -> None:
+        self._show_shared_loading_overlay(
+            title="🤖 Iniciando Auto Responder…",
+            detail_text=(
+                "Verificando sesiones\n"
+                "Preparando threads\n"
+                "Inicializando motor OpenAI"
+            ),
+            autoresponder_mode=True,
+        )
+
+    def _show_shared_loading_overlay(
+        self,
+        *,
+        title: str,
+        detail_text: str,
+        autoresponder_mode: bool,
+    ) -> None:
         if not hasattr(self, "_send_loading_overlay"):
             return
+        self._autoresponder_loading_overlay_active = bool(autoresponder_mode)
+        if hasattr(self, "_shared_loading_title_label"):
+            self._shared_loading_title_label.setText(str(title or "").strip() or "Cargando...")
+        if hasattr(self, "_shared_loading_detail_label"):
+            clean_detail = str(detail_text or "").strip()
+            self._shared_loading_detail_label.setText(clean_detail)
+            self._shared_loading_detail_label.setVisible(bool(clean_detail))
         self._sync_send_loading_overlay_geometry()
         self._send_loading_overlay.raise_()
         self._send_loading_overlay.show()
 
+    def _hide_autoresponder_loading_overlay(self) -> None:
+        if not self._autoresponder_loading_overlay_active:
+            return
+        self._hide_send_loading_overlay()
+
     def _hide_send_loading_overlay(self) -> None:
         if not hasattr(self, "_send_loading_overlay"):
             return
+        self._autoresponder_loading_overlay_active = False
+        if hasattr(self, "_shared_loading_title_label"):
+            self._shared_loading_title_label.setText("Cargando...")
+        if hasattr(self, "_shared_loading_detail_label"):
+            self._shared_loading_detail_label.setText("")
+            self._shared_loading_detail_label.hide()
         self._send_loading_overlay.hide()
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
@@ -1063,6 +1254,8 @@ class MainWindow(QMainWindow):
             self._auto_fill_queue.clear()
             self._set_send_setup_visible(False)
             self._hide_send_loading_overlay()
+        if key != "autoresponder":
+            self._reset_autoresponder_setup_mode()
         if key != "leads":
             self._set_leads_live_card_visible(False)
         self._set_menu_activity_visible(False)
@@ -1182,7 +1375,12 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_metric_card(self, key: str, label_text: str) -> QWidget:
-        card = QFrame()
+        if key == "booked_today":
+            card = ClickableMetricCard()
+            card.setCursor(Qt.PointingHandCursor)
+            card.clicked.connect(self._show_booked_today_dialog)
+        else:
+            card = QFrame()
         card.setObjectName("MetricCard")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1221,6 +1419,10 @@ class MainWindow(QMainWindow):
         self._send_setup_card = self._build_send_setup_panel()
         self._send_setup_card.setVisible(False)
         layout.addWidget(self._send_setup_card, 0)
+
+        self._autoresponder_setup_card = self._build_autoresponder_setup_panel()
+        self._autoresponder_setup_card.setVisible(False)
+        layout.addWidget(self._autoresponder_setup_card, 0)
 
         self._leads_live_card = QFrame()
         self._leads_live_card.setObjectName("LeadPromptCard")
@@ -1449,10 +1651,28 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_send_setup_card"):
             return
         self._send_setup_card.setVisible(visible)
-        if hasattr(self, "_menu_options_container"):
-            self._menu_options_container.setVisible(not visible)
+        self._sync_setup_panels_visibility()
         if visible:
             self._refresh_send_setup_sources()
+
+    def _set_autoresponder_setup_visible(self, visible: bool) -> None:
+        if not hasattr(self, "_autoresponder_setup_card"):
+            return
+        self._autoresponder_setup_card.setVisible(visible)
+        self._sync_setup_panels_visibility()
+        if visible:
+            self._refresh_autoresponder_setup_sources()
+            self._refresh_autoresponder_selected_accounts_view()
+            self._refresh_autoresponder_hours_summary()
+
+    def _sync_setup_panels_visibility(self) -> None:
+        if not hasattr(self, "_menu_options_container"):
+            return
+        send_visible = bool(hasattr(self, "_send_setup_card") and self._send_setup_card.isVisible())
+        autoresponder_visible = bool(
+            hasattr(self, "_autoresponder_setup_card") and self._autoresponder_setup_card.isVisible()
+        )
+        self._menu_options_container.setVisible(not (send_visible or autoresponder_visible))
 
     def _load_leads_aliases(self) -> list[str]:
         aliases: list[str] = []
@@ -1502,7 +1722,7 @@ class MainWindow(QMainWindow):
             items.append({"name": name, "text": text})
         return items
 
-    def _load_active_accounts_aliases(self) -> list[str]:
+    def _load_active_account_records(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         try:
             module = import_module("accounts")
@@ -1514,10 +1734,27 @@ class MainWindow(QMainWindow):
         except Exception:
             records = []
 
+        if not records:
+            payload = self._read_json(self._root_dir / "data" / "accounts.json", [])
+            if isinstance(payload, list):
+                records = [item for item in payload if isinstance(item, dict)]
+
+        active_records: list[dict[str, Any]] = []
+        for record in records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            if not username:
+                continue
+            if not bool(record.get("active", True)):
+                continue
+            active_records.append(record)
+        return active_records
+
+    def _load_active_accounts_aliases(self) -> list[str]:
+        records = self._load_active_account_records()
+
         aliases = {
             str(record.get("alias") or "default").strip() or "default"
             for record in records
-            if bool(record.get("active", True))
         }
         if aliases:
             return sorted(aliases)
@@ -1900,6 +2137,692 @@ class MainWindow(QMainWindow):
             self._submit_current_input("")
         self._exit_send_config_mode()
         self._set_page(self.PAGE_DASHBOARD)
+
+    def _build_autoresponder_setup_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("SendSetupCard")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        title = QLabel("Auto responder con OpenAI")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        self._autoresponder_setup_message_label = QLabel(
+            "Completa la configuración y presiona ▶ Activar Auto Responder."
+        )
+        self._autoresponder_setup_message_label.setObjectName("MutedText")
+        self._autoresponder_setup_message_label.setWordWrap(True)
+        layout.addWidget(self._autoresponder_setup_message_label)
+
+        def _field_card(title_text: str, widget: QWidget) -> QFrame:
+            card = QFrame()
+            card.setObjectName("SendSetupFieldCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setSpacing(6)
+            label = QLabel(title_text)
+            label.setObjectName("MutedText")
+            card_layout.addWidget(label)
+            card_layout.addWidget(widget)
+            return card
+
+        account_wrap = QWidget()
+        account_layout = QVBoxLayout(account_wrap)
+        account_layout.setContentsMargins(0, 0, 0, 0)
+        account_layout.setSpacing(6)
+
+        account_pick_row = QHBoxLayout()
+        account_pick_row.setContentsMargins(0, 0, 0, 0)
+        account_pick_row.setSpacing(8)
+        self._autoresponder_target_combo = QComboBox()
+        self._autoresponder_target_combo.setObjectName("SendSetupCombo")
+        self._autoresponder_target_combo.setEditable(False)
+        account_pick_row.addWidget(self._autoresponder_target_combo, 1)
+
+        add_target_button = QPushButton("Agregar")
+        add_target_button.setObjectName("SecondaryButton")
+        add_target_button.clicked.connect(self._add_selected_autoresponder_target)
+        account_pick_row.addWidget(add_target_button)
+
+        clear_target_button = QPushButton("Limpiar")
+        clear_target_button.setObjectName("SecondaryButton")
+        clear_target_button.clicked.connect(self._clear_autoresponder_selected_accounts)
+        account_pick_row.addWidget(clear_target_button)
+        account_layout.addLayout(account_pick_row)
+
+        selected_title = QLabel("Cuentas seleccionadas:")
+        selected_title.setObjectName("MutedText")
+        account_layout.addWidget(selected_title)
+
+        selected_accounts_widget = QWidget()
+        self._autoresponder_selected_accounts_layout = QGridLayout(selected_accounts_widget)
+        self._autoresponder_selected_accounts_layout.setContentsMargins(0, 0, 0, 0)
+        self._autoresponder_selected_accounts_layout.setHorizontalSpacing(6)
+        self._autoresponder_selected_accounts_layout.setVerticalSpacing(6)
+        account_layout.addWidget(selected_accounts_widget)
+
+        delay_grid = QGridLayout()
+        delay_grid.setContentsMargins(0, 0, 0, 0)
+        delay_grid.setHorizontalSpacing(10)
+        delay_grid.setVerticalSpacing(10)
+        self._autoresponder_delay_min_spin = QSpinBox()
+        self._autoresponder_delay_min_spin.setObjectName("SendSetupSpin")
+        self._autoresponder_delay_min_spin.setRange(1, 3600)
+        self._autoresponder_delay_min_spin.setValue(45)
+        self._autoresponder_delay_max_spin = QSpinBox()
+        self._autoresponder_delay_max_spin.setObjectName("SendSetupSpin")
+        self._autoresponder_delay_max_spin.setRange(1, 3600)
+        self._autoresponder_delay_max_spin.setValue(76)
+        delay_grid.addWidget(
+            _field_card("Delay mínimo (seg)", self._autoresponder_delay_min_spin),
+            0,
+            0,
+        )
+        delay_grid.addWidget(
+            _field_card("Delay máximo (seg)", self._autoresponder_delay_max_spin),
+            0,
+            1,
+        )
+
+        config_wrap = QWidget()
+        config_layout = QVBoxLayout(config_wrap)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(8)
+
+        config_top_grid = QGridLayout()
+        config_top_grid.setContentsMargins(0, 0, 0, 0)
+        config_top_grid.setHorizontalSpacing(10)
+        config_top_grid.setVerticalSpacing(10)
+
+        self._autoresponder_concurrency_combo = QComboBox()
+        self._autoresponder_concurrency_combo.setObjectName("SendSetupCombo")
+        self._autoresponder_concurrency_combo.setEditable(False)
+        self._autoresponder_concurrency_combo.setInsertPolicy(QComboBox.NoInsert)
+        config_top_grid.addWidget(
+            _field_card("Cuentas en simultáneo", self._autoresponder_concurrency_combo),
+            0,
+            0,
+        )
+
+        self._autoresponder_threads_spin = QSpinBox()
+        self._autoresponder_threads_spin.setObjectName("SendSetupSpin")
+        self._autoresponder_threads_spin.setRange(1, 500)
+        self._autoresponder_threads_spin.setValue(20)
+        config_top_grid.addWidget(
+            _field_card("Threads a leer", self._autoresponder_threads_spin),
+            0,
+            1,
+        )
+        config_layout.addLayout(config_top_grid)
+
+        hours_wrap = QWidget()
+        hours_layout = QVBoxLayout(hours_wrap)
+        hours_layout.setContentsMargins(0, 0, 0, 0)
+        hours_layout.setSpacing(8)
+
+        preset_row = QHBoxLayout()
+        preset_row.setContentsMargins(0, 0, 0, 0)
+        preset_row.setSpacing(8)
+        self._autoresponder_hour_buttons: dict[int, QPushButton] = {}
+        for hour in (4, 8, 12, 24, 48):
+            hour_button = QPushButton(str(hour))
+            hour_button.setObjectName("SecondaryButton")
+            hour_button.setCheckable(True)
+            hour_button.setChecked(hour in self._autoresponder_selected_hours)
+            hour_button.clicked.connect(
+                lambda checked=False, value=hour: self._toggle_autoresponder_hour(value, checked)
+            )
+            self._autoresponder_hour_buttons[hour] = hour_button
+            preset_row.addWidget(hour_button)
+        preset_row.addStretch(1)
+        hours_layout.addLayout(preset_row)
+
+        custom_row = QHBoxLayout()
+        custom_row.setContentsMargins(0, 0, 0, 0)
+        custom_row.setSpacing(8)
+        self._autoresponder_custom_hour_input = QLineEdit()
+        self._autoresponder_custom_hour_input.setObjectName("InputField")
+        self._autoresponder_custom_hour_input.setPlaceholderText("+ Personalizado")
+        self._autoresponder_custom_hour_input.returnPressed.connect(
+            self._add_autoresponder_custom_hour
+        )
+        custom_row.addWidget(self._autoresponder_custom_hour_input, 1)
+        custom_add_button = QPushButton("Agregar hora")
+        custom_add_button.setObjectName("SecondaryButton")
+        custom_add_button.clicked.connect(self._add_autoresponder_custom_hour)
+        custom_row.addWidget(custom_add_button)
+
+        custom_remove_button = QPushButton("Quitar hora")
+        custom_remove_button.setObjectName("SecondaryButton")
+        custom_remove_button.clicked.connect(self._remove_autoresponder_custom_hour)
+        custom_row.addWidget(custom_remove_button)
+
+        custom_clear_button = QPushButton("Limpiar horas")
+        custom_clear_button.setObjectName("SecondaryButton")
+        custom_clear_button.clicked.connect(self._clear_autoresponder_hours)
+        custom_row.addWidget(custom_clear_button)
+        hours_layout.addLayout(custom_row)
+
+        self._autoresponder_hours_summary_label = QLabel("")
+        self._autoresponder_hours_summary_label.setObjectName("MutedText")
+        self._autoresponder_hours_summary_label.setWordWrap(True)
+        hours_layout.addWidget(self._autoresponder_hours_summary_label)
+        config_layout.addWidget(_field_card("Horas de seguimiento", hours_wrap))
+
+        followup_toggle_wrap = QWidget()
+        followup_toggle_layout = QHBoxLayout(followup_toggle_wrap)
+        followup_toggle_layout.setContentsMargins(0, 0, 0, 0)
+        followup_toggle_layout.setSpacing(8)
+        self._autoresponder_followup_yes_button = QPushButton("Sí")
+        self._autoresponder_followup_yes_button.setObjectName("SecondaryButton")
+        self._autoresponder_followup_yes_button.setCheckable(True)
+        self._autoresponder_followup_yes_button.clicked.connect(
+            lambda checked=False: self._set_autoresponder_followup_only(True)
+        )
+        self._autoresponder_followup_no_button = QPushButton("No")
+        self._autoresponder_followup_no_button.setObjectName("SecondaryButton")
+        self._autoresponder_followup_no_button.setCheckable(True)
+        self._autoresponder_followup_no_button.clicked.connect(
+            lambda checked=False: self._set_autoresponder_followup_only(False)
+        )
+        self._autoresponder_followup_group = QButtonGroup(self)
+        self._autoresponder_followup_group.setExclusive(True)
+        self._autoresponder_followup_group.addButton(self._autoresponder_followup_yes_button)
+        self._autoresponder_followup_group.addButton(self._autoresponder_followup_no_button)
+        followup_toggle_layout.addWidget(self._autoresponder_followup_yes_button)
+        followup_toggle_layout.addWidget(self._autoresponder_followup_no_button)
+        followup_toggle_layout.addStretch(1)
+        self._autoresponder_followup_summary_label = QLabel("")
+        self._autoresponder_followup_summary_label.setObjectName("MutedText")
+        config_layout.addWidget(self._autoresponder_followup_summary_label)
+        self._set_autoresponder_followup_only(False)
+        config_layout.addWidget(_field_card("Solo seguimiento", followup_toggle_wrap))
+
+        layout.addWidget(_field_card("Cuenta", account_wrap))
+        layout.addLayout(delay_grid)
+        layout.addWidget(_field_card("Configuración", config_wrap))
+
+        self._autoresponder_setup_submit_button = QPushButton("▶ Activar Auto Responder")
+        self._autoresponder_setup_submit_button.setObjectName("PrimaryButton")
+        self._autoresponder_setup_submit_button.setMinimumHeight(44)
+        self._autoresponder_setup_submit_button.clicked.connect(self._submit_autoresponder_setup)
+        layout.addWidget(self._autoresponder_setup_submit_button)
+        return panel
+
+    def _refresh_autoresponder_setup_sources(self) -> None:
+        if not hasattr(self, "_autoresponder_target_combo"):
+            return
+        records = self._load_active_account_records()
+        alias_to_accounts: dict[str, list[str]] = {}
+        all_accounts: list[str] = []
+        for record in records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            if not username:
+                continue
+            alias = str(record.get("alias") or "default").strip() or "default"
+            alias_to_accounts.setdefault(alias, []).append(username)
+            all_accounts.append(username)
+
+        current_key = str(self._autoresponder_target_combo.currentData() or "").strip()
+        self._autoresponder_target_index_by_key.clear()
+        self._autoresponder_target_combo.blockSignals(True)
+        self._autoresponder_target_combo.clear()
+
+        next_index = 0
+        if all_accounts:
+            all_key = "all::ALL"
+            self._autoresponder_target_combo.addItem(
+                f"ALL (todas las cuentas activas: {len(all_accounts)})",
+                all_key,
+            )
+            self._autoresponder_target_index_by_key[all_key] = next_index
+            next_index += 1
+
+        for alias in sorted(alias_to_accounts):
+            users = sorted(set(alias_to_accounts.get(alias, [])))
+            key = f"alias::{alias}"
+            self._autoresponder_target_combo.addItem(
+                f"Alias: {alias} ({len(users)} cuentas)",
+                key,
+            )
+            self._autoresponder_target_index_by_key[key] = next_index
+            next_index += 1
+
+        for record in records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            if not username:
+                continue
+            alias = str(record.get("alias") or "default").strip() or "default"
+            key = f"account::{username}"
+            label = f"Cuenta: @{username} (alias: {alias})"
+            self._autoresponder_target_combo.addItem(label, key)
+            self._autoresponder_target_index_by_key[key] = next_index
+            next_index += 1
+
+        target_index = self._autoresponder_target_index_by_key.get(current_key, 0)
+        if self._autoresponder_target_combo.count() > 0:
+            self._autoresponder_target_combo.setCurrentIndex(max(0, target_index))
+        self._autoresponder_target_combo.blockSignals(False)
+
+        current_concurrency = 1
+        if hasattr(self, "_autoresponder_concurrency_combo"):
+            current_text = self._autoresponder_concurrency_combo.currentText().strip()
+            try:
+                current_concurrency = max(1, int(current_text or "1"))
+            except Exception:
+                current_concurrency = 1
+            max_concurrency = max(1, min(20, len(all_accounts) if all_accounts else 1))
+            self._autoresponder_concurrency_combo.blockSignals(True)
+            self._autoresponder_concurrency_combo.clear()
+            for value in range(1, max_concurrency + 1):
+                self._autoresponder_concurrency_combo.addItem(str(value))
+            index = self._autoresponder_concurrency_combo.findText(str(current_concurrency))
+            if index < 0:
+                index = 0
+            self._autoresponder_concurrency_combo.setCurrentIndex(index)
+            self._autoresponder_concurrency_combo.blockSignals(False)
+
+    def _add_selected_autoresponder_target(self) -> None:
+        if not hasattr(self, "_autoresponder_target_combo"):
+            return
+        data_key = str(self._autoresponder_target_combo.currentData() or "").strip()
+        if not data_key:
+            return
+        records = self._load_active_account_records()
+        account_alias_map = {
+            str(item.get("username") or "").strip().lstrip("@"): str(item.get("alias") or "default").strip() or "default"
+            for item in records
+            if str(item.get("username") or "").strip()
+        }
+        accounts_to_add: list[str] = []
+        if data_key == "all::ALL":
+            accounts_to_add = sorted(account_alias_map.keys())
+        elif data_key.startswith("alias::"):
+            alias_value = data_key.split("::", 1)[1].strip().lower()
+            accounts_to_add = sorted(
+                user
+                for user, alias in account_alias_map.items()
+                if alias.lower() == alias_value
+            )
+        elif data_key.startswith("account::"):
+            account_value = data_key.split("::", 1)[1].strip().lstrip("@")
+            if account_value:
+                accounts_to_add = [account_value]
+
+        if not accounts_to_add:
+            self._set_autoresponder_setup_validation_error(
+                "No se pudieron resolver cuentas activas para la selección."
+            )
+            return
+
+        selected = list(self._autoresponder_selected_accounts)
+        for account in accounts_to_add:
+            if account not in selected:
+                selected.append(account)
+        self._autoresponder_selected_accounts = selected
+        self._refresh_autoresponder_selected_accounts_view()
+        self._set_autoresponder_setup_message("Configuración lista para activar.")
+
+    def _clear_autoresponder_selected_accounts(self) -> None:
+        self._autoresponder_selected_accounts = []
+        self._refresh_autoresponder_selected_accounts_view()
+
+    def _refresh_autoresponder_selected_accounts_view(self) -> None:
+        if not hasattr(self, "_autoresponder_selected_accounts_layout"):
+            return
+        while self._autoresponder_selected_accounts_layout.count():
+            item = self._autoresponder_selected_accounts_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if not self._autoresponder_selected_accounts:
+            empty_label = QLabel("(sin cuentas seleccionadas)")
+            empty_label.setObjectName("MutedText")
+            self._autoresponder_selected_accounts_layout.addWidget(empty_label, 0, 0)
+            return
+
+        for idx, account in enumerate(self._autoresponder_selected_accounts):
+            chip = QLabel(f"@{account} ✔")
+            chip.setObjectName("ExecTag")
+            chip.setAlignment(Qt.AlignCenter)
+            row = idx // 3
+            col = idx % 3
+            self._autoresponder_selected_accounts_layout.addWidget(chip, row, col)
+
+    def _toggle_autoresponder_hour(self, hour: int, checked: bool) -> None:
+        value = max(1, int(hour))
+        if checked:
+            self._autoresponder_selected_hours.add(value)
+        else:
+            self._autoresponder_selected_hours.discard(value)
+        self._refresh_autoresponder_hours_summary()
+
+    def _add_autoresponder_custom_hour(self) -> None:
+        raw = str(self._autoresponder_custom_hour_input.text() or "").strip()
+        if not raw:
+            return
+        try:
+            value = max(1, int(raw))
+        except Exception:
+            self._set_autoresponder_setup_validation_error("La hora personalizada debe ser un número entero.")
+            return
+        self._autoresponder_selected_hours.add(value)
+        preset_button = self._autoresponder_hour_buttons.get(value)
+        if preset_button is not None and not preset_button.isChecked():
+            preset_button.setChecked(True)
+        self._autoresponder_custom_hour_input.clear()
+        self._refresh_autoresponder_hours_summary()
+        self._set_autoresponder_setup_message("Hora personalizada agregada.")
+
+    def _remove_autoresponder_custom_hour(self) -> None:
+        raw = str(self._autoresponder_custom_hour_input.text() or "").strip()
+        if not raw:
+            self._set_autoresponder_setup_validation_error(
+                "Escribe una hora para quitarla."
+            )
+            return
+        try:
+            value = max(1, int(raw))
+        except Exception:
+            self._set_autoresponder_setup_validation_error(
+                "La hora a quitar debe ser un número entero."
+            )
+            return
+        if value not in self._autoresponder_selected_hours:
+            self._set_autoresponder_setup_validation_error(
+                f"La hora {value} no está seleccionada."
+            )
+            return
+        self._autoresponder_selected_hours.discard(value)
+        preset_button = self._autoresponder_hour_buttons.get(value)
+        if preset_button is not None and preset_button.isChecked():
+            preset_button.setChecked(False)
+        self._autoresponder_custom_hour_input.clear()
+        self._refresh_autoresponder_hours_summary()
+        self._set_autoresponder_setup_message("Hora eliminada.")
+
+    def _clear_autoresponder_hours(self) -> None:
+        self._autoresponder_selected_hours.clear()
+        for button in self._autoresponder_hour_buttons.values():
+            if button.isChecked():
+                button.setChecked(False)
+        self._refresh_autoresponder_hours_summary()
+        self._set_autoresponder_setup_message("Horas de seguimiento limpiadas.")
+
+    def _refresh_autoresponder_hours_summary(self) -> None:
+        if not hasattr(self, "_autoresponder_hours_summary_label"):
+            return
+        values = sorted({max(1, int(value)) for value in self._autoresponder_selected_hours})
+        if values:
+            self._autoresponder_hours_summary_label.setText(
+                "Seleccionadas: " + " | ".join(str(value) for value in values)
+            )
+        else:
+            self._autoresponder_hours_summary_label.setText("(sin horas seleccionadas)")
+
+    def _set_autoresponder_followup_only(self, enabled: bool) -> None:
+        self._autoresponder_followup_only = bool(enabled)
+        if hasattr(self, "_autoresponder_followup_yes_button"):
+            self._autoresponder_followup_yes_button.setChecked(self._autoresponder_followup_only)
+            self._autoresponder_followup_yes_button.setText(
+                "Sí ✓" if self._autoresponder_followup_only else "Sí"
+            )
+            self._autoresponder_followup_yes_button.setProperty(
+                "active", self._autoresponder_followup_only
+            )
+            self._autoresponder_followup_yes_button.style().unpolish(
+                self._autoresponder_followup_yes_button
+            )
+            self._autoresponder_followup_yes_button.style().polish(
+                self._autoresponder_followup_yes_button
+            )
+            self._autoresponder_followup_yes_button.update()
+        if hasattr(self, "_autoresponder_followup_no_button"):
+            self._autoresponder_followup_no_button.setChecked(not self._autoresponder_followup_only)
+            self._autoresponder_followup_no_button.setText(
+                "No ✓" if not self._autoresponder_followup_only else "No"
+            )
+            self._autoresponder_followup_no_button.setProperty(
+                "active", not self._autoresponder_followup_only
+            )
+            self._autoresponder_followup_no_button.style().unpolish(
+                self._autoresponder_followup_no_button
+            )
+            self._autoresponder_followup_no_button.style().polish(
+                self._autoresponder_followup_no_button
+            )
+            self._autoresponder_followup_no_button.update()
+        if hasattr(self, "_autoresponder_followup_summary_label"):
+            self._autoresponder_followup_summary_label.setText(
+                f"Seleccionado: {'Sí' if self._autoresponder_followup_only else 'No'}"
+            )
+
+    def _set_autoresponder_setup_validation_error(self, message: str) -> None:
+        self._set_status("Waiting input")
+        if hasattr(self, "_autoresponder_setup_message_label"):
+            self._autoresponder_setup_message_label.setText(message)
+        self._append_log(f"[gui] autoresponder setup validation: {message}\n")
+
+    def _set_autoresponder_setup_message(self, message: str) -> None:
+        if hasattr(self, "_autoresponder_setup_message_label"):
+            self._autoresponder_setup_message_label.setText(message)
+
+    def _resolve_autoresponder_alias_submission_value(self) -> tuple[str, str]:
+        selected_accounts = [str(item or "").strip().lstrip("@") for item in self._autoresponder_selected_accounts]
+        selected_accounts = [item for item in selected_accounts if item]
+        if not selected_accounts:
+            return "", "Selecciona al menos una cuenta."
+
+        records = self._load_active_account_records()
+        active_users = [str(item.get("username") or "").strip().lstrip("@") for item in records]
+        active_users = [item for item in active_users if item]
+        selected_norm = {item.lower() for item in selected_accounts}
+        active_norm = {item.lower() for item in active_users}
+        if selected_norm == active_norm:
+            return "ALL", ""
+
+        alias_map: dict[str, set[str]] = {}
+        for record in records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            alias = str(record.get("alias") or "default").strip() or "default"
+            if not username:
+                continue
+            alias_map.setdefault(alias, set()).add(username.lower())
+        for alias, users in alias_map.items():
+            if selected_norm == users:
+                return alias, ""
+
+        if len(selected_accounts) == 1:
+            return selected_accounts[0], ""
+
+        return (
+            "",
+            "Para múltiples cuentas, selecciona todas las cuentas de un alias o ALL.",
+        )
+
+    def _build_autoresponder_setup_values(self) -> Optional[dict[str, str]]:
+        alias_value, alias_error = self._resolve_autoresponder_alias_submission_value()
+        if alias_error:
+            self._set_autoresponder_setup_validation_error(alias_error)
+            return None
+
+        delay_min = int(self._autoresponder_delay_min_spin.value())
+        delay_max = int(self._autoresponder_delay_max_spin.value())
+        if delay_min >= delay_max:
+            self._set_autoresponder_setup_validation_error(
+                "Delay mínimo debe ser menor que delay máximo."
+            )
+            return None
+
+        concurrency_value = self._autoresponder_concurrency_combo.currentText().strip() or "1"
+        try:
+            concurrency = max(1, int(concurrency_value))
+        except Exception:
+            concurrency = 1
+        threads_value = max(1, int(self._autoresponder_threads_spin.value()))
+        hours_values = sorted({max(1, int(item)) for item in self._autoresponder_selected_hours})
+        if not hours_values:
+            self._set_autoresponder_setup_validation_error(
+                "Selecciona al menos una hora de seguimiento."
+            )
+            return None
+
+        return {
+            "alias": alias_value,
+            "delay_min": str(delay_min),
+            "delay_max": str(delay_max),
+            "concurrency": str(concurrency),
+            "threads": str(threads_value),
+            "followup_hours": ",".join(str(item) for item in hours_values),
+            "followup_only": "s" if self._autoresponder_followup_only else "n",
+        }
+
+    def _start_autoresponder_setup_from_menu(self, option_value: str) -> None:
+        if self._block_navigation or self._autoresponder_running:
+            return
+        self._autoresponder_activate_option_value = str(option_value or "").strip()
+        if not self._autoresponder_activate_option_value:
+            self._set_autoresponder_setup_validation_error(
+                "No se pudo resolver la opción de activación del menú."
+            )
+            return
+        self._set_execution_mode(False)
+        self._menu_title_label.setVisible(True)
+        self._menu_title_label.setText("Auto responder con OpenAI")
+        self._menu_prompt_label.setVisible(True)
+        self._menu_prompt_label.setText(
+            "Completa la configuración en el panel y activa el bot con un solo clic."
+        )
+        self._set_autoresponder_setup_visible(True)
+        self._set_live_input_enabled(False, prompt="")
+        if not self._showing_summary and not self._block_navigation:
+            self._set_page(self.PAGE_MENU)
+
+    def _submit_autoresponder_setup(self) -> None:
+        if self._block_navigation:
+            return
+        if self._active_sidebar_key != "autoresponder":
+            return
+        if self._autoresponder_setup_auto_fill_active:
+            return
+        pending = self._pending_request
+        if not isinstance(pending, InputRequest):
+            self._set_autoresponder_setup_validation_error(
+                "Espera a que el CLI solicite input para iniciar el auto responder."
+            )
+            return
+
+        activate_value = str(self._autoresponder_activate_option_value or "").strip()
+        if not activate_value:
+            self._set_autoresponder_setup_validation_error(
+                "No se encontró la opción 'Activar bot (alias/grupo)' en el menú."
+            )
+            return
+
+        if not self._autoresponder_selected_accounts:
+            self._add_selected_autoresponder_target()
+
+        values_map = self._build_autoresponder_setup_values()
+        if not values_map:
+            return
+
+        self._autoresponder_setup_queue = [
+            str(values_map.get("alias", "")),
+            str(values_map.get("delay_min", "")),
+            str(values_map.get("delay_max", "")),
+            str(values_map.get("concurrency", "")),
+            str(values_map.get("threads", "")),
+            str(values_map.get("followup_hours", "")),
+            str(values_map.get("followup_only", "")),
+        ]
+        self._autoresponder_setup_auto_fill_active = True
+        self._append_log(
+            f"[gui] autoresponder config enviada: alias={values_map.get('alias', '-')} "
+            f"delay={values_map.get('delay_min', '-')}..{values_map.get('delay_max', '-')}\n"
+        )
+        self._set_autoresponder_setup_message("Iniciando auto responder...")
+        self._show_autoresponder_loading_overlay()
+        self._submit_current_input(activate_value)
+
+    def _consume_autoresponder_setup_auto_fill(self, request: InputRequest) -> bool:
+        if self._active_sidebar_key != "autoresponder" or not self._autoresponder_setup_auto_fill_active:
+            return False
+        if not self._autoresponder_setup_queue:
+            self._autoresponder_setup_auto_fill_active = False
+            self._hide_autoresponder_loading_overlay()
+            return False
+
+        outbound = str(self._autoresponder_setup_queue.pop(0)).strip()
+        if not outbound:
+            self._autoresponder_setup_auto_fill_active = False
+            self._autoresponder_setup_queue.clear()
+            self._hide_autoresponder_loading_overlay()
+            return False
+
+        adapter = self._io_adapter
+        if adapter is None:
+            self._autoresponder_setup_auto_fill_active = False
+            self._autoresponder_setup_queue.clear()
+            self._hide_autoresponder_loading_overlay()
+            return False
+        accepted = adapter.fulfill_input(outbound, request_id=request.request_id)
+        if not accepted and request.is_menu:
+            menu_mapped = self._resolve_autoresponder_menu_value(request, outbound)
+            if menu_mapped and menu_mapped != outbound:
+                outbound = menu_mapped
+                accepted = adapter.fulfill_input(outbound, request_id=request.request_id)
+        if not accepted:
+            self._autoresponder_setup_auto_fill_active = False
+            self._autoresponder_setup_queue.clear()
+            self._hide_autoresponder_loading_overlay()
+            return False
+
+        visible = "***" if request.sensitive and outbound else outbound
+        self._append_log(f"[gui] input submitted: {visible}\n")
+        if not self._autoresponder_setup_queue:
+            self._autoresponder_setup_auto_fill_active = False
+            self._autoresponder_setup_queue.clear()
+            self._set_autoresponder_setup_visible(False)
+        return True
+
+    def _resolve_autoresponder_menu_value(self, request: InputRequest, outbound: str) -> str:
+        candidate = str(outbound or "").strip()
+        if not candidate:
+            return candidate
+        options = list(request.menu_options or [])
+        if not options:
+            return candidate
+        candidate_norm = _normalized_label(candidate)
+        candidate_compact = candidate.lower().replace(" ", "")
+
+        for option in options:
+            option_value = str(option.value or "").strip()
+            if option_value and option_value == candidate:
+                return option_value
+
+        for option in options:
+            option_label = str(option.label or "").strip()
+            option_value = str(option.value or "").strip()
+            if not option_label or not option_value:
+                continue
+            label_norm = _normalized_label(option_label)
+            label_compact = option_label.lower().replace(" ", "")
+            if candidate_norm and label_norm == candidate_norm:
+                return option_value
+            if candidate_compact and label_compact == candidate_compact:
+                return option_value
+
+        return candidate
+
+    def _reset_autoresponder_setup_mode(self) -> None:
+        self._autoresponder_setup_auto_fill_active = False
+        self._autoresponder_setup_queue.clear()
+        self._hide_autoresponder_loading_overlay()
+        self._autoresponder_activate_option_value = ""
+        self._set_autoresponder_setup_visible(False)
 
     def _build_execution_page(self) -> QWidget:
         page = QWidget()
@@ -3081,6 +4004,290 @@ class MainWindow(QMainWindow):
             self._set_page(self.PAGE_DASHBOARD)
             self._emit_engine_event("SUMMARY_CLOSED")
 
+    @staticmethod
+    def _coerce_summary_int(value: Any) -> Optional[int]:
+        match = re.search(r"\d+", str(value or ""))
+        if not match:
+            return None
+        try:
+            return max(0, int(match.group(0)))
+        except Exception:
+            return None
+
+    def parse_autoresponder_summary(self, lines: list[str]) -> dict[str, Any]:
+        summary: dict[str, Any] = {
+            "alias": None,
+            "accounts_used": None,
+            "replies_attempted": None,
+            "replies_sent": None,
+            "followups_attempted": None,
+            "followups_sent": None,
+            "errors": None,
+            "total_time": None,
+            "per_account_time": [],
+        }
+        replies_error: Optional[int] = None
+        followups_error: Optional[int] = None
+        per_account: list[tuple[str, str]] = []
+        in_per_account = False
+
+        for raw_line in lines:
+            text = self._normalize_execution_line(_strip_cli_hints(raw_line or "")).strip()
+            if not text:
+                continue
+            normalized = _normalized_label(text)
+            lower = text.lower()
+
+            if ":" in text:
+                key, value = text.split(":", 1)
+                key_norm = _normalized_label(key)
+                value = value.strip()
+                if "alias" in key_norm and value:
+                    summary["alias"] = value
+                elif "cuentas usadas" in key_norm or "cantidad de cuentas" in key_norm:
+                    summary["accounts_used"] = self._coerce_summary_int(value)
+                elif "respuestas intentadas" in key_norm or "cantidad mensajes respondidos" in key_norm:
+                    summary["replies_attempted"] = self._coerce_summary_int(value)
+                elif "respuestas enviadas" in key_norm:
+                    summary["replies_sent"] = self._coerce_summary_int(value)
+                elif "follow up intentados" in key_norm or "followup intentados" in key_norm:
+                    summary["followups_attempted"] = self._coerce_summary_int(value)
+                elif "follow up enviados" in key_norm or "followup enviados" in key_norm:
+                    summary["followups_sent"] = self._coerce_summary_int(value)
+                elif key_norm == "errores" or "errores" in key_norm:
+                    summary["errors"] = self._coerce_summary_int(value)
+                elif "tiempo total" in key_norm or "cantidad de tiempo total" in key_norm:
+                    time_match = _SUMMARY_TIME_RE.search(value)
+                    summary["total_time"] = time_match.group(0) if time_match else (value or None)
+                elif "tiempo por cuenta" in key_norm:
+                    in_per_account = True
+                    continue
+
+            if "respuestas ok" in normalized:
+                values = [int(item) for item in re.findall(r"\d+", text)]
+                if values:
+                    summary["replies_sent"] = values[0]
+                    if len(values) >= 2:
+                        replies_error = values[1]
+                        summary["replies_attempted"] = values[0] + values[1]
+
+            if "followups ok" in normalized or "follow up ok" in normalized:
+                values = [int(item) for item in re.findall(r"\d+", text)]
+                if values:
+                    summary["followups_sent"] = values[0]
+                    if len(values) >= 2:
+                        followups_error = values[1]
+                        summary["followups_attempted"] = values[0] + values[1]
+
+            if "tiempo por cuenta" in normalized:
+                in_per_account = True
+                continue
+
+            account_match = _SUMMARY_PER_ACCOUNT_RE.search(text)
+            if account_match:
+                username = account_match.group("user").strip()
+                if not username.startswith("@"):
+                    username = f"@{username}"
+                per_account.append((username, account_match.group("time")))
+                continue
+
+            if in_per_account:
+                if ":" in text and not _SUMMARY_PER_ACCOUNT_RE.search(text):
+                    key_norm = _normalized_label(text.split(":", 1)[0])
+                    if any(
+                        token in key_norm
+                        for token in (
+                            "respuestas",
+                            "follow",
+                            "errores",
+                            "tiempo total",
+                            "alias",
+                            "cuentas",
+                        )
+                    ):
+                        in_per_account = False
+                elif _MENU_OPTION_LINE_RE.match(text):
+                    in_per_account = False
+
+            if summary["alias"] is None and normalized.startswith("alias "):
+                maybe_alias = text.split(" ", 1)[1].strip()
+                if maybe_alias:
+                    summary["alias"] = maybe_alias
+
+            if summary["total_time"] is None:
+                time_match = _SUMMARY_TIME_RE.search(text)
+                if time_match and any(token in normalized for token in ("tiempo total", "duracion", "duracion total")):
+                    summary["total_time"] = time_match.group(0)
+
+            if any(token in normalized for token in ("resumen final", "auto responder", "autoresponder", "herramienta detenida")):
+                continue
+
+            if "cantidad mensajes followup" in normalized and summary["followups_attempted"] is None:
+                summary["followups_attempted"] = self._coerce_summary_int(text)
+
+        if summary["errors"] is None:
+            total_err = 0
+            has_err = False
+            if replies_error is not None:
+                total_err += replies_error
+                has_err = True
+            if followups_error is not None:
+                total_err += followups_error
+                has_err = True
+            if has_err:
+                summary["errors"] = total_err
+
+        if per_account:
+            unique_rows: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for username, time_value in per_account:
+                key = f"{username}|{time_value}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_rows.append((username, time_value))
+            summary["per_account_time"] = unique_rows
+
+        return summary
+
+    @staticmethod
+    def _autoresponder_summary_has_content(summary: dict[str, Any]) -> bool:
+        keys = (
+            "alias",
+            "accounts_used",
+            "replies_attempted",
+            "replies_sent",
+            "followups_attempted",
+            "followups_sent",
+            "errors",
+            "total_time",
+        )
+        if any(summary.get(key) not in (None, "", "—") for key in keys):
+            return True
+        per_account = summary.get("per_account_time")
+        return isinstance(per_account, list) and len(per_account) > 0
+
+    def _is_autoresponder_summary_start(self, normalized: str) -> bool:
+        if "resumen final" in normalized and ("autoresponder" in normalized or "auto responder" in normalized):
+            return True
+        if "herramienta detenida" in normalized and ("autoresponder" in normalized or "auto responder" in normalized):
+            return True
+        if self._autoresponder_summary_expected and any(
+            token in normalized
+            for token in (
+                "cantidad de cuentas",
+                "cantidad de tiempo total",
+                "respuestas intentadas",
+                "follow up intentados",
+                "followup intentados",
+            )
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _is_autoresponder_summary_boundary(stripped: str, normalized: str) -> bool:
+        if _MENU_OPTION_LINE_RE.match(stripped):
+            return True
+        if "presiona enter para continuar" in normalized or "enter para continuar" in normalized:
+            return True
+        if normalized in {"opcion", "opcion:"} or normalized.startswith("opci"):
+            return True
+        if normalized.startswith("elige una opcion") or normalized.startswith("selecciona una opcion"):
+            return True
+        if "menu principal" in normalized and "selecciona" in normalized:
+            return True
+        return False
+
+    def _consume_autoresponder_summary_stream_line(self, raw_line: str) -> None:
+        if self._autoresponder_summary_modal_shown:
+            return
+        stripped = self._normalize_execution_line(_strip_cli_hints(raw_line or "")).strip()
+        if not stripped:
+            return
+        normalized = _normalized_label(stripped)
+        if not normalized:
+            return
+
+        if self._is_autoresponder_summary_start(normalized):
+            self._autoresponder_summary_capture_active = True
+            self._autoresponder_summary_lines.clear()
+
+        if not self._autoresponder_summary_capture_active:
+            return
+
+        if not stripped.startswith("[gui]") and not stripped.startswith("[DBG]"):
+            self._autoresponder_summary_lines.append(stripped)
+
+        parsed = self.parse_autoresponder_summary(list(self._autoresponder_summary_lines))
+        has_content = self._autoresponder_summary_has_content(parsed)
+        reached_boundary = self._is_autoresponder_summary_boundary(stripped, normalized)
+        capture_full = len(self._autoresponder_summary_lines) >= 140
+        if not has_content and not reached_boundary and not capture_full:
+            return
+        if reached_boundary or capture_full:
+            self._autoresponder_summary_capture_active = False
+            self._autoresponder_last_summary = parsed
+            self._autoresponder_summary_modal_shown = True
+            self._emit_engine_event("CAMPAIGN_SUMMARY_DETECTED")
+            manager = self._engine_state_manager
+            if manager is not None:
+                manager.set_state(EngineState.FINISHED, reason="AUTORESPONDER_SUMMARY_DETECTED")
+            self._show_autoresponder_summary_modal(parsed)
+
+    def _release_pending_after_autoresponder_summary(self) -> None:
+        request = self._pending_request
+        if not isinstance(request, InputRequest):
+            return
+        if request.is_menu:
+            if self._pending_request_is_primary_menu:
+                return
+            target_value = ""
+            for option in request.menu_options:
+                label_norm = _normalized_label(option.label or "")
+                if any(
+                    token in label_norm
+                    for token in ("menu principal", "volver", "atras", "atrás", "salir")
+                ):
+                    target_value = str(option.value or "").strip()
+                    break
+            self._submit_current_input(target_value)
+            return
+
+        prompt_norm = _normalized_label(_strip_cli_hints(request.prompt or ""))
+        if any(
+            token in prompt_norm
+            for token in (
+                "presiona enter para continuar",
+                "enter para continuar",
+                "continuar",
+                "opcion",
+            )
+        ):
+            self._submit_current_input("")
+
+    def _navigate_dashboard_after_autoresponder_summary(self) -> None:
+        self._on_sidebar_item_clicked("dashboard")
+
+    def _show_autoresponder_summary_modal(self, summary: dict[str, Any]) -> None:
+        if self._showing_summary:
+            return
+        self._showing_summary = True
+        self._block_navigation = True
+        try:
+            dialog = AutoResponderSummaryDialog(summary, self)
+            dialog.exec()
+        finally:
+            self._showing_summary = False
+            self._block_navigation = False
+            self._autoresponder_summary_expected = False
+            self._release_pending_after_autoresponder_summary()
+            self._navigate_dashboard_after_autoresponder_summary()
+            self._emit_engine_event("SUMMARY_CLOSED")
+            manager = self._engine_state_manager
+            if manager is not None:
+                manager.set_state(EngineState.IDLE, reason="SUMMARY_ACKNOWLEDGED_AND_RETURNED_TO_DASHBOARD")
+
     def _set_autoresponder_running(self, running: bool) -> None:
         if self._autoresponder_running == running:
             return
@@ -3088,12 +4295,20 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_autoresponder_stop_button"):
             self._autoresponder_stop_button.setEnabled(running)
         if running:
+            self._autoresponder_summary_expected = True
+            self._autoresponder_summary_capture_active = False
+            self._autoresponder_summary_modal_shown = False
+            self._autoresponder_summary_lines.clear()
             self._autoresponder_started_at = time.monotonic()
             self._set_execution_mode(True)
             self._update_autoresponder_runtime_text()
             return
         self._autoresponder_started_at = 0.0
-        self._set_execution_mode(self._campaign_running or self._leads_filter_running)
+        keep_view = self._autoresponder_summary_expected and not self._autoresponder_summary_modal_shown
+        self._set_execution_mode(
+            self._campaign_running or self._leads_filter_running,
+            keep_view=keep_view,
+        )
         self._update_autoresponder_runtime_text()
 
     def _log_autoresponder_stop_summary(self, elapsed_seconds: float) -> None:
@@ -3132,7 +4347,6 @@ class MainWindow(QMainWindow):
         if not stop_requested:
             return
         self._log_autoresponder_stop_summary(elapsed)
-        self._set_autoresponder_running(False)
 
     def _request_campaign_stop(self) -> None:
         if not self._campaign_running:
@@ -4121,9 +5335,13 @@ class MainWindow(QMainWindow):
             return
 
         for raw_line in text.splitlines():
+            clean_line = str(raw_line or "").strip()
+            if clean_line:
+                self._backend_recent_lines.append(clean_line)
             self._consume_send_prompt_context_line(raw_line)
             self._consume_execution_line(raw_line)
             self._consume_leads_filter_line(raw_line)
+            self._consume_autoresponder_summary_stream_line(raw_line)
             self._consume_autoresponder_line(raw_line)
             self._consume_accounts_operation_line(raw_line)
             self._append_menu_activity_log(raw_line)
@@ -4156,7 +5374,7 @@ class MainWindow(QMainWindow):
             self._finish_accounts_operation()
         self._pending_request = request_obj
         self._set_status("Waiting input")
-        if not self._auto_fill_active:
+        if not self._auto_fill_active and not self._autoresponder_loading_overlay_active:
             self._hide_send_loading_overlay()
         prompt_text = _strip_cli_hints(request_obj.prompt or "(no prompt)")
         self._dbg(
@@ -4209,6 +5427,8 @@ class MainWindow(QMainWindow):
         self._set_execution_mode(False)
         if self._consume_send_setup_auto_fill(request_obj):
             return
+        if self._consume_autoresponder_setup_auto_fill(request_obj):
+            return
         if self._accounts_alias_manual_mode and self._is_accounts_alias_text_prompt(prompt_text):
             self._pending_request_is_primary_menu = False
             self._set_send_setup_visible(False)
@@ -4251,7 +5471,9 @@ class MainWindow(QMainWindow):
         primary_mapping = self._derive_primary_mapping(request.menu_options)
         is_primary = self._looks_like_primary_menu(primary_mapping)
         self._set_execution_mode(False)
-        self._set_send_setup_visible(False)
+        if not is_preview:
+            self._set_send_setup_visible(False)
+            self._set_autoresponder_setup_visible(False)
 
         if is_primary:
             self._accounts_alias_select_value = ""
@@ -4286,6 +5508,13 @@ class MainWindow(QMainWindow):
         self._set_menu_activity_visible(False)
         leads_context = self._active_sidebar_key == "leads"
         self._set_leads_live_card_visible(leads_context)
+        if self._active_sidebar_key == "autoresponder":
+            self._autoresponder_activate_option_value = ""
+            for option in request.menu_options:
+                label_norm = _normalized_label(option.label or "")
+                if "activar bot" in label_norm:
+                    self._autoresponder_activate_option_value = str(option.value or "").strip()
+                    break
         if self._is_accounts_alias_selector_menu(request.menu_options):
             self._render_accounts_alias_selector_view(request)
             return
@@ -4885,9 +6114,29 @@ class MainWindow(QMainWindow):
             button = QPushButton(clean_label)
             button.setObjectName("MenuOptionButton")
             button.setMinimumHeight(52)
-            button.clicked.connect(
-                lambda checked=False, value=option.value: self._submit_current_input(value)
-            )
+            is_autoresponder_activate = False
+            if self._active_sidebar_key == "autoresponder":
+                option_value = str(option.value or "").strip()
+                if (
+                    option_value
+                    and option_value == str(self._autoresponder_activate_option_value or "").strip()
+                ):
+                    is_autoresponder_activate = True
+                else:
+                    label_norm = _normalized_label(option.label or "")
+                    if "activar bot" in label_norm:
+                        is_autoresponder_activate = True
+
+            if is_autoresponder_activate:
+                button.clicked.connect(
+                    lambda checked=False, value=option.value: self._start_autoresponder_setup_from_menu(
+                        str(value or "").strip()
+                    )
+                )
+            else:
+                button.clicked.connect(
+                    lambda checked=False, value=option.value: self._submit_current_input(value)
+                )
             self._menu_options_layout.addWidget(button)
             self._menu_option_buttons.append(button)
 
@@ -4915,6 +6164,24 @@ class MainWindow(QMainWindow):
             self._live_input_empty.setEnabled(False)
             self._live_input_field.setEchoMode(QLineEdit.Normal)
             self._live_input_field.setPlaceholderText("Usa el panel de configuración de envío")
+            return
+        autoresponder_panel_active = bool(
+            enabled
+            and self._active_sidebar_key == "autoresponder"
+            and hasattr(self, "_autoresponder_setup_card")
+            and self._autoresponder_setup_card.isVisible()
+        )
+        if autoresponder_panel_active:
+            self._live_input_prompt.setText(
+                "Configuración de auto responder activa en el panel central."
+            )
+            self._live_input_field.setEnabled(False)
+            self._live_input_submit.setEnabled(False)
+            self._live_input_empty.setEnabled(False)
+            self._live_input_field.setEchoMode(QLineEdit.Normal)
+            self._live_input_field.setPlaceholderText(
+                "Usa el panel de configuración del auto responder"
+            )
             return
         if enabled:
             self._live_input_prompt.setText(prompt_text or "Entrada global (input literal)")
@@ -5037,7 +6304,23 @@ class MainWindow(QMainWindow):
         self._send_low_profile_accounts.clear()
         self._send_session_issue_accounts.clear()
         self._send_login_total_failure = False
+        if self._autoresponder_summary_capture_active and not self._autoresponder_summary_modal_shown:
+            parsed = self.parse_autoresponder_summary(list(self._autoresponder_summary_lines))
+            self._autoresponder_summary_capture_active = False
+            self._autoresponder_summary_modal_shown = True
+            self._autoresponder_last_summary = parsed
+            self._show_autoresponder_summary_modal(parsed)
+        elif self._autoresponder_summary_expected and not self._autoresponder_summary_modal_shown:
+            parsed = self.parse_autoresponder_summary(list(self._backend_recent_lines))
+            if self._autoresponder_summary_has_content(parsed):
+                self._autoresponder_summary_modal_shown = True
+                self._autoresponder_last_summary = parsed
+                self._show_autoresponder_summary_modal(parsed)
+        self._autoresponder_summary_capture_active = False
+        self._autoresponder_summary_lines.clear()
+        self._autoresponder_summary_expected = False
         self._set_autoresponder_running(False)
+        self._reset_autoresponder_setup_mode()
         self._set_leads_filter_running(False)
         self._set_leads_live_card_visible(False)
         self._set_execution_mode(False)
@@ -5070,7 +6353,23 @@ class MainWindow(QMainWindow):
         self._send_low_profile_accounts.clear()
         self._send_session_issue_accounts.clear()
         self._send_login_total_failure = False
+        if self._autoresponder_summary_capture_active and not self._autoresponder_summary_modal_shown:
+            parsed = self.parse_autoresponder_summary(list(self._autoresponder_summary_lines))
+            self._autoresponder_summary_capture_active = False
+            self._autoresponder_summary_modal_shown = True
+            self._autoresponder_last_summary = parsed
+            self._show_autoresponder_summary_modal(parsed)
+        elif self._autoresponder_summary_expected and not self._autoresponder_summary_modal_shown:
+            parsed = self.parse_autoresponder_summary(list(self._backend_recent_lines))
+            if self._autoresponder_summary_has_content(parsed):
+                self._autoresponder_summary_modal_shown = True
+                self._autoresponder_last_summary = parsed
+                self._show_autoresponder_summary_modal(parsed)
+        self._autoresponder_summary_capture_active = False
+        self._autoresponder_summary_lines.clear()
+        self._autoresponder_summary_expected = False
         self._set_autoresponder_running(False)
+        self._reset_autoresponder_setup_mode()
         self._set_leads_filter_running(False)
         self._set_leads_live_card_visible(False)
         self._set_execution_mode(False)
@@ -5097,6 +6396,338 @@ class MainWindow(QMainWindow):
         if "last_refresh" in self._metric_values:
             self._metric_values["last_refresh"].setText(now_str)
 
+    def _show_booked_today_dialog(self) -> None:
+        details = list(self._booked_today_rows)
+        if not details:
+            self._collect_dashboard_metrics()
+            details = list(self._booked_today_rows)
+
+        def _fmt_handle(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return "-"
+            return text if text.startswith("@") else f"@{text}"
+
+        dialog = QDialog(self)
+        dialog.setObjectName("LeadsSummaryDialog")
+        dialog.setWindowTitle("Agendas enviadas hoy")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(760)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("📅 Agendas enviadas hoy")
+        title.setObjectName("LeadsSummaryTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        subtitle = QLabel(f"Se enviaron {len(details)} links de agendamiento hoy.")
+        subtitle.setObjectName("MutedText")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+
+        if details:
+            table = QTableWidget(len(details), 3)
+            table.setObjectName("ExecLogConsole")
+            table.setHorizontalHeaderLabels(["Usuario", "Hora", "Alias"])
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setSelectionMode(QAbstractItemView.NoSelection)
+            table.setFocusPolicy(Qt.NoFocus)
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setStretchLastSection(True)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            table.setMinimumHeight(280)
+            table.setStyleSheet(
+                """
+                QTableWidget {
+                    background-color: #0f172a;
+                    alternate-background-color: #111827;
+                    color: #e2e8f0;
+                    gridline-color: #334155;
+                    border: 1px solid #334155;
+                    border-radius: 8px;
+                }
+                QHeaderView::section {
+                    background-color: #1e293b;
+                    color: #e2e8f0;
+                    border: 1px solid #334155;
+                    padding: 6px;
+                    font-weight: 700;
+                }
+                QTableCornerButton::section {
+                    background-color: #1e293b;
+                    border: 1px solid #334155;
+                }
+                """
+            )
+
+            for index, row in enumerate(details):
+                lead = _fmt_handle(row.get("recipient_username"))
+                dt_value = row.get("timestamp")
+                stamp = dt_value.strftime("%H:%M") if isinstance(dt_value, datetime) else "-"
+                alias = str(row.get("alias") or "").strip() or "(desconocido)"
+
+                table.setItem(index, 0, QTableWidgetItem(lead))
+                table.setItem(index, 1, QTableWidgetItem(stamp))
+                table.setItem(index, 2, QTableWidgetItem(alias))
+        else:
+            table = QLabel("No se enviaron links de agendamiento hoy.")
+            table.setObjectName("MutedText")
+            table.setAlignment(Qt.AlignCenter)
+            table.setWordWrap(True)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setObjectName("PrimaryButton")
+        close_button.clicked.connect(dialog.accept)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(table)
+        layout.addWidget(close_button, 0, Qt.AlignCenter)
+        dialog.exec()
+
+    def _collect_calendly_sent_today(self) -> list[dict[str, Any]]:
+        conversation = self._read_json(
+            self._root_dir / "storage" / "conversation_engine.json", {}
+        )
+        if not conversation:
+            conversation = self._read_json(self._root_dir / "conversation_engine.json", {})
+
+        state = self._read_json(self._root_dir / "storage" / "state.json", {})
+        today = datetime.now().astimezone().date()
+
+        conversations = {}
+        if isinstance(conversation, dict):
+            raw = conversation.get("conversations")
+            if isinstance(raw, dict):
+                conversations = raw
+
+        return self._collect_booked_today_details_from_conversations(
+            conversations=conversations,
+            today=today,
+            account_alias_map=self._build_account_alias_map(state),
+            calendly_match=None,
+        )
+
+    def _build_account_alias_map(self, state: dict[str, Any]) -> dict[str, str]:
+        alias_map: dict[str, str] = {}
+        for record in self._load_account_records(state):
+            if not isinstance(record, dict):
+                continue
+            username = _normalize_username(record.get("username") or record.get("account"))
+            if not username:
+                continue
+            alias = str(record.get("alias") or "").strip()
+            if alias:
+                alias_map[username] = alias
+        return alias_map
+
+    def _resolve_calendly_match_values(self) -> list[str]:
+        values: list[str] = [
+            "calendly.com/",
+            "cal.com/",
+            "calendar.google.com/",
+            "acuityscheduling.com/",
+            "simplybook.me/",
+            "youcanbook.me/",
+            "app.gohighlevel.com/",
+            "/calendar/",
+            "/agendar",
+            "/agendamiento",
+        ]
+        state = self._read_json(self._root_dir / "storage" / "state.json", {})
+        if isinstance(state, dict):
+            for key in (
+                "calendly_url",
+                "calendar_url",
+                "booking_url",
+                "agenda_url",
+                "agendamiento_url",
+                "meeting_url",
+            ):
+                value = state.get(key)
+                if isinstance(value, str) and value.strip():
+                    lowered = value.strip().lower()
+                    values.append(lowered)
+                    match = re.search(r"https?://([^/\s]+)", lowered)
+                    if match:
+                        values.append(match.group(1))
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value or "").strip().lower()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
+    def _collect_booked_today_details_from_conversations(
+        self,
+        conversations: dict[str, Any],
+        today: Any,
+        account_alias_map: Optional[dict[str, str]] = None,
+        calendly_match: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        by_username: dict[str, dict[str, Any]] = {}
+        alias_map = account_alias_map or {}
+        booking_substrings: list[str] = []
+        if isinstance(calendly_match, str) and calendly_match.strip():
+            booking_substrings.append(calendly_match.strip().lower())
+        else:
+            booking_substrings.extend(self._resolve_calendly_match_values())
+        booking_keywords = (
+            "agend",
+            "agenda",
+            "agendar",
+            "agendamiento",
+            "cita",
+            "reunion",
+            "llamada",
+            "booking",
+            "book",
+            "calendar",
+            "calendly",
+        )
+
+        def _is_calendly_message(text: Any) -> bool:
+            if not text:
+                return False
+            value = str(text).strip().lower()
+            if not value:
+                return False
+            if any(sub in value for sub in booking_substrings):
+                return True
+            has_url = bool(re.search(r"(https?://\S+|www\.\S+)", value))
+            if has_url and any(keyword in value for keyword in booking_keywords):
+                return True
+            return False
+
+        def _message_sent_datetime(payload: dict[str, Any]) -> Optional[datetime]:
+            if not isinstance(payload, dict):
+                return None
+            for key in ("last_sent_at", "first_sent_at", "timestamp_epoch", "ts", "timestamp"):
+                parsed = self._parse_epoch_datetime(payload.get(key))
+                if parsed:
+                    return parsed
+            iso = payload.get("iso") or payload.get("started_at")
+            if isinstance(iso, str):
+                return self._parse_iso_datetime(iso)
+            return None
+
+        def _upsert_row(
+            *,
+            account_text: str,
+            thread_id: str,
+            thread_href: str,
+            recipient_username: str,
+            text: Any,
+            dt: datetime,
+        ) -> None:
+            username_norm = _normalize_username(recipient_username) or f"thread:{thread_id}"
+            current_epoch = float(dt.timestamp())
+            previous = by_username.get(username_norm)
+            previous_ts = previous.get("timestamp_epoch") if isinstance(previous, dict) else None
+            try:
+                previous_epoch = float(previous_ts) if previous_ts is not None else None
+            except Exception:
+                previous_epoch = None
+            if previous_epoch is not None and current_epoch <= previous_epoch:
+                return
+
+            account_norm = _normalize_username(account_text)
+            alias = alias_map.get(account_norm) or "(desconocido)"
+
+            by_username[username_norm] = {
+                "account": account_text or "-",
+                "alias": alias,
+                "thread_id": thread_id,
+                "thread_href": thread_href,
+                "recipient_username": recipient_username,
+                "direction": "outbound",
+                "text": str(text or "").strip(),
+                "timestamp": dt,
+                "timestamp_epoch": current_epoch,
+            }
+
+        for conv_key, conv_data in conversations.items():
+            if not isinstance(conv_data, dict):
+                continue
+
+            conv_key_text = str(conv_key or "")
+            key_account = ""
+            key_thread = conv_key_text
+            if "|" in conv_key_text:
+                key_account, key_thread = conv_key_text.split("|", 1)
+
+            account = _normalize_username(conv_data.get("account")) or _normalize_username(
+                key_account
+            )
+            thread_id = str(conv_data.get("thread_id") or key_thread or "").strip()
+            if not thread_id:
+                continue
+
+            recipient_username = str(
+                conv_data.get("recipient_username") or conv_data.get("title") or "sin_usuario"
+            ).strip() or "sin_usuario"
+            thread_href = str(conv_data.get("thread_href") or "").strip()
+
+            messages_sent = conv_data.get("messages_sent")
+            if isinstance(messages_sent, list):
+                for message in messages_sent:
+                    if not isinstance(message, dict):
+                        continue
+                    text = message.get("text")
+                    if not _is_calendly_message(text):
+                        continue
+                    dt = _message_sent_datetime(message)
+                    if not dt or dt.date() != today:
+                        continue
+                    _upsert_row(
+                        account_text=account or "-",
+                        thread_id=thread_id,
+                        thread_href=thread_href,
+                        recipient_username=recipient_username,
+                        text=text,
+                        dt=dt,
+                    )
+
+            messages = conv_data.get("messages")
+            if not isinstance(messages, list):
+                continue
+
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                direction = str(message.get("direction") or "").strip().lower()
+                if direction != "outbound":
+                    continue
+                dt = self._message_datetime(message)
+                if not dt or dt.date() != today:
+                    continue
+                text = message.get("text")
+                if not _is_calendly_message(text):
+                    continue
+                _upsert_row(
+                    account_text=account or "-",
+                    thread_id=thread_id,
+                    thread_href=thread_href,
+                    recipient_username=recipient_username,
+                    text=text,
+                    dt=dt,
+                )
+
+        rows = list(by_username.values())
+        rows.sort(
+            key=lambda row: float(row.get("timestamp_epoch") or 0.0),
+            reverse=True,
+        )
+        return rows
+
     def _collect_dashboard_metrics(self) -> dict[str, int | str]:
         state = self._read_json(self._root_dir / "storage" / "state.json", {})
         sent_entries = self._read_jsonl(self._root_dir / "storage" / "sent_log.jsonl")
@@ -5107,15 +6738,14 @@ class MainWindow(QMainWindow):
         if not conversation:
             conversation = self._read_json(self._root_dir / "conversation_engine.json", {})
 
-        today = datetime.now().date()
+        today = datetime.now().astimezone().date()
 
         sent_today = self._state_counter(state, "daily_sent")
         error_today = self._state_counter(state, "daily_errors")
         use_state_daily = sent_today is not None or error_today is not None
         sent_today = sent_today or 0
         error_today = error_today or 0
-        replied_today = 0
-        appointment_markers: set[str] = set()
+        replied_today_users: set[str] = set()
         sent_accounts: set[str] = set()
 
         for entry in sent_entries:
@@ -5133,16 +6763,20 @@ class MainWindow(QMainWindow):
                 else:
                     error_today += 1
 
-            if self._looks_like_appointment(entry.get("detail")):
-                marker = str(entry.get("to") or entry.get("account") or len(appointment_markers))
-                appointment_markers.add(marker.lower())
-
         conversation_accounts: set[str] = set()
         conversations = {}
         if isinstance(conversation, dict):
             raw = conversation.get("conversations")
             if isinstance(raw, dict):
                 conversations = raw
+        alias_map = self._build_account_alias_map(state)
+        booked_today_rows = self._collect_booked_today_details_from_conversations(
+            conversations=conversations,
+            today=today,
+            account_alias_map=alias_map,
+            calendly_match=None,
+        )
+        self._booked_today_rows = booked_today_rows
 
         for conv_key, conv_data in conversations.items():
             if not isinstance(conv_data, dict):
@@ -5162,9 +6796,17 @@ class MainWindow(QMainWindow):
                     continue
                 direction = str(message.get("direction") or "").lower().strip()
                 if direction == "outbound":
-                    replied_today += 1
-                if self._looks_like_appointment(message.get("text")):
-                    appointment_markers.add(str(conv_key))
+                    recipient = _normalize_username(
+                        conv_data.get("recipient_username") or conv_data.get("title")
+                    )
+                    if recipient:
+                        replied_today_users.add(recipient)
+                    else:
+                        fallback_thread = str(
+                            conv_data.get("thread_id") or conv_key or ""
+                        ).strip()
+                        if fallback_thread:
+                            replied_today_users.add(f"thread:{fallback_thread}")
 
         account_records = self._load_account_records(state)
         if account_records:
@@ -5186,8 +6828,8 @@ class MainWindow(QMainWindow):
             "connected_accounts": connected_accounts,
             "messages_sent_today": sent_today,
             "messages_error_today": error_today,
-            "messages_replied_today": replied_today,
-            "booked_today": len(appointment_markers),
+            "messages_replied_today": len(replied_today_users),
+            "booked_today": len(booked_today_rows),
             "last_refresh": self._dashboard_updated_value.text() or "-",
         }
 

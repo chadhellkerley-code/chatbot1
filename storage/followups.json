@@ -395,7 +395,11 @@
         "matiid.life1|340282366841710301244276023756635767867": {
           "last_eval_ts": 1771627701.9807715,
           "etapa_negocio": 1,
-          "cycle_anchor_ts": 1771556903.387
+          "cycle_anchor_ts": 1771556903.387,
+          "count": 2,
+          "last_sent_ts": 1771822575.0494442,
+          "last_message_id": "071d6a51336e0f07d041bce586f256eba86ca73c",
+          "cycle_followup_count": 2
         },
         "matiid.life1|340282366841710301244260114679287849888": {
           "last_eval_ts": 1771627701.9807715,

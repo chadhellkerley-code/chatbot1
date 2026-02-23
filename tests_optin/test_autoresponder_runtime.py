@@ -207,10 +207,26 @@ def _memory_row(
     messages: list[dict],
     unread_count: int = 0,
     recipient_id: str | None = None,
+    thread_id_real: str | None = None,
+    thread_href: str | None = None,
 ) -> dict:
     now = time.time()
+    real_id = str(thread_id_real or "").strip()
+    if not (real_id.isdigit() and 6 <= len(real_id) <= 20):
+        digits = "".join(ch for ch in str(thread_id or "") if ch.isdigit())
+        if not digits:
+            digits = str(abs(hash(str(thread_id))) % 9_999_999_999_999)
+        if len(digits) < 6:
+            digits = str(1_000_000 + int(digits))
+        if len(digits) > 20:
+            digits = digits[:20]
+        real_id = digits
+    href_value = str(thread_href or "").strip() or f"https://www.instagram.com/direct/t/{real_id}/"
     return {
         "thread_id": thread_id,
+        "thread_id_real": real_id,
+        "thread_href": href_value,
+        "thread_id_api": thread_id,
         "recipient_id": recipient_id or recipient_username,
         "recipient_username": recipient_username,
         "title": recipient_username,
