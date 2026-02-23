@@ -573,6 +573,8 @@ class MainWindow(QMainWindow):
 
         self._metric_values: dict[str, QLabel] = {}
         self._booked_today_rows: list[dict[str, Any]] = []
+        self._replied_today_rows: list[dict[str, Any]] = []
+        self._top_responded_message_rows: list[dict[str, Any]] = []
         self._menu_option_buttons: list[QPushButton] = []
         self._sidebar_buttons: dict[str, QPushButton] = {}
         self._active_sidebar_key = "dashboard"
@@ -1375,10 +1377,13 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_metric_card(self, key: str, label_text: str) -> QWidget:
-        if key == "booked_today":
+        if key in {"booked_today", "messages_replied_today"}:
             card = ClickableMetricCard()
             card.setCursor(Qt.PointingHandCursor)
-            card.clicked.connect(self._show_booked_today_dialog)
+            if key == "booked_today":
+                card.clicked.connect(self._show_booked_today_dialog)
+            else:
+                card.clicked.connect(self._show_replied_today_dialog)
         else:
             card = QFrame()
         card.setObjectName("MetricCard")
@@ -1402,8 +1407,20 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+
         self._menu_title_label = QLabel("Seccion")
         self._menu_title_label.setObjectName("PageTitle")
+        self._autoresponder_setup_back_button = QPushButton("Atras")
+        self._autoresponder_setup_back_button.setObjectName("SecondaryButton")
+        self._autoresponder_setup_back_button.clicked.connect(self._handle_autoresponder_setup_back)
+        self._autoresponder_setup_back_button.setVisible(False)
+        header_row.addWidget(self._menu_title_label)
+        header_row.addStretch(1)
+        header_row.addWidget(self._autoresponder_setup_back_button)
+
         self._menu_prompt_label = QLabel("Selecciona una accion para ejecutar el flujo CLI.")
         self._menu_prompt_label.setObjectName("MutedText")
         self._menu_prompt_label.setWordWrap(True)
@@ -1412,7 +1429,7 @@ class MainWindow(QMainWindow):
         self._accounts_users_label.setWordWrap(True)
         self._accounts_users_label.setVisible(False)
 
-        layout.addWidget(self._menu_title_label)
+        layout.addLayout(header_row)
         layout.addWidget(self._menu_prompt_label)
         layout.addWidget(self._accounts_users_label)
 
@@ -1659,6 +1676,8 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_autoresponder_setup_card"):
             return
         self._autoresponder_setup_card.setVisible(visible)
+        if hasattr(self, "_autoresponder_setup_back_button"):
+            self._autoresponder_setup_back_button.setVisible(bool(visible))
         self._sync_setup_panels_visibility()
         if visible:
             self._refresh_autoresponder_setup_sources()
@@ -2504,18 +2523,35 @@ class MainWindow(QMainWindow):
         raw = str(self._autoresponder_custom_hour_input.text() or "").strip()
         if not raw:
             return
-        try:
-            value = max(1, int(raw))
-        except Exception:
-            self._set_autoresponder_setup_validation_error("La hora personalizada debe ser un número entero.")
+        tokens = [token.strip() for token in re.split(r"[,\s;|/]+", raw) if token.strip()]
+        if not tokens:
             return
-        self._autoresponder_selected_hours.add(value)
-        preset_button = self._autoresponder_hour_buttons.get(value)
-        if preset_button is not None and not preset_button.isChecked():
-            preset_button.setChecked(True)
+
+        parsed_values: list[int] = []
+        invalid_tokens: list[str] = []
+        for token in tokens:
+            try:
+                parsed_values.append(max(1, int(token)))
+            except Exception:
+                invalid_tokens.append(token)
+
+        if invalid_tokens:
+            self._set_autoresponder_setup_validation_error(
+                "Las horas personalizadas deben ser números enteros."
+            )
+            return
+
+        for value in parsed_values:
+            self._autoresponder_selected_hours.add(value)
+            preset_button = self._autoresponder_hour_buttons.get(value)
+            if preset_button is not None and not preset_button.isChecked():
+                preset_button.setChecked(True)
         self._autoresponder_custom_hour_input.clear()
         self._refresh_autoresponder_hours_summary()
-        self._set_autoresponder_setup_message("Hora personalizada agregada.")
+        if len(parsed_values) == 1:
+            self._set_autoresponder_setup_message("Hora personalizada agregada.")
+        else:
+            self._set_autoresponder_setup_message("Horas personalizadas agregadas.")
 
     def _remove_autoresponder_custom_hour(self) -> None:
         raw = str(self._autoresponder_custom_hour_input.text() or "").strip()
@@ -2722,6 +2758,10 @@ class MainWindow(QMainWindow):
             )
             return
 
+        pending_custom_hours = str(self._autoresponder_custom_hour_input.text() or "").strip()
+        if pending_custom_hours:
+            self._add_autoresponder_custom_hour()
+
         if not self._autoresponder_selected_accounts:
             self._add_selected_autoresponder_target()
 
@@ -2823,6 +2863,16 @@ class MainWindow(QMainWindow):
         self._hide_autoresponder_loading_overlay()
         self._autoresponder_activate_option_value = ""
         self._set_autoresponder_setup_visible(False)
+
+    def _handle_autoresponder_setup_back(self) -> None:
+        if self._active_sidebar_key != "autoresponder":
+            return
+        if self._autoresponder_running:
+            return
+        if self._autoresponder_setup_auto_fill_active:
+            return
+        self._reset_autoresponder_setup_mode()
+        self._set_page(self.PAGE_MENU)
 
     def _build_execution_page(self) -> QWidget:
         page = QWidget()
@@ -3039,7 +3089,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        title = QLabel("Auto-responder activo")
+        title = QLabel("🤖 Auto-responder activo")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
@@ -3061,7 +3111,7 @@ class MainWindow(QMainWindow):
         runtime_layout = QVBoxLayout(runtime_card)
         runtime_layout.setContentsMargins(10, 10, 10, 10)
         runtime_layout.setSpacing(6)
-        runtime_title = QLabel("Runtime")
+        runtime_title = QLabel("🕒 Runtime")
         runtime_title.setObjectName("PageTitle")
         self._autoresponder_runtime_label = QLabel("")
         self._autoresponder_runtime_label.setObjectName("MutedText")
@@ -3313,16 +3363,42 @@ class MainWindow(QMainWindow):
         )
 
     def _update_autoresponder_status_blocks(self) -> None:
+        alias_text = "-"
+        alias_value, _alias_error = self._resolve_autoresponder_alias_submission_value()
+        if alias_value:
+            alias_text = str(alias_value).strip() or "-"
+
+        hours_values = sorted({max(1, int(value)) for value in self._autoresponder_selected_hours})
+        if hours_values:
+            hours_text = " / ".join(f"{value}h" for value in hours_values)
+        else:
+            hours_text = "-"
+
+        responses_error_label = (
+            f"⚠️ ❌ Error: {self._autoresponder_responses_error}"
+            if self._autoresponder_responses_error > 0
+            else "❌ Error: 0"
+        )
+        followups_error_label = (
+            f"⚠️ ❌ Error: {self._autoresponder_followups_error}"
+            if self._autoresponder_followups_error > 0
+            else "❌ Error: 0"
+        )
+
         self._autoresponder_accounts_label.setText(
-            f"Cuentas activas con bot: {self._autoresponder_active_accounts}"
+            f"👥 Cuentas activas con bot: {self._autoresponder_active_accounts}\n"
+            f"🏷 Alias: {alias_text}\n"
+            f"⏱ Horas de seguimiento: {hours_text}"
         )
         self._autoresponder_responses_label.setText(
-            f"Respuestas OK: {self._autoresponder_responses_ok} | "
-            f"Error: {self._autoresponder_responses_error}"
+            "💬 Respuestas enviadas:\n"
+            f"✅ OK: {self._autoresponder_responses_ok}\n"
+            f"{responses_error_label}"
         )
         self._autoresponder_followups_label.setText(
-            f"Followups OK: {self._autoresponder_followups_ok} | "
-            f"Error: {self._autoresponder_followups_error}"
+            "🔁 Seguimientos enviados:\n"
+            f"✅ OK: {self._autoresponder_followups_ok}\n"
+            f"{followups_error_label}"
         )
 
     def _update_autoresponder_runtime_text(self) -> None:
@@ -3330,9 +3406,9 @@ class MainWindow(QMainWindow):
         if self._autoresponder_running and self._autoresponder_started_at > 0:
             elapsed = max(0.0, time.monotonic() - self._autoresponder_started_at)
         self._autoresponder_runtime_label.setText(
-            "Delay configurado: "
+            "⏳ Delay configurado: "
             f"{self._autoresponder_delay_text()}\n"
-            "Tiempo activo: "
+            "⌛ Tiempo activo: "
             f"{self._format_elapsed_hhmmss(elapsed)}"
         )
 
@@ -6490,6 +6566,516 @@ class MainWindow(QMainWindow):
         layout.addWidget(close_button, 0, Qt.AlignCenter)
         dialog.exec()
 
+    def _show_replied_today_dialog(self) -> None:
+        details = list(self._replied_today_rows)
+        if not details:
+            self._collect_dashboard_metrics()
+            details = list(self._replied_today_rows)
+
+        def _fmt_handle(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return "-"
+            return text if text.startswith("@") else f"@{text}"
+
+        def _preview(value: Any, limit: int = 180) -> str:
+            text = " ".join(str(value or "").split())
+            if not text:
+                return "-"
+            if len(text) <= limit:
+                return text
+            return f"{text[: max(0, limit - 3)]}..."
+
+        dialog = QDialog(self)
+        dialog.setObjectName("LeadsSummaryDialog")
+        dialog.setWindowTitle("Respuestas enviadas hoy")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(860)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("💬 Respuestas enviadas hoy")
+        title.setObjectName("LeadsSummaryTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        subtitle = QLabel(f"Se registraron {len(details)} conversaciones respondidas hoy.")
+        subtitle.setObjectName("MutedText")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+
+        details_button = QPushButton("Ver mas detalles")
+        details_button.setObjectName("SecondaryButton")
+        details_button.clicked.connect(
+            lambda: self._show_top_responded_messages_dialog(parent=dialog)
+        )
+
+        details_action_layout = QHBoxLayout()
+        details_action_layout.setContentsMargins(0, 0, 0, 0)
+        details_action_layout.setSpacing(6)
+        details_action_layout.addStretch(1)
+        details_action_layout.addWidget(details_button)
+
+        if details:
+            table = QTableWidget(len(details), 4)
+            table.setObjectName("ExecLogConsole")
+            table.setHorizontalHeaderLabels(
+                ["Emisor", "Receptor", "Ultimo mensaje enviado", "Hora"]
+            )
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setSelectionMode(QAbstractItemView.NoSelection)
+            table.setFocusPolicy(Qt.NoFocus)
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setStretchLastSection(False)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            table.setMinimumHeight(300)
+            table.setStyleSheet(
+                """
+                QTableWidget {
+                    background-color: #0f172a;
+                    alternate-background-color: #111827;
+                    color: #e2e8f0;
+                    gridline-color: #334155;
+                    border: 1px solid #334155;
+                    border-radius: 8px;
+                }
+                QHeaderView::section {
+                    background-color: #1e293b;
+                    color: #e2e8f0;
+                    border: 1px solid #334155;
+                    padding: 6px;
+                    font-weight: 700;
+                }
+                QTableCornerButton::section {
+                    background-color: #1e293b;
+                    border: 1px solid #334155;
+                }
+                """
+            )
+
+            for index, row in enumerate(details):
+                sender = _fmt_handle(row.get("account"))
+                recipient = _fmt_handle(row.get("recipient_username"))
+                message = _preview(row.get("last_message"))
+                dt_value = row.get("timestamp")
+                stamp = dt_value.strftime("%H:%M") if isinstance(dt_value, datetime) else "-"
+
+                table.setItem(index, 0, QTableWidgetItem(sender))
+                table.setItem(index, 1, QTableWidgetItem(recipient))
+                table.setItem(index, 2, QTableWidgetItem(message))
+                table.setItem(index, 3, QTableWidgetItem(stamp))
+        else:
+            table = QLabel("No hay respuestas registradas hoy.")
+            table.setObjectName("MutedText")
+            table.setAlignment(Qt.AlignCenter)
+            table.setWordWrap(True)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setObjectName("PrimaryButton")
+        close_button.clicked.connect(dialog.accept)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addLayout(details_action_layout)
+        layout.addWidget(table)
+        layout.addWidget(close_button, 0, Qt.AlignCenter)
+        dialog.exec()
+
+    def _show_top_responded_messages_dialog(self, parent: Optional[QWidget] = None) -> None:
+        rows = list(self._top_responded_message_rows)
+        if not rows:
+            self._collect_dashboard_metrics()
+            rows = list(self._top_responded_message_rows)
+
+        dialog = QDialog(parent or self)
+        dialog.setObjectName("LeadsSummaryDialog")
+        dialog.setWindowTitle("Mensajes mas respondidos")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(980)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("📈 Mensajes mas respondidos")
+        title.setObjectName("LeadsSummaryTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        subtitle = QLabel(
+            "Ranking por respuestas detectadas desde conversation_engine + conversation_state."
+        )
+        subtitle.setObjectName("MutedText")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+
+        if rows:
+            rows_to_show = rows[:80]
+            table = QTableWidget(len(rows_to_show), 5)
+            table.setObjectName("ExecLogConsole")
+            table.setHorizontalHeaderLabels(
+                ["Tipo", "Mensaje", "Enviados", "Respondidos", "% respuesta"]
+            )
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setSelectionMode(QAbstractItemView.NoSelection)
+            table.setFocusPolicy(Qt.NoFocus)
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setStretchLastSection(False)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+            table.setMinimumHeight(360)
+            table.setStyleSheet(
+                """
+                QTableWidget {
+                    background-color: #0f172a;
+                    alternate-background-color: #111827;
+                    color: #e2e8f0;
+                    gridline-color: #334155;
+                    border: 1px solid #334155;
+                    border-radius: 8px;
+                }
+                QHeaderView::section {
+                    background-color: #1e293b;
+                    color: #e2e8f0;
+                    border: 1px solid #334155;
+                    padding: 6px;
+                    font-weight: 700;
+                }
+                QTableCornerButton::section {
+                    background-color: #1e293b;
+                    border: 1px solid #334155;
+                }
+                """
+            )
+
+            for index, row in enumerate(rows_to_show):
+                role = str(row.get("role") or "-")
+                text = " ".join(str(row.get("text") or "").split()) or "-"
+                sent = int(row.get("sent") or 0)
+                responded = int(row.get("responded") or 0)
+                rate = float(row.get("response_rate") or 0.0)
+
+                table.setItem(index, 0, QTableWidgetItem(role))
+                table.setItem(index, 1, QTableWidgetItem(text))
+                table.setItem(index, 2, QTableWidgetItem(str(sent)))
+                table.setItem(index, 3, QTableWidgetItem(str(responded)))
+                table.setItem(index, 4, QTableWidgetItem(f"{rate:.1f}%"))
+        else:
+            table = QLabel("No hay mensajes con respuesta registrados en memoria.")
+            table.setObjectName("MutedText")
+            table.setAlignment(Qt.AlignCenter)
+            table.setWordWrap(True)
+
+        close_button = QPushButton("Cerrar")
+        close_button.setObjectName("PrimaryButton")
+        close_button.clicked.connect(dialog.accept)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(table)
+        layout.addWidget(close_button, 0, Qt.AlignCenter)
+        dialog.exec()
+
+    def _split_conversation_key(self, raw_key: Any) -> tuple[str, str]:
+        key_text = str(raw_key or "").strip()
+        if "|" in key_text:
+            account, thread_id = key_text.split("|", 1)
+            return account.strip(), thread_id.strip()
+        return key_text, key_text
+
+    def _safe_float(self, value: Any) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = float(value)
+        except Exception:
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
+    def _normalize_message_text_key(self, value: Any) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    def _message_role_label(self, *, index: int, text: str, is_followup: bool) -> str:
+        if is_followup:
+            return "Follow-up"
+
+        normalized = _normalized_label(text)
+        agenda_tokens = (
+            "agenda",
+            "agendar",
+            "agendamiento",
+            "calendly",
+            "calendar",
+            "llamada",
+            "reunion",
+            "booking",
+            "book",
+            "cita",
+        )
+        if any(token in normalized for token in agenda_tokens):
+            return "Agenda / CTA"
+        if index == 0:
+            return "Principal"
+        if index == 1:
+            return "Pitch"
+        if index == 2:
+            return "Agenda / CTA"
+        return "Seguimiento"
+
+    def _collect_replied_today_details_from_conversations(
+        self,
+        conversations: dict[str, Any],
+        state_conversations: dict[str, Any],
+        today: Any,
+    ) -> list[dict[str, Any]]:
+        state_by_key: dict[str, dict[str, Any]] = {}
+        state_by_thread: dict[str, dict[str, Any]] = {}
+
+        for state_key, payload in state_conversations.items():
+            if not isinstance(payload, dict):
+                continue
+            state_account, state_thread = self._split_conversation_key(state_key)
+            state_thread = str(state_thread or "").strip()
+            state_key_norm = f"{_normalize_username(state_account)}|{state_thread}"
+            state_by_key[state_key_norm] = payload
+            if state_thread and state_thread not in state_by_thread:
+                state_by_thread[state_thread] = payload
+
+        by_thread: dict[str, dict[str, Any]] = {}
+        for conv_key, conv_data in conversations.items():
+            if not isinstance(conv_data, dict):
+                continue
+
+            account_from_key, thread_from_key = self._split_conversation_key(conv_key)
+            account = str(conv_data.get("account") or account_from_key or "").strip()
+            account_norm = _normalize_username(account)
+            thread_id = str(conv_data.get("thread_id") or thread_from_key or "").strip()
+            if not thread_id:
+                continue
+
+            state_key_norm = f"{account_norm}|{thread_id}"
+            state_entry = state_by_key.get(state_key_norm) or state_by_thread.get(thread_id) or {}
+
+            events: list[tuple[datetime, str]] = []
+            raw_messages = conv_data.get("messages")
+            if isinstance(raw_messages, list):
+                for message in raw_messages:
+                    if not isinstance(message, dict):
+                        continue
+                    direction = str(message.get("direction") or "").strip().lower()
+                    if direction != "outbound":
+                        continue
+                    dt = self._message_datetime(message)
+                    if not dt:
+                        continue
+                    events.append((dt, str(message.get("text") or "").strip()))
+
+            raw_sent = conv_data.get("messages_sent")
+            if isinstance(raw_sent, list):
+                for sent in raw_sent:
+                    if not isinstance(sent, dict):
+                        continue
+                    dt = None
+                    for key in ("last_sent_at", "first_sent_at", "timestamp_epoch", "ts", "timestamp"):
+                        dt = self._parse_epoch_datetime(sent.get(key))
+                        if dt:
+                            break
+                    if not dt:
+                        continue
+                    events.append((dt, str(sent.get("text") or "").strip()))
+
+            state_last_sent = self._parse_epoch_datetime(state_entry.get("last_sent_ts"))
+            if state_last_sent:
+                events.append((state_last_sent, ""))
+
+            if not events:
+                continue
+
+            events.sort(key=lambda item: item[0], reverse=True)
+            last_dt = events[0][0]
+            if last_dt.date() != today:
+                continue
+
+            last_message = ""
+            for _dt, text in events:
+                if text:
+                    last_message = text
+                    break
+
+            recipient = str(
+                conv_data.get("recipient_username") or conv_data.get("title") or "sin_usuario"
+            ).strip() or "sin_usuario"
+            row_key = state_key_norm if account_norm else f"thread:{thread_id}"
+            row_epoch = float(last_dt.timestamp())
+
+            prev = by_thread.get(row_key)
+            prev_epoch = float(prev.get("timestamp_epoch") or 0.0) if isinstance(prev, dict) else 0.0
+            if prev and row_epoch <= prev_epoch:
+                continue
+
+            by_thread[row_key] = {
+                "account": account or "-",
+                "thread_id": thread_id,
+                "recipient_username": recipient,
+                "last_message": last_message,
+                "timestamp": last_dt,
+                "timestamp_epoch": row_epoch,
+            }
+
+        rows = list(by_thread.values())
+        rows.sort(
+            key=lambda row: float(row.get("timestamp_epoch") or 0.0),
+            reverse=True,
+        )
+        return rows
+
+    def _collect_top_responded_messages(
+        self,
+        conversations: dict[str, Any],
+        state_conversations: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        state_by_key: dict[str, dict[str, Any]] = {}
+        state_by_thread: dict[str, dict[str, Any]] = {}
+
+        for state_key, payload in state_conversations.items():
+            if not isinstance(payload, dict):
+                continue
+            state_account, state_thread = self._split_conversation_key(state_key)
+            state_thread = str(state_thread or "").strip()
+            state_key_norm = f"{_normalize_username(state_account)}|{state_thread}"
+            state_by_key[state_key_norm] = payload
+            if state_thread and state_thread not in state_by_thread:
+                state_by_thread[state_thread] = payload
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for conv_key, conv_data in conversations.items():
+            if not isinstance(conv_data, dict):
+                continue
+
+            account_from_key, thread_from_key = self._split_conversation_key(conv_key)
+            account_norm = _normalize_username(conv_data.get("account") or account_from_key)
+            thread_id = str(conv_data.get("thread_id") or thread_from_key or "").strip()
+            if not thread_id:
+                continue
+
+            state_key_norm = f"{account_norm}|{thread_id}"
+            state_entry = state_by_key.get(state_key_norm) or state_by_thread.get(thread_id) or {}
+
+            response_markers = [
+                self._safe_float(conv_data.get("last_message_received_at")),
+                self._safe_float(state_entry.get("ultimo_contacto_ts")),
+            ]
+            valid_markers = [value for value in response_markers if value is not None]
+            response_ts = max(valid_markers) if valid_markers else None
+
+            sent_rows: list[dict[str, Any]] = []
+            raw_sent = conv_data.get("messages_sent")
+            if isinstance(raw_sent, list):
+                for sent in raw_sent:
+                    if not isinstance(sent, dict):
+                        continue
+                    text = str(sent.get("text") or "").strip()
+                    if not text:
+                        continue
+
+                    sent_ts: Optional[float] = None
+                    for key in ("last_sent_at", "first_sent_at", "timestamp_epoch", "ts", "timestamp"):
+                        candidate = self._safe_float(sent.get(key))
+                        if candidate is not None:
+                            sent_ts = candidate
+                            break
+                    if sent_ts is None:
+                        continue
+
+                    try:
+                        times_sent = max(1, int(sent.get("times_sent") or 1))
+                    except Exception:
+                        times_sent = 1
+
+                    sent_rows.append(
+                        {
+                            "text": text,
+                            "sent_ts": sent_ts,
+                            "times_sent": times_sent,
+                            "is_followup": bool(sent.get("is_followup", False)),
+                        }
+                    )
+
+            if not sent_rows:
+                continue
+
+            sent_rows.sort(key=lambda item: float(item.get("sent_ts") or 0.0))
+
+            for idx, item in enumerate(sent_rows):
+                role = self._message_role_label(
+                    index=idx,
+                    text=str(item.get("text") or ""),
+                    is_followup=bool(item.get("is_followup", False)),
+                )
+                text_key = self._normalize_message_text_key(item.get("text"))
+                if not text_key:
+                    continue
+
+                group_key = f"{role}|{text_key}"
+                if group_key not in grouped:
+                    grouped[group_key] = {
+                        "role": role,
+                        "text": str(item.get("text") or "").strip(),
+                        "sent": 0,
+                        "responded": 0,
+                    }
+
+                grouped[group_key]["sent"] += int(item.get("times_sent") or 1)
+
+                next_ts = (
+                    float(sent_rows[idx + 1].get("sent_ts") or 0.0)
+                    if idx + 1 < len(sent_rows)
+                    else None
+                )
+                sent_ts = float(item.get("sent_ts") or 0.0)
+                if response_ts is not None and response_ts > sent_ts:
+                    if next_ts is None or response_ts < next_ts:
+                        grouped[group_key]["responded"] += 1
+
+        rows: list[dict[str, Any]] = []
+        for row in grouped.values():
+            sent_total = int(row.get("sent") or 0)
+            responded_total = int(row.get("responded") or 0)
+            rate = (float(responded_total) / float(sent_total) * 100.0) if sent_total > 0 else 0.0
+            rows.append(
+                {
+                    "role": row.get("role") or "-",
+                    "text": row.get("text") or "-",
+                    "sent": sent_total,
+                    "responded": responded_total,
+                    "response_rate": rate,
+                }
+            )
+
+        responded_rows = [row for row in rows if int(row.get("responded") or 0) > 0]
+        if responded_rows:
+            rows = responded_rows
+
+        rows.sort(
+            key=lambda row: (
+                int(row.get("responded") or 0),
+                float(row.get("response_rate") or 0.0),
+                int(row.get("sent") or 0),
+            ),
+            reverse=True,
+        )
+        return rows
+
     def _collect_calendly_sent_today(self) -> list[dict[str, Any]]:
         conversation = self._read_json(
             self._root_dir / "storage" / "conversation_engine.json", {}
@@ -6737,6 +7323,11 @@ class MainWindow(QMainWindow):
         )
         if not conversation:
             conversation = self._read_json(self._root_dir / "conversation_engine.json", {})
+        conversation_state = self._read_json(
+            self._root_dir / "storage" / "conversation_state.json", {}
+        )
+        if not conversation_state:
+            conversation_state = self._read_json(self._root_dir / "conversation_state.json", {})
 
         today = datetime.now().astimezone().date()
 
@@ -6745,7 +7336,6 @@ class MainWindow(QMainWindow):
         use_state_daily = sent_today is not None or error_today is not None
         sent_today = sent_today or 0
         error_today = error_today or 0
-        replied_today_users: set[str] = set()
         sent_accounts: set[str] = set()
 
         for entry in sent_entries:
@@ -6769,6 +7359,11 @@ class MainWindow(QMainWindow):
             raw = conversation.get("conversations")
             if isinstance(raw, dict):
                 conversations = raw
+        state_conversations = {}
+        if isinstance(conversation_state, dict):
+            raw_state = conversation_state.get("conversations")
+            if isinstance(raw_state, dict):
+                state_conversations = raw_state
         alias_map = self._build_account_alias_map(state)
         booked_today_rows = self._collect_booked_today_details_from_conversations(
             conversations=conversations,
@@ -6777,36 +7372,23 @@ class MainWindow(QMainWindow):
             calendly_match=None,
         )
         self._booked_today_rows = booked_today_rows
+        replied_today_rows = self._collect_replied_today_details_from_conversations(
+            conversations=conversations,
+            state_conversations=state_conversations,
+            today=today,
+        )
+        self._replied_today_rows = replied_today_rows
+        self._top_responded_message_rows = self._collect_top_responded_messages(
+            conversations=conversations,
+            state_conversations=state_conversations,
+        )
 
-        for conv_key, conv_data in conversations.items():
+        for conv_data in conversations.values():
             if not isinstance(conv_data, dict):
                 continue
             account = _normalize_username(conv_data.get("account"))
             if account:
                 conversation_accounts.add(account)
-
-            messages = conv_data.get("messages")
-            if not isinstance(messages, list):
-                continue
-            for message in messages:
-                if not isinstance(message, dict):
-                    continue
-                dt = self._message_datetime(message)
-                if not dt or dt.date() != today:
-                    continue
-                direction = str(message.get("direction") or "").lower().strip()
-                if direction == "outbound":
-                    recipient = _normalize_username(
-                        conv_data.get("recipient_username") or conv_data.get("title")
-                    )
-                    if recipient:
-                        replied_today_users.add(recipient)
-                    else:
-                        fallback_thread = str(
-                            conv_data.get("thread_id") or conv_key or ""
-                        ).strip()
-                        if fallback_thread:
-                            replied_today_users.add(f"thread:{fallback_thread}")
 
         account_records = self._load_account_records(state)
         if account_records:
@@ -6828,7 +7410,7 @@ class MainWindow(QMainWindow):
             "connected_accounts": connected_accounts,
             "messages_sent_today": sent_today,
             "messages_error_today": error_today,
-            "messages_replied_today": len(replied_today_users),
+            "messages_replied_today": len(replied_today_rows),
             "booked_today": len(booked_today_rows),
             "last_refresh": self._dashboard_updated_value.text() or "-",
         }
