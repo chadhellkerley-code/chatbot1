@@ -108,7 +108,7 @@ chat/
 ├── 📂 adapters/
 ├── 📂 optin_browser/
 ├── 📂 tests/
-├── 📂 integraciones/
+├── 📂 adapters/integrations/
 └── 📂 [otros directorios...]
 ```
 

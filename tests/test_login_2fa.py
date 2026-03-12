@@ -32,8 +32,8 @@ def _reload_session_store(monkeypatch, tmp_path: Path, encryption_key: str | Non
         monkeypatch.delenv("SESSION_ENCRYPTION_KEY", raising=False)
     else:
         monkeypatch.setenv("SESSION_ENCRYPTION_KEY", encryption_key)
-    sys.modules.pop("session_store", None)
-    import session_store  # type: ignore
+    sys.modules.pop("core.session_store", None)
+    import core.session_store as session_store # type: ignore
 
     return importlib.reload(session_store)
 

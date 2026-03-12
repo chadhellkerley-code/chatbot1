@@ -4,9 +4,15 @@
 
 from __future__ import annotations
 
-from license_client import launch_with_license
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from launchers.client_launcher import _launch_entrypoint
 
 
 if __name__ == "__main__":
-    launch_with_license()
-
+    raise SystemExit(_launch_entrypoint())

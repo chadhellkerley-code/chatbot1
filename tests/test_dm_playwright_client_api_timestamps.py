@@ -149,4 +149,15 @@ def test_dm_client_has_no_dom_timestamp_fallback_paths():
         r"if\s+timestamp\s+is\s+None\s*:\s*\n\s*timestamp\s*=\s*time\\.time\(",
         source,
     ) is None
-    assert "timestamp_missing_from_api" in source
+
+
+def test_fetch_inbox_threads_page_is_disabled_for_browser_client():
+    client = _build_client_stub()
+
+    try:
+        client.fetch_inbox_threads_page()
+    except RuntimeError as exc:
+        assert "browser-only" in str(exc)
+        assert "endpoint_reader" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")

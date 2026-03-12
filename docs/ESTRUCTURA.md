@@ -86,7 +86,7 @@ Adaptadores de clientes:
 - **instagram_playwright.py** - Adaptador Playwright
 - **instagram_stub.py** - Adaptador stub para testing
 
-### integraciones/
+### adapters/integrations/
 Integraciones con servicios externos:
 - **adapter.py** - Adaptador base
 - **android_sim_adapter.py** - Adaptador Android
@@ -94,7 +94,7 @@ Integraciones con servicios externos:
 ### tests/
 Tests principales del proyecto
 
-### tests_optin/
+### tests/optin/
 Tests especÃ­ficos del mÃ³dulo opt-in
 
 ### _archive/

@@ -7,7 +7,6 @@ Se integra con el sistema de menús existente.
 
 from __future__ import annotations
 
-import json
 import os
 import textwrap
 from datetime import datetime
@@ -62,18 +61,8 @@ def _write_license_files(client_name: str, data: dict, backend_url: str) -> Opti
     folder = _delivery_root() / "Clientes" / _safe_client_folder(client_name)
     folder.mkdir(parents=True, exist_ok=True)
 
-    payload = {
-        "license_key": license_key,
-        "client_name": client_name,
-        "expires_at": data.get("expires_at"),
-        "customer_id": data.get("customer_id"),
-        "backend_url": backend_url,
-        "mode": "backend",
-    }
-    license_path = folder / "license.json"
-    license_path.write_text(
-        json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
-    )
+    license_path = folder / "license.key"
+    license_path.write_text(license_key + "\n", encoding="utf-8")
 
     expires = data.get("expires_at") or "-"
     instructions = textwrap.dedent(
@@ -84,7 +73,7 @@ def _write_license_files(client_name: str, data: dict, backend_url: str) -> Opti
 
         Como usar:
         1) Copia el ejecutable unico a una carpeta.
-        2) Copia este archivo license.json en la misma carpeta.
+        2) Copia este archivo license.key en la misma carpeta.
         3) Abre el ejecutable. Si pide la licencia, ingresa la clave.
 
         Requiere internet para validar con el backend:

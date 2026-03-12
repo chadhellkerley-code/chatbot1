@@ -37,7 +37,7 @@ class TwoFactorCodeRejected(RuntimeError):
 
 
 class _ResponseManager:
-    """Minimal helper to emulate instagrapi's stored quick responses interface."""
+    """Minimal helper to emulate the legacy quick responses interface."""
 
     def __init__(self, client: "BaseInstagramClient") -> None:
         self._client = client

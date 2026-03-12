@@ -15,7 +15,7 @@ python -m pip install --upgrade pip wheel
 if [ -f requirements.txt ]; then
   pip install -r requirements.txt
 else
-  pip install instagrapi==1.19.6 pydantic==1.10.13 Pillow typing_extensions>=4.8.0 "requests<3" rich openai
+  pip install playwright pydantic==1.10.13 Pillow typing_extensions>=4.8.0 "requests<3" rich openai
 fi
 
 echo "✅ Setup complete. Run ./run_mac.sh to start."

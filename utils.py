@@ -126,9 +126,7 @@ def enable_quiet_mode() -> None:
         "moviepy",
         "PIL.Image",
         "charset_normalizer",
-        "instagrapi",
         "public_request",
-        "private_request",
     )
 
     for name in noisy_loggers:
@@ -142,4 +140,3 @@ def enable_quiet_mode() -> None:
     for handler in root.handlers:
         if isinstance(handler, logging.StreamHandler):
             handler.setLevel(logging.ERROR)
-

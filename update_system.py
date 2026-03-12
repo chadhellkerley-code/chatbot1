@@ -19,20 +19,63 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from config import SETTINGS
+from core.storage_atomic import atomic_write_json, load_json_file
 from licensekit import _fetch_licenses
-from paths import runtime_base
+from paths import app_root, runtime_base, storage_root, updates_root
 from ui import Fore, banner, full_line, style_text
 from utils import ask, ok, press_enter, warn
 
-_UPDATE_CONFIG_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "update_config.json"
-_UPDATE_MANIFEST_FILE = runtime_base(Path(__file__).resolve().parent) / "storage" / "update_manifest.json"
-_UPDATE_CACHE_DIR = runtime_base(Path(__file__).resolve().parent) / "storage" / "updates_cache"
-_UPDATE_BACKUP_DIR = runtime_base(Path(__file__).resolve().parent) / "storage" / "backups"
+_INSTALL_ROOT = runtime_base(Path(__file__).resolve().parent)
+_APP_ROOT = app_root(_INSTALL_ROOT)
+_STORAGE_ROOT = storage_root(_INSTALL_ROOT)
+_UPDATES_ROOT = updates_root(_INSTALL_ROOT)
+_UPDATE_CONFIG_FILE = _STORAGE_ROOT / "update_config.json"
+_UPDATE_MANIFEST_FILE = _STORAGE_ROOT / "update_manifest.json"
+_UPDATE_CACHE_DIR = _UPDATES_ROOT / "cache"
+_UPDATE_BACKUP_DIR = _UPDATES_ROOT / "backups"
+_UPDATE_STAGING_DIR = _UPDATES_ROOT / "staging"
+_UPDATE_STATE_DIR = _UPDATES_ROOT / "state"
+_UPDATE_PENDING_FILE = _UPDATE_STATE_DIR / "pending_update.json"
+_UPDATE_APPLYING_FILE = _UPDATE_STATE_DIR / "apply_in_progress.json"
+_UPDATE_LAST_APPLIED_FILE = _UPDATE_STATE_DIR / "last_applied.json"
+_UPDATE_ERROR_LOG = _UPDATE_STATE_DIR / "update_error.log"
 
 # Configuración por defecto - GitHub
 _DEFAULT_GITHUB_REPO = "chadhellkerley-code/chatbot"
 _DEFAULT_UPDATE_CHECK_INTERVAL = 3600  # 1 hora
 _GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
+
+
+def _ensure_update_dirs() -> None:
+    for directory in (
+        _UPDATE_CACHE_DIR,
+        _UPDATE_BACKUP_DIR,
+        _UPDATE_STAGING_DIR,
+        _UPDATE_STATE_DIR,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+def _write_update_state(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, payload)
+
+
+def _remove_path(path: Path) -> None:
+    try:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists():
+            path.unlink()
+    except Exception:
+        return
+
+
+def _safe_version_slug(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    cleaned = [ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in raw]
+    slug = "".join(cleaned).strip("._")
+    return slug or "latest"
 
 
 def _github_headers() -> Dict[str, str]:
@@ -45,6 +88,7 @@ def _github_headers() -> Dict[str, str]:
 
 def _load_update_config() -> Dict[str, Any]:
     """Carga la configuración de actualizaciones."""
+    _ensure_update_dirs()
     if not _UPDATE_CONFIG_FILE.exists():
         return {
             "auto_check_enabled": True,
@@ -54,9 +98,10 @@ def _load_update_config() -> Dict[str, Any]:
             "exe_asset_name": os.environ.get("UPDATE_EXE_ASSET", "").strip() or None,
         }
     try:
-        data = json.loads(_UPDATE_CONFIG_FILE.read_text(encoding="utf-8"))
-        if "current_version" not in data:
-            data["current_version"] = _get_current_version()
+        data = load_json_file(_UPDATE_CONFIG_FILE, {}, label="update_system.config")
+        resolved_version = _get_current_version()
+        if data.get("current_version") != resolved_version:
+            data["current_version"] = resolved_version
         if "exe_asset_name" not in data:
             data["exe_asset_name"] = os.environ.get("UPDATE_EXE_ASSET", "").strip() or None
         # Forzar repo fijo y oculto
@@ -73,17 +118,16 @@ def _load_update_config() -> Dict[str, Any]:
 
 def _save_update_config(config: Dict[str, Any]) -> None:
     """Guarda la configuración de actualizaciones."""
-    _UPDATE_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _UPDATE_CONFIG_FILE.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _write_update_state(_UPDATE_CONFIG_FILE, config)
 
 
 def _get_current_version() -> str:
     """Obtiene la versión actual de la aplicación."""
     # Prioridad: manifest local aplicado
     manifest_paths = [
-        Path(__file__).resolve().parent / "storage" / "update_manifest.json",
+        _APP_ROOT / "app_version.json",
+        _UPDATE_MANIFEST_FILE,
+        _APP_ROOT / "update_manifest.json",
         Path(__file__).resolve().parent / "update_manifest.json",
     ]
     for manifest_path in manifest_paths:
@@ -95,12 +139,12 @@ def _get_current_version() -> str:
                     return manifest_version
             except Exception:
                 pass
-    version_file = Path(__file__).resolve().parent / "VERSION"
-    if version_file.exists():
-        try:
-            return version_file.read_text(encoding="utf-8").strip()
-        except Exception:
-            pass
+    for version_file in (_APP_ROOT / "VERSION", Path(__file__).resolve().parent / "VERSION"):
+        if version_file.exists():
+            try:
+                return version_file.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
     
     # Fallback: usar hash del código principal
     try:
@@ -298,6 +342,114 @@ def check_for_updates(
     return True, release_info, f"Actualización disponible: {latest_version} (actual: {current_version})"
 
 
+def _staging_dir_for_version(version: str) -> Path:
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    return _UPDATE_STAGING_DIR / f"{stamp}_{_safe_version_slug(version)}"
+
+
+def _resolve_staged_payload_root(extract_root: Path) -> Path:
+    try:
+        entries = [item for item in extract_root.iterdir() if item.name != "__MACOSX"]
+    except Exception:
+        return extract_root
+    if len(entries) == 1 and entries[0].is_dir():
+        child = entries[0]
+        if any(
+            (child / name).exists()
+            for name in ("InstaCRM.exe", "app", "update_manifest.json", "storage", "VERSION")
+        ):
+            return child
+    return extract_root
+
+
+def _staged_manifest_candidates(payload_root: Path) -> List[Path]:
+    return [
+        payload_root / "update_manifest.json",
+        payload_root / "app" / "update_manifest.json",
+        payload_root / "storage" / "update_manifest.json",
+        payload_root / "app" / "app_version.json",
+    ]
+
+
+def _load_staged_manifest(payload_root: Path) -> Dict[str, Any]:
+    for candidate in _staged_manifest_candidates(payload_root):
+        if not candidate.exists():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _verify_staged_manifest(payload_root: Path, manifest: Dict[str, Any]) -> Tuple[bool, str]:
+    file_rows = manifest.get("files")
+    if not isinstance(file_rows, list):
+        integrity = manifest.get("integrity")
+        if isinstance(integrity, dict):
+            maybe_rows = integrity.get("files")
+            if isinstance(maybe_rows, list):
+                file_rows = maybe_rows
+    if not isinstance(file_rows, list):
+        return True, "manifest_hash_hooks_not_used"
+
+    verified = 0
+    for row in file_rows:
+        if not isinstance(row, dict):
+            continue
+        rel_path = str(row.get("path") or "").strip()
+        expected_hash = str(row.get("sha256") or row.get("sha256_hash") or "").strip().lower()
+        if not rel_path or not expected_hash:
+            continue
+        candidate = payload_root / rel_path
+        if not candidate.exists() or not candidate.is_file():
+            return False, f"manifest_file_missing:{rel_path}"
+        actual_hash = _calculate_file_hash(candidate).lower()
+        if actual_hash != expected_hash:
+            return False, f"manifest_hash_mismatch:{rel_path}"
+        verified += 1
+    if verified <= 0:
+        return True, "manifest_hash_hooks_empty"
+    return True, f"manifest_files_verified:{verified}"
+
+
+def _stage_update_archive(
+    update_file: Path,
+    *,
+    update_info: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    _ensure_update_dirs()
+    version = str((update_info or {}).get("version") or update_file.stem or "latest")
+    stage_root = _staging_dir_for_version(version)
+    extract_root = stage_root / "payload"
+    try:
+        stage_root.mkdir(parents=True, exist_ok=False)
+        extract_root.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(update_file, "r") as zip_ref:
+            zip_ref.extractall(extract_root)
+        payload_root = _resolve_staged_payload_root(extract_root)
+        manifest = _load_staged_manifest(payload_root)
+        verified, detail = _verify_staged_manifest(payload_root, manifest)
+        if not verified:
+            _remove_path(stage_root)
+            return False, None, f"Falló verificación del stage: {detail}"
+        stage_info = {
+            "version": version,
+            "archive_path": str(update_file),
+            "stage_root": str(stage_root),
+            "payload_root": str(payload_root),
+            "manifest": manifest,
+            "manifest_verification": detail,
+            "created_at": time.time(),
+        }
+        return True, stage_info, f"Actualización preparada en stage: {stage_root.name}"
+    except Exception as exc:
+        _remove_path(stage_root)
+        return False, None, f"No se pudo preparar el stage de actualización: {exc}"
+
+
 def download_update(
     update_info: Dict[str, Any],
 ) -> Tuple[bool, Optional[Path], str]:
@@ -314,7 +466,7 @@ def download_update(
     if not download_url:
         return False, None, "No se encontró archivo de actualización en la release."
     
-    _UPDATE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_update_dirs()
     version = update_info.get("version", "latest")
     temp_file = _UPDATE_CACHE_DIR / f"update_{version}.zip"
     
@@ -367,6 +519,24 @@ def _download_asset_to_path(download_url: str, dest_path: Path) -> Tuple[bool, s
         return False, f"Error al descargar asset: {exc}"
 
 
+def _is_frozen_onedir_layout() -> bool:
+    if not getattr(sys, "frozen", False):
+        return False
+    try:
+        exe_dir = Path(sys.executable).resolve().parent
+    except Exception:
+        return False
+    return (exe_dir / "_internal").exists()
+
+
+def _installation_requires_full_package_update() -> bool:
+    try:
+        exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else _INSTALL_ROOT
+    except Exception:
+        exe_dir = _INSTALL_ROOT
+    return _is_frozen_onedir_layout() or (exe_dir / "app").exists()
+
+
 def _schedule_exe_replace_windows(source_path: Path, target_path: Path) -> Tuple[bool, str]:
     """Programa el reemplazo del EXE usando un .bat (Windows)."""
     try:
@@ -401,8 +571,185 @@ def _schedule_exe_replace_windows(source_path: Path, target_path: Path) -> Tuple
         return False, f"No se pudo programar el reemplazo del EXE: {exc}"
 
 
+def _schedule_staged_update_windows(
+    stage_info: Dict[str, Any],
+    *,
+    backup: bool = True,
+) -> Tuple[bool, str]:
+    try:
+        _ensure_update_dirs()
+        version = str(stage_info.get("version") or "latest")
+        payload_root = Path(str(stage_info.get("payload_root") or ""))
+        stage_root = Path(str(stage_info.get("stage_root") or ""))
+        if not payload_root.exists():
+            return False, "El stage no contiene payload utilizable."
+
+        exe_name = Path(getattr(sys, "executable", "") or "InstaCRM.exe").name or "InstaCRM.exe"
+        install_root = _INSTALL_ROOT
+        target_exe = install_root / exe_name
+        payload_exe = payload_root / exe_name
+        payload_app = payload_root / "app"
+        backup_root = _UPDATE_BACKUP_DIR / f"{int(time.time())}_{_safe_version_slug(version)}"
+        script_path = _UPDATE_CACHE_DIR / "apply_staged_update.ps1"
+        helper_log = _UPDATE_STATE_DIR / "apply_helper.log"
+        applying_payload = {
+            **stage_info,
+            "status": "applying",
+            "backup_root": str(backup_root),
+            "scheduled_at": time.time(),
+        }
+        pending_payload = {
+            **stage_info,
+            "status": "pending_restart",
+            "backup_requested": bool(backup),
+            "pid": os.getpid(),
+            "backup_root": str(backup_root),
+            "scheduled_at": time.time(),
+        }
+        _write_update_state(_UPDATE_PENDING_FILE, pending_payload)
+
+        ps_script = f"""
+$ErrorActionPreference = 'Stop'
+$PidToWait = {os.getpid()}
+$InstallRoot = {json.dumps(str(install_root))}
+$PayloadRoot = {json.dumps(str(payload_root))}
+$PayloadApp = {json.dumps(str(payload_app))}
+$PayloadExe = {json.dumps(str(payload_exe))}
+$TargetExe = {json.dumps(str(target_exe))}
+$TargetApp = Join-Path $InstallRoot 'app'
+$TargetAppOld = Join-Path $InstallRoot 'app.__old__'
+$TargetAppNew = Join-Path $InstallRoot 'app.__new__'
+$PendingFile = {json.dumps(str(_UPDATE_PENDING_FILE))}
+$ApplyingFile = {json.dumps(str(_UPDATE_APPLYING_FILE))}
+$LastAppliedFile = {json.dumps(str(_UPDATE_LAST_APPLIED_FILE))}
+$HelperLog = {json.dumps(str(helper_log))}
+$ErrorLog = {json.dumps(str(_UPDATE_ERROR_LOG))}
+$BackupRoot = {json.dumps(str(backup_root))}
+$BackupEnabled = {'$true' if backup else '$false'}
+$ScheduledPayload = {json.dumps(json.dumps(applying_payload, ensure_ascii=False, indent=2))}
+
+function Write-Log([string]$Message) {{
+    $stamp = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
+    Add-Content -Path $HelperLog -Value "$stamp $Message"
+}}
+
+function Restore-Backup {{
+    if (-not (Test-Path $BackupRoot)) {{
+        return
+    }}
+    $backupExe = Join-Path $BackupRoot ([System.IO.Path]::GetFileName($TargetExe))
+    $backupApp = Join-Path $BackupRoot 'app'
+    if (Test-Path $backupExe) {{
+        Copy-Item -Path $backupExe -Destination $TargetExe -Force
+    }}
+    if (Test-Path $backupApp) {{
+        if (Test-Path $TargetApp) {{
+            Remove-Item -Path $TargetApp -Recurse -Force
+        }}
+        Copy-Item -Path $backupApp -Destination $TargetApp -Recurse -Force
+    }}
+}}
+
+while (Get-Process -Id $PidToWait -ErrorAction SilentlyContinue) {{
+    Start-Sleep -Seconds 1
+}}
+
+try {{
+    New-Item -ItemType Directory -Force -Path {json.dumps(str(_UPDATE_STATE_DIR))} | Out-Null
+    New-Item -ItemType Directory -Force -Path {json.dumps(str(_UPDATE_BACKUP_DIR))} | Out-Null
+    Set-Content -Path $ApplyingFile -Value $ScheduledPayload -Encoding UTF8
+    Write-Log "apply_start version={version}"
+    if ($BackupEnabled) {{
+        New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+        if (Test-Path $TargetExe) {{
+            Copy-Item -Path $TargetExe -Destination (Join-Path $BackupRoot ([System.IO.Path]::GetFileName($TargetExe))) -Force
+        }}
+        if (Test-Path $TargetApp) {{
+            Copy-Item -Path $TargetApp -Destination (Join-Path $BackupRoot 'app') -Recurse -Force
+        }}
+    }}
+    if (Test-Path $TargetAppNew) {{
+        Remove-Item -Path $TargetAppNew -Recurse -Force
+    }}
+    if (Test-Path $PayloadApp) {{
+        Copy-Item -Path $PayloadApp -Destination $TargetAppNew -Recurse -Force
+    }}
+    if (Test-Path $PayloadApp) {{
+        if (Test-Path $TargetAppOld) {{
+            Remove-Item -Path $TargetAppOld -Recurse -Force
+        }}
+        if (Test-Path $TargetApp) {{
+            Rename-Item -Path $TargetApp -NewName 'app.__old__'
+        }}
+        if (Test-Path $TargetAppNew) {{
+            Rename-Item -Path $TargetAppNew -NewName 'app'
+        }}
+    }}
+    if (Test-Path $PayloadExe) {{
+        $NewExe = "$TargetExe.new"
+        if (Test-Path $NewExe) {{
+            Remove-Item -Path $NewExe -Force
+        }}
+        Copy-Item -Path $PayloadExe -Destination $NewExe -Force
+        if (Test-Path $TargetExe) {{
+            Remove-Item -Path $TargetExe -Force
+        }}
+        Move-Item -Path $NewExe -Destination $TargetExe -Force
+    }}
+    if (Test-Path $TargetAppOld) {{
+        Remove-Item -Path $TargetAppOld -Recurse -Force
+    }}
+    Set-Content -Path $LastAppliedFile -Value $ScheduledPayload -Encoding UTF8
+    if (Test-Path $PendingFile) {{
+        Remove-Item -Path $PendingFile -Force
+    }}
+    if (Test-Path $ApplyingFile) {{
+        Remove-Item -Path $ApplyingFile -Force
+    }}
+    Write-Log "apply_success version={version}"
+    if (Test-Path $TargetExe) {{
+        Start-Process -FilePath $TargetExe
+    }}
+}}
+catch {{
+    $_ | Out-File -FilePath $ErrorLog -Encoding UTF8 -Append
+    Write-Log "apply_failure version={version}"
+    Restore-Backup
+}}
+"""
+        script_path.write_text(ps_script.strip() + "\n", encoding="utf-8")
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+            ],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return True, "Actualización staged. Cierra la aplicación para completar el reemplazo seguro."
+    except Exception as exc:
+        return False, f"No se pudo programar la actualización staged: {exc}"
+
+
 def _update_executable_from_release() -> None:
     """Descarga y programa la actualización del EXE desde GitHub Release."""
+    # Safety guard: one-dir builds depend on sibling folders (_internal, browsers, etc.).
+    # Replacing only the .exe can leave runtime in a broken mixed state.
+    if _installation_requires_full_package_update():
+        warn("Esta instalación requiere actualización por paquete completo.")
+        print(
+            "Para actualizar sin romper librerías o metadata del app layout, "
+            "reemplaza la carpeta completa del programa desde un ZIP de release."
+        )
+        print(
+            "No uses 'Actualizar programa (EXE)' en este equipo para esta instalación."
+        )
+        press_enter()
+        return
+
     config = _load_update_config()
     github_repo = config.get("github_repo", _DEFAULT_GITHUB_REPO)
     if not github_repo or "/" not in github_repo:
@@ -413,7 +760,7 @@ def _update_executable_from_release() -> None:
     if getattr(sys, "frozen", False):
         default_asset = Path(sys.executable).name
     if not default_asset:
-        default_asset = "insta_cli.exe"
+        default_asset = "InstaCRM.exe"
     asset_name = config.get("exe_asset_name") or default_asset
     ok(f"Buscando asset '{asset_name}' en la última release...")
     asset = _get_release_asset(github_repo, asset_name)
@@ -473,7 +820,7 @@ def update_single_file_from_release(
     if not asset or not asset.get("download_url"):
         return False, f"No se encontró el asset {asset_name} en la última release."
     download_url = asset["download_url"]
-    _UPDATE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_update_dirs()
     temp_path = _UPDATE_CACHE_DIR / asset_name
     success, msg = _download_asset_to_path(download_url, temp_path)
     if not success:
@@ -513,47 +860,67 @@ def apply_update(
     Returns:
         (exito, mensaje)
     """
+    def _report_failure(message: str) -> None:
+        try:
+            from src.telemetry import report_update_failed
+
+            report_update_failed(
+                str(message or "update_failed"),
+                payload={"update_file": str(update_file), "backup": bool(backup)},
+            )
+        except Exception:
+            return
+
     if not update_file.exists():
-        return False, "El archivo de actualización no existe."
-    
-    workspace_root = Path(__file__).resolve().parent
-    
+        message = "El archivo de actualización no existe."
+        _report_failure(message)
+        return False, message
+    if update_file.suffix.lower() != ".zip":
+        message = "La actualización debe ser un archivo ZIP."
+        _report_failure(message)
+        return False, message
+
     try:
-        # Crear backup si se solicita
-        if backup:
-            backup_dir = workspace_root / "storage" / "backups"
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            backup_name = f"backup_{int(time.time())}"
-            backup_path = backup_dir / backup_name
-            shutil.copytree(workspace_root, backup_path, ignore=shutil.ignore_patterns(
-                "*.pyc", "__pycache__", ".git", "storage/backups", "storage/updates_cache"
-            ))
-            print(f"Backup creado en: {backup_path}")
-        
-        # Extraer actualización
-        with zipfile.ZipFile(update_file, "r") as zip_ref:
-            # Listar archivos que se van a actualizar
-            file_list = zip_ref.namelist()
-            print(f"Actualizando {len(file_list)} archivos...")
-            
-            # Extraer archivos
-            zip_ref.extractall(workspace_root)
-        
-        # Actualizar versión en configuración
-        config = _load_update_config()
-        update_manifest_path = workspace_root / "storage" / "update_manifest.json"
-        if update_manifest_path.exists():
-            try:
-                manifest_data = json.loads(update_manifest_path.read_text(encoding="utf-8"))
-                new_version = manifest_data.get("version", "unknown")
-                config["current_version"] = new_version
-                _save_update_config(config)
-            except Exception:
-                pass
-        
-        return True, "Actualización aplicada correctamente. Reinicia la aplicación."
+        staged_ok, stage_info, stage_message = _stage_update_archive(update_file)
+        if not staged_ok or stage_info is None:
+            _report_failure(stage_message)
+            return False, stage_message
+
+        payload_root = Path(str(stage_info.get("payload_root") or ""))
+        manifest = stage_info.get("manifest") or {}
+        version = str(manifest.get("version") or stage_info.get("version") or "unknown")
+
+        if _installation_requires_full_package_update() and not (payload_root / "app").exists():
+            _remove_path(Path(str(stage_info.get("stage_root") or "")))
+            message = (
+                False,
+                "El ZIP descargado no contiene la carpeta app/ requerida para esta instalación multiparte.",
+            )
+            _report_failure(message[1])
+            return message
+
+        if sys.platform.startswith("win"):
+            success, message = _schedule_staged_update_windows(stage_info, backup=backup)
+            if not success:
+                _report_failure(message)
+                return False, message
+            return True, f"{message} Versión staged: {version}."
+
+        pending_payload = {
+            **stage_info,
+            "status": "pending_manual_apply",
+            "backup_requested": bool(backup),
+            "scheduled_at": time.time(),
+        }
+        _write_update_state(_UPDATE_PENDING_FILE, pending_payload)
+        return True, (
+            "Actualización staged correctamente. "
+            f"Revisa {_UPDATE_PENDING_FILE} para completar la aplicación manual de la versión {version}."
+        )
     except Exception as exc:
-        return False, f"Error al aplicar actualización: {exc}"
+        message = f"Error al aplicar actualización staged: {exc}"
+        _report_failure(message)
+        return False, message
 
 
 def auto_update_check() -> None:
@@ -683,7 +1050,7 @@ def _update_responder_py_from_release() -> None:
         warn("Actualización cancelada.")
         press_enter()
         return
-    target_path = Path(__file__).resolve().parent / "responder.py"
+    target_path = Path(__file__).resolve().parent / "core" / "responder.py"
     ok("Descargando responder.py desde GitHub...")
     success, msg = update_single_file_from_release(
         github_repo,

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Union
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
+
+from core.proxy_registry import ProxyResolutionError, proxy_reference_status
 
 
 def _clean(value: Any) -> str:
@@ -78,9 +80,63 @@ def normalize_playwright_proxy(
     return payload
 
 
+def proxy_fields_from_proxy(
+    raw_proxy: Union[str, Dict[str, Any], None],
+    *,
+    proxy_user: Any = "",
+    proxy_pass: Any = "",
+) -> Dict[str, str]:
+    payload = normalize_playwright_proxy(
+        raw_proxy,
+        proxy_user=proxy_user,
+        proxy_pass=proxy_pass,
+    )
+    if not payload:
+        return {
+            "proxy_url": "",
+            "proxy_user": "",
+            "proxy_pass": "",
+        }
+    return {
+        "proxy_url": _clean(payload.get("server") or payload.get("url") or payload.get("proxy")),
+        "proxy_user": _clean(payload.get("username") or payload.get("user")),
+        "proxy_pass": _clean(payload.get("password") or payload.get("pass")),
+    }
+
+
 def proxy_from_account(account: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
     if not account:
         return None
+
+    assigned_proxy_id = _clean(account.get("assigned_proxy_id"))
+    if assigned_proxy_id:
+        status = proxy_reference_status(assigned_proxy_id)
+        if status.get("status") == "missing":
+            raise ProxyResolutionError(
+                "assigned_proxy_missing",
+                assigned_proxy_id,
+                str(status.get("message") or "").strip(),
+            )
+        if status.get("status") == "inactive":
+            raise ProxyResolutionError(
+                "assigned_proxy_inactive",
+                assigned_proxy_id,
+                str(status.get("message") or "").strip(),
+            )
+        if status.get("status") == "quarantined":
+            raise ProxyResolutionError(
+                "assigned_proxy_quarantined",
+                assigned_proxy_id,
+                str(status.get("message") or "").strip(),
+            )
+        pooled = _proxy_from_pool(assigned_proxy_id)
+        if pooled is not None:
+            return pooled
+        raise ProxyResolutionError(
+            "assigned_proxy_unresolved",
+            assigned_proxy_id,
+            f"No se pudo resolver el proxy asignado {assigned_proxy_id}.",
+        )
 
     proxy_url = _clean(account.get("proxy_url"))
     proxy_user = _clean(account.get("proxy_user") or account.get("proxy_username"))
@@ -91,6 +147,93 @@ def proxy_from_account(account: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
         raw_proxy = proxy_url
     else:
         raw_proxy = account.get("proxy")
+
+    return normalize_playwright_proxy(
+        raw_proxy,
+        proxy_user=proxy_user,
+        proxy_pass=proxy_pass,
+    )
+
+
+def proxy_fields_from_account(account: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    payload = proxy_from_account(account)
+    return proxy_fields_from_proxy(payload)
+
+
+def build_proxy_input_from_account(account: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    fields = proxy_fields_from_account(account)
+    proxy_url = _clean(fields.get("proxy_url"))
+    if not proxy_url:
+        return {}
+    payload = {"url": proxy_url}
+    proxy_user = _clean(fields.get("proxy_user"))
+    proxy_pass = _clean(fields.get("proxy_pass"))
+    if proxy_user:
+        payload["username"] = proxy_user
+    if proxy_pass:
+        payload["password"] = proxy_pass
+    return payload
+
+
+def requests_proxy_map_from_account(account: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    fields = proxy_fields_from_account(account)
+    proxy_url = _clean(fields.get("proxy_url"))
+    if not proxy_url:
+        return {}
+    proxy_url = proxy_url if "://" in proxy_url else f"http://{proxy_url}"
+    proxy_user = _clean(fields.get("proxy_user"))
+    proxy_pass = _clean(fields.get("proxy_pass"))
+    if proxy_user:
+        parsed = urlsplit(proxy_url)
+        auth = quote(proxy_user, safe="")
+        if proxy_pass:
+            auth = f"{auth}:{quote(proxy_pass, safe='')}"
+        proxy_url = urlunsplit(
+            (
+                parsed.scheme,
+                f"{auth}@{parsed.netloc}",
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    return {"http": proxy_url, "https": proxy_url}
+
+
+def _proxy_from_pool(proxy_id: str) -> Optional[Dict[str, str]]:
+    try:
+        from src.proxy_pool import get_proxy_by_id
+    except Exception:
+        return None
+
+    proxy_record = get_proxy_by_id(proxy_id, active_only=True)
+    if not isinstance(proxy_record, dict):
+        return None
+
+    proxy_url = _clean(
+        proxy_record.get("proxy_url")
+        or proxy_record.get("url")
+        or proxy_record.get("server")
+        or proxy_record.get("proxy")
+    )
+    proxy_user = _clean(
+        proxy_record.get("proxy_user")
+        or proxy_record.get("proxy_username")
+        or proxy_record.get("username")
+        or proxy_record.get("user")
+    )
+    proxy_pass = _clean(
+        proxy_record.get("proxy_pass")
+        or proxy_record.get("proxy_password")
+        or proxy_record.get("password")
+        or proxy_record.get("pass")
+    )
+
+    raw_proxy: Union[str, Dict[str, Any], None]
+    if proxy_url:
+        raw_proxy = proxy_url
+    else:
+        raw_proxy = proxy_record.get("proxy")
 
     return normalize_playwright_proxy(
         raw_proxy,

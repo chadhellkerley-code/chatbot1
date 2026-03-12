@@ -1,8 +1,8 @@
 """Playwright-backed Instagram client adapter.
 
 This adapter plugs the existing Playwright human sender into the generic
-`BaseInstagramClient` interface so the CLI menu can keep calling
-`get_instagram_client()` without knowing about the underlying engine.
+`BaseInstagramClient` interface so callers can request the Playwright engine
+without knowing about the underlying implementation details.
 
 It relies on:
  - `accounts` menu performing the interactive login and persisting the

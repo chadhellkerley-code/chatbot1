@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import errno
+import fnmatch
 import json
 import os
 import shutil
@@ -52,10 +53,14 @@ def _resolve_build_root() -> Path:
 
 
 def _copy_project(src: Path, dest: Path) -> None:
-    ignore = shutil.ignore_patterns(
+    base_patterns = (
         "venv*",
         ".venv*",
         ".venv_models",
+        ".codex_*",
+        ".tmp*",
+        ".vscode",
+        ".idea",
         "dist",
         "build",
         "__pycache__",
@@ -69,7 +74,9 @@ def _copy_project(src: Path, dest: Path) -> None:
         "browser_sessions",
         "browsers",
         "ms-playwright",
+        "playwright_browsers",
         "profiles",
+        "legacy",
         "whatsapp_exports",
         "storage",
         "data",
@@ -78,9 +85,61 @@ def _copy_project(src: Path, dest: Path) -> None:
         "models",
         "_archive",
         "tests",
-        "tests_optin",
+        "docs",
+        "cloudflare",
+        "node_modules",
+        "logs",
+        "updates",
     )
+
+    def ignore(current_dir: str, names: list[str]) -> set[str]:
+        current_path = Path(current_dir)
+        ignored = {
+            name for name in names if any(fnmatch.fnmatch(name, pattern) for pattern in base_patterns)
+        }
+        try:
+            relative_parts = current_path.relative_to(src).parts
+        except Exception:
+            relative_parts = ()
+
+        if relative_parts == ("runtime",):
+            ignored.update(name for name in names if name in _RUNTIME_TRANSIENT_DIRS)
+        if relative_parts == ("tools",) and "build_artifacts" in names:
+            ignored.add("build_artifacts")
+        return ignored
+
     shutil.copytree(src, dest, ignore=ignore)
+
+
+_RUNTIME_TRANSIENT_DIRS = (
+    "artifacts",
+    "browser_profiles",
+    "browsers",
+    "logs",
+    "models",
+    "playwright",
+    "screenshots",
+    "sessions",
+    "traces",
+    "__pycache__",
+)
+
+
+def _prune_runtime_tree(root: Path) -> None:
+    runtime_dir = root / "runtime"
+    if not runtime_dir.exists():
+        return
+
+    for name in _RUNTIME_TRANSIENT_DIRS:
+        target = runtime_dir / name
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists():
+            target.unlink()
+
+    for pattern in ("*.pyc", "*.pyo"):
+        for item in runtime_dir.glob(pattern):
+            item.unlink(missing_ok=True)
 
 
 def _sanitize_tree(root: Path) -> None:
@@ -111,10 +170,19 @@ def _sanitize_tree(root: Path) -> None:
         if item.is_file():
             item.unlink()
 
+    _prune_runtime_tree(root)
+
 
 def _write_client_env(root: Path) -> None:
     env_path = root / ".env"
-    lines = ["CLIENT_DISTRIBUTION=1"]
+    overweight_threshold = (
+        os.environ.get("LEADS_IMAGE_OVERWEIGHT_THRESHOLD", "0.56").strip() or "0.56"
+    )
+    lines = [
+        "CLIENT_DISTRIBUTION=1",
+        "HUMAN_DM_ALLOW_UNVERIFIED=1",
+        f"LEADS_IMAGE_OVERWEIGHT_THRESHOLD={overweight_threshold}",
+    ]
     remote_only = os.environ.get("LICENSE_REMOTE_ONLY")
     if remote_only:
         lines.append(f"LICENSE_REMOTE_ONLY={remote_only}")
@@ -127,33 +195,40 @@ def _log_step(message: str) -> None:
 
 
 _HIDDEN_IMPORTS = [
-    "accounts",
-    "actions.content_publisher",
-    "actions.interactions",
-    "actions.interactions_adapters",
+    "core.accounts",
+    "automation.actions.content_publisher",
+    "automation.actions.interactions",
+    "automation.actions.interactions_adapters",
     "app",
     "backend_license_client",
     "config",
-    "gui_app",
-    "ig",
-    "io_adapter",
-    "leads",
+    "gui.gui_app",
+    "core.ig",
+    "core.leads",
     "licensekit",
-    "main_window",
+    "gui.main_window",
     "media_norm",
     "proxy_manager",
-    "responder",
-    "runtime",
+    "core.responder",
+    "runtime.runtime",
+    "runtime.runtime_parity",
     "sdk_sanitize",
-    "session_store",
+    "core.session_store",
     "state_view",
     "src.analytics.stats_engine",
-    "storage",
-    "totp_store",
+    "src.image_attribute_filter",
+    "src.image_prompt_parser",
+    "src.image_rule_evaluator",
+    "src.leads_filter_pipeline",
+    "src.vision.face_detector_scrfd",
+    "src.vision.fairface_analyzer",
+    "src.vision.gender_age_analyzer",
+    "core.storage",
+    "core.totp_store",
     "ui",
     "update_system",
     "utils",
-    "whatsapp",
+    "automation.whatsapp",
 ]
 
 # Dependencias requeridas por pkg_resources/pyi_rth_pkgres
@@ -164,6 +239,7 @@ _EXTRA_HIDDEN_IMPORTS = [
     "jaraco.functools",
     "pkg_resources",
     "setuptools",
+    "onnxruntime",
 ]
 
 _COLLECT_ALL_BASE = [
@@ -191,7 +267,6 @@ _HEAVY_EXCLUDES = [
     "pandas",
     "scipy",
     "matplotlib",
-    "cv2",
     "h5py",
 ]
 
@@ -213,6 +288,7 @@ _PAK_FILES = (
     "headless_lib_strings.pak",
     "headless_command_resources.pak",
 )
+_EMBEDDED_CHROMIUM_REVISION = "1200"
 
 
 def _safe_stat_size(path: Path) -> int:
@@ -228,6 +304,53 @@ def _parse_revision(name: str, prefix: str) -> int:
     suffix = name[len(prefix) :]
     digits = "".join(ch for ch in suffix if ch.isdigit())
     return int(digits) if digits else -1
+
+
+def _extract_chromium_revision_from_browsers_json(path: Path) -> Optional[str]:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    browsers = payload.get("browsers")
+    if not isinstance(browsers, list):
+        return None
+    for row in browsers:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("name") or "").strip().lower() != "chromium":
+            continue
+        revision = str(row.get("revision") or "").strip()
+        if revision:
+            return revision
+    return None
+
+
+def _expected_chromium_revision() -> Optional[str]:
+    override = (
+        os.environ.get("PLAYWRIGHT_BUNDLE_REVISION")
+        or os.environ.get("PLAYWRIGHT_CHROMIUM_REVISION")
+        or ""
+    ).strip()
+    if override:
+        return override
+
+    # Default to the revision expected by the installed Playwright package, so
+    # the bundled browsers match the runtime dependencies.
+    try:
+        import playwright  # type: ignore
+
+        browsers_json = (
+            Path(playwright.__file__).resolve().parent / "driver" / "package" / "browsers.json"
+        )
+        revision = _extract_chromium_revision_from_browsers_json(browsers_json)
+        if revision:
+            return revision
+    except Exception:
+        pass
+
+    return _EMBEDDED_CHROMIUM_REVISION
 
 
 def _key_files_ok(folder: Path) -> bool:
@@ -331,26 +454,25 @@ def _select_standalone_executable(root: Path) -> Optional[Path]:
 
 
 def _select_playwright_browser_dirs(source: Path) -> tuple[list[Path], str]:
-    chromium_dir = _pick_latest_valid_dir(
-        source, _PLAYWRIGHT_CHROMIUM_PREFIX, _chromium_exe_candidates
-    )
-    if chromium_dir:
-        revision = chromium_dir.name[len(_PLAYWRIGHT_CHROMIUM_PREFIX) :]
-        headless_dir = source / f"{_PLAYWRIGHT_HEADLESS_PREFIX}{revision}"
-        if headless_dir.exists() and _dir_has_valid_executable(
-            headless_dir, _headless_exe_candidates
-        ):
-            return [chromium_dir, headless_dir], "chromium_ok"
-        if headless_dir.exists():
-            return [chromium_dir], "chromium_ok_headless_invalid"
-        return [chromium_dir], "chromium_ok_headless_missing"
+    target_revision = _expected_chromium_revision()
+    if not target_revision:
+        return [], "chromium_revision_missing"
+    chromium_dir = source / f"{_PLAYWRIGHT_CHROMIUM_PREFIX}{target_revision}"
+    if not (
+        chromium_dir.exists()
+        and chromium_dir.is_dir()
+        and _dir_has_valid_executable(chromium_dir, _chromium_exe_candidates)
+    ):
+        return [], "chromium_missing_or_invalid"
 
-    headless_dir = _pick_latest_valid_dir(
-        source, _PLAYWRIGHT_HEADLESS_PREFIX, _headless_exe_candidates
-    )
-    if headless_dir:
-        return [headless_dir], "headless_only"
-    return [], "no_valid_browser"
+    selected = [chromium_dir]
+    headless_dir = source / f"{_PLAYWRIGHT_HEADLESS_PREFIX}{target_revision}"
+    if headless_dir.exists() and headless_dir.is_dir():
+        if _dir_has_valid_executable(headless_dir, _headless_exe_candidates):
+            selected.append(headless_dir)
+            return selected, "chromium_with_headless"
+        return selected, "chromium_headless_invalid"
+    return selected, "chromium_headless_missing"
 
 
 def _parse_excludes() -> list[str]:
@@ -439,27 +561,43 @@ def _resolve_playwright_browsers_path() -> Optional[Path]:
             return candidate
 
     project_root = Path(__file__).resolve().parents[1]
-    for candidate in (project_root, project_root / "browsers"):
-        if _select_standalone_executable(candidate):
-            return candidate
+
+    def _has_versioned_playwright_layout(path: Path) -> bool:
+        selected_dirs, _ = _select_playwright_browser_dirs(path)
+        return bool(selected_dirs)
+
+    preferred_versioned: list[Path] = []
 
     if sys.platform.startswith("win"):
         local = os.environ.get("LOCALAPPDATA")
         if local:
-            candidate = Path(local) / "ms-playwright"
-            if candidate.exists():
-                return candidate
-        candidate = Path.home() / "AppData" / "Local" / "ms-playwright"
-        if candidate.exists():
-            return candidate
-        return None
-
-    if sys.platform == "darwin":
-        candidate = Path.home() / "Library" / "Caches" / "ms-playwright"
+            preferred_versioned.append(Path(local) / "ms-playwright")
+        preferred_versioned.append(Path.home() / "AppData" / "Local" / "ms-playwright")
+    elif sys.platform == "darwin":
+        preferred_versioned.append(Path.home() / "Library" / "Caches" / "ms-playwright")
     else:
-        candidate = Path.home() / ".cache" / "ms-playwright"
-    if candidate.exists():
-        return candidate
+        preferred_versioned.append(Path.home() / ".cache" / "ms-playwright")
+
+    preferred_versioned.extend(
+        [
+            project_root / "runtime" / "playwright",
+            project_root / "runtime" / "browsers",
+            project_root / "ms-playwright",
+            project_root / _PLAYWRIGHT_BUNDLE_DIR,
+            project_root / "playwright",
+            project_root,
+        ]
+    )
+
+    seen_versioned: set[str] = set()
+    for candidate in preferred_versioned:
+        key = str(candidate)
+        if key in seen_versioned:
+            continue
+        seen_versioned.add(key)
+        if candidate.exists() and _has_versioned_playwright_layout(candidate):
+            return candidate
+
     return None
 
 
@@ -544,18 +682,13 @@ def _copy_playwright_browsers(
     if bundle_mode in {"none", "external", "skip", "no"}:
         _log_step("Playwright browsers omitidos (modo external)")
         return
-    standalone = _select_standalone_executable(source)
-    if standalone:
-        _log_step(f"Browser standalone seleccionado: {standalone}")
-        _copy_standalone_browser(target, standalone)
-        return
     selected_dirs, reason = _select_playwright_browser_dirs(source)
-    if not selected_dirs:
-        _log_step("No se encontro un Chromium sano para copiar.")
+    if selected_dirs:
+        selected_names = ", ".join(item.name for item in selected_dirs)
+        _log_step(f"Playwright seleccionado: {selected_names} ({reason})")
+        _copy_playwright_selected(source, target, selected_dirs)
         return
-    selected_names = ", ".join(item.name for item in selected_dirs)
-    _log_step(f"Playwright seleccionado: {selected_names} ({reason})")
-    _copy_playwright_selected(source, target, selected_dirs)
+    _log_step("No se encontro un Chromium de Playwright valido para copiar.")
 
 
 def build_for_license(
@@ -564,9 +697,9 @@ def build_for_license(
     """Genera un ejecutable para la licencia suministrada."""
 
     root = Path(__file__).resolve().parents[1]
-    launcher = root / "client_launcher.py"
+    launcher = root / "launchers" / "client_launcher.py"
     if not launcher.exists():
-        return False, None, "No se encontró client_launcher.py"
+        return False, None, "No se encontró launchers/client_launcher.py"
 
     dist_dir = root / "dist"
     dist_dir.mkdir(exist_ok=True)
@@ -601,13 +734,13 @@ def build_for_license(
     pyinstaller_tail = ""
 
     try:
+        stale_source_bundle = dist_dir / f"{exe_name}_source.zip"
+        if stale_source_bundle.exists() and stale_source_bundle.is_file():
+            stale_source_bundle.unlink()
         if minimal_mode:
-            for stale_path in (
-                dist_dir / f"{exe_name}_source.zip",
-                dist_dir / f"{exe_name}_pyinstaller.log",
-            ):
-                if stale_path.exists() and stale_path.is_file():
-                    stale_path.unlink()
+            stale_log = dist_dir / f"{exe_name}_pyinstaller.log"
+            if stale_log.exists() and stale_log.is_file():
+                stale_log.unlink()
 
         playwright_src: Optional[Path] = None
         if include_playwright:
@@ -621,7 +754,8 @@ def build_for_license(
                         False,
                         None,
                         "No se encontraron los navegadores de Playwright. "
-                        "Coloca browsers/chrome-win64 o ejecuta: python -m playwright install",
+                        "Asegura playwright_browsers/chromium-* (o ms-playwright/chromium-*) "
+                        "y ejecuta: python -m playwright install chromium",
                     )
 
         _log_step("Preparando workspace temporal...")
@@ -651,31 +785,15 @@ def build_for_license(
         _log_step("Escribiendo .env de cliente...")
         _write_client_env(workspace)
 
-        payload_path = workspace / "storage" / "license_payload.json"
-        payload_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "license_key": record.get("license_key"),
-            "client_name": record.get("client_name"),
-            "expires_at": record.get("expires_at"),
-            "status": record.get("status", "active"),
-            "edition": "client",
-        }
-        payload_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        license_key_path = workspace / "license.key"
+        license_key = str(record.get("license_key") or "").strip()
+        if license_key:
+            license_key_path.write_text(license_key + "\n", encoding="utf-8")
 
-        archive_path: Optional[Path] = None
         if minimal_mode:
             _log_step("Bundle limpio omitido (modo minimal)")
         else:
-            _log_step("Generando bundle limpio (zip) del workspace...")
-            bundle_base = dist_dir / f"{exe_name}_source"
-            if bundle_base.with_suffix(".zip").exists():
-                bundle_base.with_suffix(".zip").unlink()
-            archive_path = Path(
-                shutil.make_archive(str(bundle_base), "zip", root_dir=workspace)
-            )
-            _log_step(f"Bundle limpio generado: {archive_path}")
+            _log_step("Bundle limpio omitido (solo carpeta distribuible)")
 
         styles_path = workspace / "styles.qss"
 
@@ -688,10 +806,15 @@ def build_for_license(
             "--onefile" if onefile else "--onedir",
             "--name",
             exe_name,
-            "--add-data",
-            f"{payload_path}{os.pathsep}storage",
-            "client_launcher.py",
+            "launchers/client_launcher.py",
         ]
+        if license_key:
+            command.extend(
+                [
+                    "--add-data",
+                    f"{license_key_path}{os.pathsep}.",
+                ]
+            )
         if windowed:
             command.append("--windowed")
         if styles_path.exists():
@@ -789,11 +912,7 @@ def build_for_license(
                 dest_root, playwright_src, mode=_playwright_bundle_mode()
             )
             _log_step("Navegadores Playwright copiados")
-        if archive_path is None:
-            message = f"Ejecutable generado en {final_output}"
-        else:
-            message = f"Ejecutable generado en {final_output} (bundle limpio: {archive_path})"
-        return True, final_output, message
+        return True, final_output, f"Ejecutable generado en {final_output}"
     except subprocess.CalledProcessError as exc:
         tail = pyinstaller_tail or (_tail_log(log_path) if log_path else "")
         detail = f"Error al ejecutar PyInstaller: {exc}"

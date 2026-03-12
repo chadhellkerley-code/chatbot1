@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from paths import accounts_root
+
 
 @dataclass
 class Account:
@@ -57,7 +59,11 @@ def _read_json(path: Path) -> List[Account]:
     return accounts
 
 
-def load_accounts(path: Path = Path("data/accounts.csv")) -> List[Account]:
+_BASE_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_ACCOUNTS_PATH = accounts_root(_BASE_ROOT) / "accounts.csv"
+
+
+def load_accounts(path: Path = _DEFAULT_ACCOUNTS_PATH) -> List[Account]:
     if not path.exists():
         raise FileNotFoundError(f"Accounts file not found: {path}")
     if path.suffix.lower() == ".json":

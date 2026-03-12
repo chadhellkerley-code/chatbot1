@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field
 import threading
 from typing import List, Sequence
@@ -24,14 +25,36 @@ except Exception:  # pragma: no cover - graceful fallback
     Fore = Style = _Dummy()  # type: ignore
 
 
-_MOJIBAKE_MARKERS = ("Ã", "Â", "â", "ðŸ", "�")
+_MOJIBAKE_MARKERS = (
+    "\ufffd",
+    "\u00c3",
+    "\u00c2",
+    "\u00e2",
+    "\u00f0",
+    "\u0178",
+    "\u00ef",
+    "\u0192",
+    "\u201a",
+    "\u201e",
+    "\u2020",
+    "\u2021",
+    "\u02c6",
+    "\u2030",
+    "\u0160",
+    "\u0152",
+    "\u017d",
+    "\u02dc",
+    "\u0161",
+    "\u0153",
+    "\u017e",
+)
 _ORIGINAL_PRINT = builtins.print
 _ORIGINAL_INPUT = builtins.input
 _CONSOLE_FIXES_INSTALLED = False
 
 
 def _mojibake_score(text: str) -> int:
-    return sum(text.count(token) for token in _MOJIBAKE_MARKERS)
+    return (text.count("\ufffd") * 4) + sum(text.count(token) for token in _MOJIBAKE_MARKERS)
 
 
 def _repair_mojibake(text: str) -> str:
@@ -43,15 +66,27 @@ def _repair_mojibake(text: str) -> str:
 
     best = text
     best_score = score_before
-    for source_encoding in ("latin1", "cp1252"):
-        try:
-            candidate = text.encode(source_encoding).decode("utf-8")
-        except Exception:
+    queue: deque[tuple[str, int]] = deque([(text, 0)])
+    seen: set[str] = {text}
+    while queue:
+        current, depth = queue.popleft()
+        if depth >= 6:
             continue
-        candidate_score = _mojibake_score(candidate)
-        if candidate_score < best_score:
-            best = candidate
-            best_score = candidate_score
+        for source_encoding in ("latin1", "cp1252"):
+            try:
+                candidate = current.encode(source_encoding).decode("utf-8")
+            except Exception:
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidate_score = _mojibake_score(candidate)
+            if candidate_score < best_score:
+                best = candidate
+                best_score = candidate_score
+                if best_score == 0:
+                    return best
+            queue.append((candidate, depth + 1))
     return best
 
 
@@ -203,6 +238,8 @@ def style_text(text: str, *, color: str | None = None, bold: bool = False) -> st
 
 
 def clear_console() -> None:
+    if os.environ.get("INSTACLI_DISABLE_CONSOLE_CLEAR", "").strip() in {"1", "true", "yes"}:
+        return
     stdin_tty = False
     stdout_tty = False
     with contextlib.suppress(Exception):

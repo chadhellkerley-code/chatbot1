@@ -1,0 +1,233 @@
+{
+  "files_modified": [
+    "runtime/runtime.py",
+    "src/runtime/playwright_runtime.py",
+    "src/playwright_service.py",
+    "automation/whatsapp.py",
+    "src/dm_playwright_client.py",
+    "core/storage_atomic.py",
+    "core/accounts.py",
+    "core/storage.py",
+    "core/responder.py",
+    "licensekit.py",
+    "health_store.py",
+    "src/dm_campaign/lead_status_store.py",
+    "core/ig.py",
+    "automation/actions/interactions.py",
+    "src/dm_campaign/proxy_workers_runner.py",
+    "gui/main_window.py",
+    "step10_stability_fixes_report.json"
+  ],
+  "fix_groups_applied": {
+    "playwright_runtime_safety": {
+      "status": "applied",
+      "modules": [
+        "src/runtime/playwright_runtime.py",
+        "src/playwright_service.py",
+        "automation/whatsapp.py",
+        "src/dm_playwright_client.py"
+      ],
+      "changes": [
+        "Added runtime ownership metadata with runtime_id, owner_module, and active_contexts.",
+        "Added async context tracking and safe_shutdown_if_unused() to prevent shared teardown while contexts remain active.",
+        "Changed async restart paths to use guarded restart behavior instead of unconditional shared teardown.",
+        "Replaced direct sync Playwright stop usage with safe_runtime_stop() in WhatsApp runtime shutdown.",
+        "Registered sync runtime owners for WhatsApp and DM Playwright clients so shared sync shutdown only occurs when unused."
+      ]
+    },
+    "atomic_storage_writes": {
+      "status": "applied",
+      "modules": [
+        "core/storage_atomic.py",
+        "core/accounts.py",
+        "core/storage.py",
+        "core/responder.py",
+        "licensekit.py",
+        "health_store.py",
+        "src/dm_campaign/lead_status_store.py"
+      ],
+      "changes": [
+        "Added atomic_write_json() and atomic_append_jsonl() backed by temp-file fsync plus os.replace().",
+        "Migrated listed JSON and JSONL writers onto the shared atomic utility without changing formats or payload shape.",
+        "Used an internal atomic text helper for the existing JSONL compaction path in core/storage.py."
+      ]
+    },
+    "stop_event_isolation": {
+      "status": "applied",
+      "modules": [
+        "runtime/runtime.py",
+        "core/ig.py",
+        "core/responder.py",
+        "automation/actions/interactions.py",
+        "src/dm_campaign/proxy_workers_runner.py"
+      ],
+      "changes": [
+        "Added EngineCancellationToken and a compatibility stop-event wrapper.",
+        "Bound engine-specific tokens to active threads so existing STOP_EVENT checks prefer scoped cancellation.",
+        "Updated listener and worker-launch sites to propagate scoped cancellation into spawned threads.",
+        "Kept global STOP_EVENT fallback active for compatibility."
+      ]
+    },
+    "gui_io_safety": {
+      "status": "applied",
+      "modules": [
+        "gui/main_window.py"
+      ],
+      "changes": [
+        "Added DashboardMetricsLoader with a worker thread and Qt signal handoff.",
+        "Moved dashboard file-read snapshot generation off the Qt thread.",
+        "Kept existing metric computation and UI update logic, but split snapshot collection from UI application."
+      ]
+    }
+  },
+  "runtime_protection_added": {
+    "ownership_fields": [
+      "runtime_id",
+      "owner_module",
+      "active_contexts"
+    ],
+    "async_runtime_guards": [
+      "PlaywrightRuntime.ownership",
+      "PlaywrightRuntime.active_contexts",
+      "PlaywrightRuntime.safe_shutdown_if_unused()",
+      "safe_restart_runtime()"
+    ],
+    "sync_runtime_guards": [
+      "register_sync_runtime_owner()",
+      "mark_sync_runtime_context_open()",
+      "mark_sync_runtime_context_closed()",
+      "safe_runtime_stop()"
+    ],
+    "direct_stop_calls_remaining": false
+  },
+  "atomic_writes_added": {
+    "utility_module": "core/storage_atomic.py",
+    "functions": [
+      "atomic_write_json",
+      "atomic_append_jsonl"
+    ],
+    "additional_helper": "atomic_write_text",
+    "modules_updated": [
+      "core/accounts.py",
+      "core/storage.py",
+      "core/responder.py",
+      "licensekit.py",
+      "health_store.py",
+      "src/dm_campaign/lead_status_store.py"
+    ]
+  },
+  "tokens_created": [
+    {
+      "module": "runtime/runtime.py",
+      "token_type": "EngineCancellationToken"
+    },
+    {
+      "module": "core/ig.py",
+      "instances": [
+        "campaign"
+      ]
+    },
+    {
+      "module": "core/responder.py",
+      "instances": [
+        "autoresponder"
+      ]
+    },
+    {
+      "module": "automation/actions/interactions.py",
+      "instances": [
+        "interactions-comments",
+        "interactions-reels",
+        "interactions-reels-playwright"
+      ]
+    },
+    {
+      "module": "src/dm_campaign/proxy_workers_runner.py",
+      "instances": [
+        "proxy-campaign:<alias>"
+      ]
+    }
+  ],
+  "validation_status": {
+    "py_compile": {
+      "status": "passed",
+      "scope": [
+        "runtime/runtime.py",
+        "src/runtime/playwright_runtime.py",
+        "src/playwright_service.py",
+        "automation/whatsapp.py",
+        "src/dm_playwright_client.py",
+        "core/storage_atomic.py",
+        "core/accounts.py",
+        "core/storage.py",
+        "core/responder.py",
+        "licensekit.py",
+        "health_store.py",
+        "src/dm_campaign/lead_status_store.py",
+        "core/ig.py",
+        "automation/actions/interactions.py",
+        "src/dm_campaign/proxy_workers_runner.py",
+        "gui/main_window.py"
+      ]
+    },
+    "module_import_smoke": {
+      "status": "passed",
+      "details": [
+        "Imported runtime/runtime.py",
+        "Imported src/runtime/playwright_runtime.py",
+        "Imported src/playwright_service.py",
+        "Imported automation/whatsapp.py",
+        "Imported src/dm_playwright_client.py",
+        "Imported core/accounts.py",
+        "Imported core/storage.py",
+        "Imported core/responder.py",
+        "Imported licensekit.py",
+        "Imported health_store.py",
+        "Imported src/dm_campaign/lead_status_store.py",
+        "Imported core/ig.py",
+        "Imported automation/actions/interactions.py",
+        "Imported src/dm_campaign/proxy_workers_runner.py",
+        "Imported gui/main_window.py"
+      ]
+    },
+    "application_boot_smoke": {
+      "status": "passed",
+      "details": [
+        "Imported app.py successfully."
+      ]
+    },
+    "gui_load_smoke": {
+      "status": "passed",
+      "details": [
+        "Created QApplication in offscreen mode.",
+        "Constructed MainWindow and triggered dashboard refresh without import/runtime errors."
+      ]
+    },
+    "campaign_start_smoke": {
+      "status": "passed_with_limited_scope",
+      "details": [
+        "Executed src.dm_campaign.proxy_workers_runner.run_dynamic_campaign() with a missing alias and received the expected safe early-return result.",
+        "Validated campaign-related modules and token plumbing via import plus compile smoke."
+      ]
+    },
+    "autoresponder_initialize_smoke": {
+      "status": "passed_with_limited_scope",
+      "details": [
+        "Reset the autoresponder runtime controller successfully.",
+        "Built an autoresponder summary payload from a BotStats instance without errors."
+      ]
+    },
+    "storage_write_smoke": {
+      "status": "passed",
+      "details": [
+        "Verified atomic_write_json() writes and reloads JSON correctly in a temporary directory.",
+        "Verified atomic_append_jsonl() preserves append order in a temporary directory."
+      ]
+    },
+    "limitations": [
+      "A live browser campaign was not executed because that would trigger account sessions, Playwright browsers, and network side effects.",
+      "A live autoresponder run was not executed because that would touch external APIs, sessions, and persisted conversation state.",
+      "Validation is therefore smoke-level for runtime bootstrapping and safety infrastructure, not a full end-to-end operational run."
+    ]
+  }
+}

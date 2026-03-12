@@ -6,8 +6,9 @@
 import importlib
 import os
 import time
+from pathlib import Path
 
-from runtime_parity import (
+from runtime.runtime_parity import (
     bootstrap_runtime_env,
     format_runtime_preflight,
     run_runtime_preflight,
@@ -16,7 +17,9 @@ from runtime_parity import (
 bootstrap_runtime_env("owner")
 
 from config import SETTINGS
-from storage import sent_totals_today
+from core.disk_monitor import emit_disk_warnings
+from core.log_rotation import run_retention_maintenance
+from core.storage import sent_totals_today
 from ui import (
     Fore,
     clear_console,
@@ -27,10 +30,25 @@ from ui import (
 )
 from utils import ask, em, press_enter, warn
 
+
+def _strict_import_mode_enabled() -> bool:
+    return os.getenv("STRICT_IMPORT_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _raise_strict_import(name: str, exc: BaseException) -> None:
+    raise ImportError(f"Strict import mode: failed importing {name}: {exc}") from exc
+
+
+_APP_ROOT = Path(os.environ.get("APP_DATA_ROOT", ".")).expanduser()
+_retention_result = run_retention_maintenance(_APP_ROOT)
+emit_disk_warnings(_APP_ROOT)
+
 try:
     from src.auth.onboarding import login_and_persist as _onboarding_login  # noqa: F401
     from src.auth.onboarding import onboard_accounts_from_csv as _onboarding_csv  # noqa: F401
 except Exception as e:
+    if _strict_import_mode_enabled():
+        _raise_strict_import("src.auth.onboarding", e)
     print("[ERROR] Backend de onboarding no disponible:", e)
     print("Instala dependencias: pip install playwright pyotp && playwright install")
     print("Verifica que existan los archivos src/__init__.py y src/auth/__init__.py")
@@ -44,11 +62,11 @@ def _optin_enabled() -> bool:
 
 def _optin_try_imports():
     try:
-        from optin_browser import login as _opt_login
-        from optin_browser import dm as _opt_dm
-        from optin_browser import replies as _opt_replies
-        from optin_browser import recorder as _opt_recorder
-        from optin_browser import playback as _opt_playback
+        from src.opt_in.browser_tools import login as _opt_login
+        from src.opt_in.browser_tools import dm as _opt_dm
+        from src.opt_in.browser_tools import replies as _opt_replies
+        from src.opt_in.browser_tools import recorder as _opt_recorder
+        from src.opt_in.browser_tools import playback as _opt_playback
         return {
             "login": _opt_login,
             "dm": _opt_dm,
@@ -56,7 +74,9 @@ def _optin_try_imports():
             "recorder": _opt_recorder,
             "playback": _opt_playback,
         }
-    except Exception:
+    except Exception as exc:
+        if _strict_import_mode_enabled():
+            _raise_strict_import("src.opt_in.browser_tools", exc)
         print("\n[OPT-IN] Falta el módulo opt-in o deps. Ejecuta:")
         print("  pip install -r requirements_optin.txt")
         print("  python -m playwright install\n")
@@ -125,24 +145,28 @@ def _safe_import(name):
     try:
         return importlib.import_module(name)
     except Exception as e:
+        if _strict_import_mode_enabled():
+            _raise_strict_import(name, e)
         warn(f"Módulo no disponible o con error: {name} ({e})")
         return None
 
 
-accounts = _safe_import("accounts")
-leads = _safe_import("leads")
-ig = _safe_import("ig")
-storage = _safe_import("storage")
-responder = _safe_import("responder")
+accounts = _safe_import("core.accounts")
+leads = _safe_import("core.leads")
+ig = _safe_import("core.ig")
+storage = _safe_import("core.storage")
+responder = _safe_import("core.responder")
 licensekit = _safe_import("licensekit")
 state_view = _safe_import("state_view")
 try:
     # Static import so frozen builds (PyInstaller) don't miss this module.
     from src.analytics import stats_engine as stats_engine  # type: ignore
 except Exception as e:
+    if _strict_import_mode_enabled():
+        _raise_strict_import("src.analytics.stats_engine", e)
     stats_engine = None
     warn(f"Módulo no disponible o con error: src.analytics.stats_engine ({e})")
-whatsapp = _safe_import("whatsapp")
+whatsapp = _safe_import("automation.whatsapp")
 _RUNTIME_PREFLIGHT_DONE = False
 
 
@@ -235,8 +259,13 @@ def menu():
             )
         _RUNTIME_PREFLIGHT_DONE = True
 
-    if licensekit and hasattr(licensekit, "enforce_startup_validation"):
-        licensekit.enforce_startup_validation()
+    if SETTINGS.client_distribution:
+        try:
+            from license_client import launch_with_license
+
+            launch_with_license()
+        except Exception as exc:
+            raise RuntimeError(f"License startup validation failed: {exc}") from exc
     
     # Verificación automática de actualizaciones al inicio (solo si no es distribución de cliente)
     if not SETTINGS.client_distribution:
@@ -244,6 +273,8 @@ def menu():
             from update_system import auto_update_check
             auto_update_check()
         except ImportError:
+            if _strict_import_mode_enabled():
+                raise
             pass  # Sistema de actualizaciones no disponible
     
     while True:
@@ -287,6 +318,8 @@ def menu():
                 clear_console()
                 menu_updates()
             except ImportError:
+                if _strict_import_mode_enabled():
+                    raise
                 warn("Sistema de actualizaciones no disponible.")
                 press_enter()
         elif (

@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-_LOG_PATH = Path("logs/optin_audit.jsonl")
+from paths import logs_root
+
+_BASE_ROOT = Path(__file__).resolve().parents[2]
+_LOG_PATH = logs_root(_BASE_ROOT) / "optin_audit.jsonl"
 
 
 def _ensure_parent() -> None:

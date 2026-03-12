@@ -235,7 +235,7 @@ def check_and_reply_all() -> Dict[str, Any]:
     Verifica mensajes nuevos y genera respuestas automáticas.
     Ejecutado periódicamente o triggered por polling.
     """
-    from accounts import list_all
+    from core.accounts import list_all
     
     logger.info("[AUTO REPLY ALL] Starting auto-reply check")
     

@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """
-Playwright-only account health detection.
+Playwright-only Instagram account health detection.
 
-The goal is to determine whether an account can access Instagram Inbox UI
-without relying on any API calls (instagrapi).
-
-This module is used by real Playwright operations (login, inbox, responder,
-cold DM sending, filter mode) to persist health status implicitly.
+The detector uses real browser interaction and returns one of the three
+canonical account states:
+- VIVA
+- NO ACTIVA
+- MUERTA
 """
 
 from __future__ import annotations
@@ -16,15 +15,21 @@ import contextlib
 import re
 from typing import Tuple
 
+from health_store import (
+    HEALTH_STATE_ALIVE,
+    HEALTH_STATE_DEAD,
+    HEALTH_STATE_INACTIVE,
+)
 
-_BLOCKED_URL_RULES: tuple[tuple[str, str, str], ...] = (
-    ("/accounts/login", "session_expired", "redirected_to_login"),
-    ("/challenge/", "checkpoint", "challenge"),
-    ("/checkpoint/", "checkpoint", "checkpoint"),
-    ("two_factor", "checkpoint", "two_factor"),
-    ("/accounts/confirm_email", "checkpoint", "confirm_email"),
-    ("/accounts/suspended", "suspended", "suspended"),
-    ("/accounts/disabled", "blocked", "disabled"),
+_URL_RULES: tuple[tuple[str, str, str], ...] = (
+    ("/accounts/login", HEALTH_STATE_INACTIVE, "redirected_to_login"),
+    ("/accounts/onetap", HEALTH_STATE_INACTIVE, "login_redirect"),
+    ("/challenge/", HEALTH_STATE_DEAD, "challenge"),
+    ("/checkpoint/", HEALTH_STATE_DEAD, "checkpoint"),
+    ("two_factor", HEALTH_STATE_DEAD, "two_factor"),
+    ("/accounts/confirm_email", HEALTH_STATE_DEAD, "confirm_email"),
+    ("/accounts/suspended", HEALTH_STATE_DEAD, "suspended"),
+    ("/accounts/disabled", HEALTH_STATE_DEAD, "disabled"),
 )
 
 _LOGIN_FORM_SELECTORS = (
@@ -33,16 +38,20 @@ _LOGIN_FORM_SELECTORS = (
     "form[action*='login']",
 )
 
-_INBOX_READY_SELECTORS = (
+_ALIVE_SELECTORS = (
     "a[href='/direct/inbox/']",
     "a[href*='/direct/inbox/']",
     "a[href*='/direct/t/']",
     "div[role='navigation'] a[href*='/direct/']",
+    "div[role='navigation'] svg[aria-label='Home']",
+    "div[role='navigation'] svg[aria-label='Inicio']",
+    "svg[aria-label='Direct']",
+    "svg[aria-label='Mensajes']",
+    "svg[aria-label='Home']",
+    "svg[aria-label='Inicio']",
     "input[placeholder='Search']",
     "input[placeholder='Buscar']",
     "input[name='queryBox']",
-    "svg[aria-label='Direct']",
-    "svg[aria-label='Mensajes']",
 )
 
 _CAPTCHA_SELECTORS = (
@@ -52,12 +61,19 @@ _CAPTCHA_SELECTORS = (
     "[class*='captcha' i]",
 )
 
-_BLOCKED_TEXT_PATTERNS: tuple[tuple[re.Pattern, str, str], ...] = (
-    (re.compile(r"captcha", re.I), "blocked", "captcha_text"),
-    (re.compile(r"temporarily blocked|bloquead[ao] temporalmente", re.I), "blocked", "temporarily_blocked"),
-    (re.compile(r"your account has been disabled|cuenta.*desactiv", re.I), "blocked", "disabled_text"),
-    (re.compile(r"suspended|cuenta suspendida", re.I), "suspended", "suspended_text"),
-    (re.compile(r"checkpoint|challenge required", re.I), "checkpoint", "checkpoint_text"),
+_DEAD_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"captcha", re.I), "captcha_text"),
+    (re.compile(r"temporarily blocked|bloquead[ao] temporalmente", re.I), "temporarily_blocked"),
+    (re.compile(r"your account has been disabled|cuenta.*desactiv", re.I), "disabled_text"),
+    (re.compile(r"suspended|cuenta suspendida", re.I), "suspended_text"),
+    (re.compile(r"checkpoint|challenge required", re.I), "checkpoint_text"),
+    (
+        re.compile(
+            r"verification required|verificaci[oó]n requerida|confirm (it'?s|its) you|security code",
+            re.I,
+        ),
+        "verification_required",
+    ),
 )
 
 _POPUP_DISMISS_SELECTORS = (
@@ -66,7 +82,8 @@ _POPUP_DISMISS_SELECTORS = (
     'button:has-text("Ahora no")',
     'button:has-text("Cancelar")',
     'button:has-text("No gracias")',
-    'button:has-text("Más tarde")',
+    'button:has-text("Mas tarde")',
+    'button:has-text("MAs tarde")',
     'button:has-text("Remind me later")',
 )
 
@@ -76,111 +93,169 @@ def _union(selectors: tuple[str, ...]) -> str:
 
 
 async def _dismiss_common_popups_async(page) -> None:
-    for sel in _POPUP_DISMISS_SELECTORS:
+    for selector in _POPUP_DISMISS_SELECTORS:
         try:
-            btn = page.locator(sel).first
-            if await btn.count() > 0:
-                await btn.click()
+            button = page.locator(selector).first
+            if await button.count() > 0:
+                await button.click()
                 await asyncio.sleep(0.25)
         except Exception:
             continue
 
 
-async def detect_account_health_async(page, *, timeout_ms: int = 6_000) -> Tuple[str, str]:
-    """
-    Returns (status, reason)
-    status in: alive | session_expired | checkpoint | blocked | suspended | unknown
-    """
+def _classify_url(url: str) -> Tuple[str, str] | None:
+    lowered = str(url or "").strip().lower()
+    for token, state, reason in _URL_RULES:
+        if token in lowered:
+            return state, reason
+    return None
 
-    url = ""
-    with contextlib.suppress(Exception):
-        url = (page.url or "").lower()
 
-    for token, status, reason in _BLOCKED_URL_RULES:
-        if token in url:
-            return status, reason
-
-    # Best-effort dismiss non-blocking popups before checking UI access.
-    await _dismiss_common_popups_async(page)
-
-    # Login form visible -> session expired / not logged in.
-    for sel in _LOGIN_FORM_SELECTORS:
-        with contextlib.suppress(Exception):
-            if await page.locator(sel).count() > 0:
-                return "session_expired", "login_form"
-
-    # Captcha indicators.
-    for sel in _CAPTCHA_SELECTORS:
-        with contextlib.suppress(Exception):
-            if await page.locator(sel).count() > 0:
-                return "blocked", "captcha"
-
-    # Inbox ready (UI access).
-    try:
-        await page.wait_for_selector(_union(_INBOX_READY_SELECTORS), timeout=timeout_ms)
-        return "alive", "inbox_accessible"
-    except Exception:
-        pass
-
-    # Read a bit of page text to classify common blocks.
-    text = ""
+async def _read_body_text_async(page) -> str:
     with contextlib.suppress(Exception):
         body = page.locator("body").first
         if await body.count() > 0:
-            text = (await body.inner_text() or "").strip()
-    for pattern, status, reason in _BLOCKED_TEXT_PATTERNS:
-        if pattern.search(text or ""):
-            return status, reason
-
-    # If we cannot confirm inbox, consider it blocked for health purposes.
-    return "blocked", "inbox_unavailable"
+            return (await body.inner_text() or "").strip()
+    return ""
 
 
-def detect_account_health_sync(page, *, timeout_ms: int = 6_000) -> Tuple[str, str]:
-    """
-    Sync version for playwright.sync_api.Page.
-    Returns (status, reason)
-    """
-
-    url = ""
-    with contextlib.suppress(Exception):
-        url = (page.url or "").lower()
-
-    for token, status, reason in _BLOCKED_URL_RULES:
-        if token in url:
-            return status, reason
-
-    # Dismiss popups (best-effort).
-    for sel in _POPUP_DISMISS_SELECTORS:
-        with contextlib.suppress(Exception):
-            btn = page.locator(sel).first
-            if btn.count() > 0:
-                btn.click()
-
-    for sel in _LOGIN_FORM_SELECTORS:
-        with contextlib.suppress(Exception):
-            if page.locator(sel).count() > 0:
-                return "session_expired", "login_form"
-
-    for sel in _CAPTCHA_SELECTORS:
-        with contextlib.suppress(Exception):
-            if page.locator(sel).count() > 0:
-                return "blocked", "captcha"
-
-    try:
-        page.wait_for_selector(_union(_INBOX_READY_SELECTORS), timeout=timeout_ms)
-        return "alive", "inbox_accessible"
-    except Exception:
-        pass
-
-    text = ""
+def _read_body_text_sync(page) -> str:
     with contextlib.suppress(Exception):
         body = page.locator("body").first
         if body.count() > 0:
-            text = (body.inner_text() or "").strip()
-    for pattern, status, reason in _BLOCKED_TEXT_PATTERNS:
-        if pattern.search(text or ""):
-            return status, reason
+            return (body.inner_text() or "").strip()
+    return ""
 
-    return "blocked", "inbox_unavailable"
 
+async def _has_auth_cookies_async(page) -> bool:
+    context = getattr(page, "context", None)
+    cookies_method = getattr(context, "cookies", None)
+    if not callable(cookies_method):
+        return False
+    try:
+        cookies = await cookies_method(["https://www.instagram.com/"])
+    except TypeError:
+        cookies = await cookies_method("https://www.instagram.com/")
+    except Exception:
+        return False
+    names = {str(cookie.get("name") or ""): str(cookie.get("value") or "") for cookie in cookies or []}
+    return bool(names.get("sessionid") and names.get("ds_user_id"))
+
+
+def _has_auth_cookies_sync(page) -> bool:
+    context = getattr(page, "context", None)
+    cookies_method = getattr(context, "cookies", None)
+    if not callable(cookies_method):
+        return False
+    try:
+        cookies = cookies_method(["https://www.instagram.com/"])
+    except TypeError:
+        cookies = cookies_method("https://www.instagram.com/")
+    except Exception:
+        return False
+    names = {str(cookie.get("name") or ""): str(cookie.get("value") or "") for cookie in cookies or []}
+    return bool(names.get("sessionid") and names.get("ds_user_id"))
+
+
+def _classify_text(text: str) -> Tuple[str, str] | None:
+    lowered = str(text or "").strip()
+    if not lowered:
+        return None
+    for pattern, reason in _DEAD_TEXT_PATTERNS:
+        if pattern.search(lowered):
+            return HEALTH_STATE_DEAD, reason
+    return None
+
+
+async def detect_account_health_async(page, *, timeout_ms: int = 6_000) -> Tuple[str, str]:
+    classification = _classify_url(getattr(page, "url", ""))
+    if classification is not None:
+        return classification
+
+    await _dismiss_common_popups_async(page)
+
+    classification = _classify_url(getattr(page, "url", ""))
+    if classification is not None:
+        return classification
+
+    for selector in _LOGIN_FORM_SELECTORS:
+        with contextlib.suppress(Exception):
+            if await page.locator(selector).count() > 0:
+                return HEALTH_STATE_INACTIVE, "login_form"
+
+    for selector in _CAPTCHA_SELECTORS:
+        with contextlib.suppress(Exception):
+            if await page.locator(selector).count() > 0:
+                return HEALTH_STATE_DEAD, "captcha"
+
+    try:
+        await page.wait_for_selector(_union(_ALIVE_SELECTORS), timeout=timeout_ms)
+        return HEALTH_STATE_ALIVE, "instagram_ui_ready"
+    except Exception:
+        pass
+
+    text = await _read_body_text_async(page)
+    classification = _classify_text(text)
+    if classification is not None:
+        return classification
+
+    classification = _classify_url(getattr(page, "url", ""))
+    if classification is not None:
+        return classification
+
+    if await _has_auth_cookies_async(page):
+        return HEALTH_STATE_ALIVE, "auth_cookies_without_ui"
+
+    if text and "instagram" in text.casefold():
+        return HEALTH_STATE_ALIVE, "instagram_ui_text_ready"
+
+    return HEALTH_STATE_INACTIVE, "login_state_unconfirmed"
+
+
+def detect_account_health_sync(page, *, timeout_ms: int = 6_000) -> Tuple[str, str]:
+    classification = _classify_url(getattr(page, "url", ""))
+    if classification is not None:
+        return classification
+
+    for selector in _POPUP_DISMISS_SELECTORS:
+        with contextlib.suppress(Exception):
+            button = page.locator(selector).first
+            if button.count() > 0:
+                button.click()
+
+    classification = _classify_url(getattr(page, "url", ""))
+    if classification is not None:
+        return classification
+
+    for selector in _LOGIN_FORM_SELECTORS:
+        with contextlib.suppress(Exception):
+            if page.locator(selector).count() > 0:
+                return HEALTH_STATE_INACTIVE, "login_form"
+
+    for selector in _CAPTCHA_SELECTORS:
+        with contextlib.suppress(Exception):
+            if page.locator(selector).count() > 0:
+                return HEALTH_STATE_DEAD, "captcha"
+
+    try:
+        page.wait_for_selector(_union(_ALIVE_SELECTORS), timeout=timeout_ms)
+        return HEALTH_STATE_ALIVE, "instagram_ui_ready"
+    except Exception:
+        pass
+
+    text = _read_body_text_sync(page)
+    classification = _classify_text(text)
+    if classification is not None:
+        return classification
+
+    classification = _classify_url(getattr(page, "url", ""))
+    if classification is not None:
+        return classification
+
+    if _has_auth_cookies_sync(page):
+        return HEALTH_STATE_ALIVE, "auth_cookies_without_ui"
+
+    if text and "instagram" in text.casefold():
+        return HEALTH_STATE_ALIVE, "instagram_ui_text_ready"
+
+    return HEALTH_STATE_INACTIVE, "login_state_unconfirmed"

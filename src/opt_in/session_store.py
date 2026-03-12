@@ -8,7 +8,10 @@ from typing import Any, Dict, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 
-_STORAGE_DIR = Path("data/optin_sessions")
+from paths import sessions_root
+
+_BASE_ROOT = Path(__file__).resolve().parents[2]
+_STORAGE_DIR = sessions_root(_BASE_ROOT) / "optin"
 
 
 def _get_fernet() -> Optional[Fernet]:

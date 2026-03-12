@@ -1,7 +1,12 @@
 import argparse
+import sys
 from getpass import getpass
+from pathlib import Path
 
-from optin_browser import login
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.opt_in.browser_tools import login
 
 
 def parse_args() -> argparse.Namespace:

@@ -1,140 +1,142 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
-import os
+import json
 import logging
+import os
 import random
 import re
 import time
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
-from playwright.async_api import Locator, Page, TimeoutError as PwTimeoutError
+from playwright.async_api import Locator, Page
 
-from src.actions.direct_helpers import (
-    DmAvailability,
-    detect_dm_availability,
-    find_profile_dm_button,
-)
+from core.account_limits import account_message_limit, can_send_message_for_account
+from runtime.runtime import STOP_EVENT
 from src.auth.persistent_login import ensure_logged_in_async
-from src.humanizer import random_wait
-from src.playwright_service import BASE_PROFILES, PlaywrightService
+from src.browser_telemetry import log_browser_stage
+from src.playwright_service import BASE_PROFILES
 from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
+from src.runtime.playwright_runtime import (
+    PlaywrightRuntimeCancelledError,
+    PlaywrightRuntimeTimeoutError,
+    run_coroutine_sync,
+)
+from src.transport.delivery_verifier import DeliveryVerifier
+from src.transport.inbox_navigator import InboxNavigator
+from src.transport.message_composer import MessageComposer
+from src.transport.session_manager import ManagedSession, SessionManager
+from src.transport.thread_resolver import SidebarThreadResolver, ThreadOpenResult
 
 logger = logging.getLogger(__name__)
 
-INSTAGRAM = "https://www.instagram.com/"
-DIRECT_INBOX = f"{INSTAGRAM}direct/inbox/"
-DIRECT_NEW = f"{INSTAGRAM}direct/new/"
+INSTAGRAM = "https://www.instagram.com"
+DIRECT_INBOX = f"{INSTAGRAM}/direct/inbox/"
 
-DIALOG_SELECTOR = "div[role='dialog']"
-SEARCH_INPUTS = (
-    "div[role='dialog'] input[placeholder*='Search']",
-    "div[role='dialog'] input[placeholder*='Buscar']",
-    "div[role='dialog'] input[placeholder*='Busca']",
-    "div[role='dialog'] input[name='queryBox']",
-    "input[placeholder='Search...']",
-    "input[placeholder='Search']",
-    "input[placeholder*='Busca']",
+MAX_FLOW_SECONDS = max(20.0, float(os.getenv("HUMAN_DM_MAX_FLOW_SECONDS", "75")))
+INBOX_READY_TIMEOUT_MS = min(22_000, int(MAX_FLOW_SECONDS * 1000))
+THREAD_OPEN_TIMEOUT_MS = max(6_000, int(os.getenv("HUMAN_DM_THREAD_OPEN_TIMEOUT_MS", "12000")))
+COMPOSER_VISIBLE_TIMEOUT_MS = max(4_000, int(os.getenv("HUMAN_DM_COMPOSER_VISIBLE_TIMEOUT_MS", "8000")))
+SEND_NETWORK_TIMEOUT_MS = max(4_000, int(os.getenv("HUMAN_DM_SEND_NETWORK_TIMEOUT_MS", "8000")))
+TYPE_DELAY_MIN_MS = max(8, int(os.getenv("HUMAN_DM_TYPE_DELAY_MIN_MS", "18")))
+TYPE_DELAY_MAX_MS = max(TYPE_DELAY_MIN_MS, int(os.getenv("HUMAN_DM_TYPE_DELAY_MAX_MS", "45")))
+POST_SEND_DOM_VERIFY_MS = max(800, int(os.getenv("HUMAN_DM_POST_SEND_DOM_VERIFY_MS", "2400")))
+
+ALLOW_UNVERIFIED = os.getenv("HUMAN_DM_ALLOW_UNVERIFIED", "0").strip().lower() in {
+    "1", "true", "yes", "y",
+}
+
+INBOX_READY_SELECTORS = (
+    "div[role='navigation'] input[name='searchInput']",
+    "div[role='navigation'] input[placeholder*='Search']",
+    "div[role='navigation'] input[placeholder*='Buscar']",
+    "div[role='navigation'] a[href*='/direct/t/']",
 )
-NEW_MESSAGE_BUTTONS = (
-    "div[role='button']:has-text('Send message')",
-    "div[role='button']:has-text('Enviar mensaje')",
-    "a[href='/direct/new/']",
-    "[aria-label='New message']",
-    "[aria-label='Nuevo mensaje']",
-    "button:has-text('Enviar mensaje')"
+SIDEBAR_SEARCH_INPUTS = (
+    "div[role='navigation'] input[name='searchInput']",
+    "div[role='navigation'] input[placeholder*='Search']",
+    "div[role='navigation'] input[placeholder*='Buscar']",
+    "div[role='navigation'] [role='searchbox']",
 )
-NEXT_BTNS = (
-    "div[role='dialog'] button:has-text('Next')",
-    "div[role='dialog'] button:has-text('Siguiente')",
-    "button:has-text('Next')",
-    "button:has-text('Siguiente')",
-    "button:has-text('Chat')",
-    "div[role='button']:has-text('Chat')",
-    "div[role='button']:has-text('Next')",
-    "div[role='button']:has-text('Siguiente')",
+SIDEBAR_RESULT_ROWS = (
+    "div[role='navigation'] ul li",
+    "div[role='navigation'] [role='listitem']",
+    "div[role='navigation'] div[role='button'][tabindex='0']",
+    "div[role='navigation'] div[role='button']",
+    "div[role='navigation'] a[href*='/direct/t/']",
 )
-COMPOSERS = (
-    "div[role='textbox'][aria-label='Mensaje']",
-    "div[role='textbox'][aria-label='Message']",
-    "div[contenteditable='true']",
-    "div[role='textbox']",
-    "textarea[placeholder*='message']",
-    "textarea[placeholder*='Mensaje']",
-    "textarea[aria-label*='Message']",
-    "textarea[data-testid='message-input']",
-    "div[data-testid='message-input']",
-    "textarea"
+
+THREAD_COMPOSERS = (
+    "[role='main'] div[role='textbox'][aria-label='Message']",
+    "[role='main'] div[role='textbox'][aria-label='Mensaje']",
+    "[role='main'] div[role='textbox'][contenteditable='true']",
+    "[role='main'] div[contenteditable='true'][role='textbox']",
+    "[role='main'] div[contenteditable='true']",
+    "[role='main'] textarea[placeholder*='message']",
+    "[role='main'] textarea[placeholder*='Mensaje']",
+    "[role='main'] textarea[aria-label*='Message']",
+    "[role='main'] textarea[aria-label*='Mensaje']",
+    "[role='main'] textarea",
 )
+
 SEND_BUTTONS = (
-    "div[role='button']:has-text('Send'), "
-    "div[role='button']:has-text('Enviar'), "
-    "button:has-text('Send'), "
-    "button:has-text('Enviar'), "
-    "button[aria-label*='Send'], "
-    "button[aria-label*='Enviar'], "
-    "div[role='button'][aria-label*='Send'], "
-    "div[role='button'][aria-label*='Enviar'], "
-    "[data-testid='send'], "
-    "[data-testid*='send'], "
-    "button[type='submit'], "
-    "form button[type='submit']"
-)
-VERIFY_TIMEOUT_S = float(os.getenv("HUMAN_DM_VERIFY_TIMEOUT", "10.0"))
-ALLOW_UNVERIFIED = os.getenv("HUMAN_DM_ALLOW_UNVERIFIED", "0").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "y",
-)
-SKIPPED_NO_DM_REASON = "SKIPPED_NO_DM"
-LEGACY_NO_DM_REASON = "NO_DM_BUTTON"
-NO_DM_SKIP_REASON = SKIPPED_NO_DM_REASON
-NO_DM_SKIP_DETAIL = "Perfil sin botón de mensaje / no permite DM"
-NO_DM_SKIP_LOG = f"skip | no_dm | {NO_DM_SKIP_DETAIL}"
-NO_DM_SEND_METHOD = "skip_no_dm"
-NO_DM_PERMISSION_DETECTED_LOG = "NO_DM_PERMISSION_DETECTED"
-_UNVERIFIED_REASONS = {"message_not_present_after_send", "composer_not_cleared"}
-_TOAST_FAILURE_RE = re.compile(
-    r"("
-    r"not sent|couldn'?t send|failed to send|"
-    r"no se pudo enviar|mensaje no enviado|"
-    r"something went wrong|ha ocurrido un error|ocurri[oó] un error|"
-    r"try again later|please wait a few minutes|"
-    r"prueba(?:lo)? m[aá]s tarde|int[eé]ntalo de nuevo m[aá]s tarde|"
-    r"we restrict certain activity"
-    r")",
-    re.IGNORECASE,
-)
-_UNSENT_INDICATOR_SELECTORS = (
-    "[aria-label*='Not sent']",
-    "[aria-label*=\"Couldn't send\"]",
-    "[aria-label*='Couldn’t send']",
-    "[aria-label*='No se pudo enviar']",
-    "[aria-label*='No enviado']",
-    "[aria-label*='No enviado.']",
-    "[aria-label*='Error sending']",
-    "button:has-text('Retry')",
-    "button:has-text('Try again')",
-    "button:has-text('Reintentar')",
-    "button:has-text('Intentar de nuevo')",
+    "[role='main'] button[aria-label*='Send']",
+    "[role='main'] button[aria-label*='Enviar']",
+    "[role='main'] button:has-text('Send')",
+    "[role='main'] button:has-text('Enviar')",
+    "[role='main'] div[role='button'][aria-label*='Send']",
+    "[role='main'] div[role='button'][aria-label*='Enviar']",
+    "[role='main'] div[role='button']:has-text('Send')",
+    "[role='main'] div[role='button']:has-text('Enviar')",
+    "[role='main'] [data-testid='send']",
+    "[role='main'] [data-testid*='send']",
+    "[role='main'] button[type='submit']",
 )
 
 _DEBUG_ENV = "HUMAN_DM_DEBUG"
 _DEBUG_SCREENSHOT_DIR = Path("storage") / "debug_screenshots"
+_FAILURE_CAPTURE_ENV = "HUMAN_DM_CAPTURE_FAILURE_ARTIFACTS"
+_FAILURE_ARTIFACT_DIR = Path("storage") / "dm_failures"
+_FAILURE_HTML_MAX_BYTES = max(120_000, int(os.getenv("HUMAN_DM_FAILURE_HTML_MAX_BYTES", "260000")))
 _DM_CTX: ContextVar[dict[str, Any]] = ContextVar("human_dm_ctx", default={})
+_STAGE_CALLBACK = Callable[[str, Dict[str, Any]], None]
 
+
+class CampaignSendCancelled(RuntimeError):
+    def __init__(self, stage: str, reason: str = "campaign_stop_requested") -> None:
+        self.stage = str(stage or "").strip() or "unknown"
+        self.reason = str(reason or "").strip() or "campaign_stop_requested"
+        super().__init__(self.reason)
+
+
+class CampaignSendDeadlineExceeded(TimeoutError):
+    def __init__(self, stage: str, reason: str = "send_deadline_exceeded") -> None:
+        self.stage = str(stage or "").strip() or "unknown"
+        self.reason = str(reason or "").strip() or "send_deadline_exceeded"
+        super().__init__(self.reason)
 
 def _debug_enabled() -> bool:
     return os.getenv(_DEBUG_ENV, "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _failure_capture_enabled() -> bool:
+    raw = os.getenv(_FAILURE_CAPTURE_ENV, "1").strip().lower()
+    return raw not in {"0", "false", "no", "n", "off"}
+
+
 def _safe_slug(value: str, fallback: str = "x") -> str:
     cleaned = re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
     return cleaned or fallback
+
+
+def _compact_text(value: str, limit: int = 180) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)] + "..."
 
 
 def _dm_ctx() -> dict[str, Any]:
@@ -170,6 +172,18 @@ def _dm_log(stage: str, **fields: Any) -> None:
         pass
 
 
+def _flow_log(message: str, *, level: int = logging.INFO) -> None:
+    line = str(message or "").strip()
+    if not line:
+        return
+    try:
+        logger.log(level, line)
+    except Exception:
+        pass
+    if _debug_enabled():
+        _dm_log("FLOW_TRACE", message=line)
+
+
 def _debug_artifact_path(stage: str, ext: str, *, tag: Optional[str] = None) -> Path:
     ctx = _dm_ctx()
     debug_id = str(ctx.get("debug_id") or int(time.time() * 1000))
@@ -179,8 +193,89 @@ def _debug_artifact_path(stage: str, ext: str, *, tag: Optional[str] = None) -> 
     tag_slug = _safe_slug(tag, "") if tag else ""
     suffix = f"_{tag_slug}" if tag_slug else ""
     ext_clean = ext.lstrip(".") or "txt"
-    filename = f"{debug_id}_{account}_{lead}_{stage_slug}{suffix}.{ext_clean}"
-    return _DEBUG_SCREENSHOT_DIR / filename
+    return _DEBUG_SCREENSHOT_DIR / f"{debug_id}_{account}_{lead}_{stage_slug}{suffix}.{ext_clean}"
+
+
+def _failure_artifact_path(stage: str, ext: str, *, tag: Optional[str] = None) -> Path:
+    ctx = _dm_ctx()
+    stamp = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+    account = _safe_slug(str(ctx.get("account") or "account"), "account")
+    lead = _safe_slug(str(ctx.get("lead") or "lead"), "lead")
+    stage_slug = _safe_slug(stage, "stage")
+    tag_slug = _safe_slug(tag, "") if tag else ""
+    suffix = f"_{tag_slug}" if tag_slug else ""
+    ext_clean = ext.lstrip(".") or "txt"
+    return _FAILURE_ARTIFACT_DIR / f"{stamp}_{account}_{lead}_{stage_slug}{suffix}.{ext_clean}"
+
+
+async def _capture_failure_artifacts(
+    page: Optional[Page],
+    stage: str,
+    *,
+    detail: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not _failure_capture_enabled():
+        return {}
+
+    artifacts: Dict[str, Any] = {}
+    ctx = _dm_ctx()
+    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        _FAILURE_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return {}
+
+    current_url = ""
+    if page is not None:
+        try:
+            current_url = page.url or ""
+        except Exception:
+            current_url = ""
+    if current_url:
+        artifacts["url"] = current_url
+
+    if page is not None:
+        try:
+            screenshot_path = _failure_artifact_path(stage, "png")
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            artifacts["screenshot"] = str(screenshot_path)
+        except Exception:
+            pass
+
+        try:
+            html_value = ""
+            main = page.locator("main")
+            if await main.count() > 0:
+                html_value = str(await main.first.evaluate("el => el ? el.outerHTML : ''") or "")
+            if not html_value:
+                html_value = str(await page.content() or "")
+            if html_value:
+                if len(html_value) > _FAILURE_HTML_MAX_BYTES:
+                    html_value = html_value[:_FAILURE_HTML_MAX_BYTES] + "\n<!-- truncated -->\n"
+                html_path = _failure_artifact_path(stage, "html", tag="main")
+                html_path.write_text(html_value, encoding="utf-8", errors="ignore")
+                artifacts["main_html"] = str(html_path)
+        except Exception:
+            pass
+
+    meta = {
+        "ts": now_iso,
+        "stage": stage,
+        "detail": detail,
+        "account": ctx.get("account") or "",
+        "lead": ctx.get("lead") or "",
+        "url": current_url,
+        "payload": payload or {},
+    }
+    try:
+        meta_path = _failure_artifact_path(stage, "json", tag="meta")
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        artifacts["meta"] = str(meta_path)
+    except Exception:
+        pass
+
+    return artifacts
 
 
 async def _debug_screenshot(page: Optional[Page], stage: str, *, tag: Optional[str] = None) -> Optional[str]:
@@ -188,14 +283,11 @@ async def _debug_screenshot(page: Optional[Page], stage: str, *, tag: Optional[s
         return None
     try:
         _DEBUG_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
         path = _debug_artifact_path(stage, "png", tag=tag)
         await page.screenshot(path=str(path), full_page=True)
         return str(path)
     except Exception as exc:
-        _dm_log("DEBUG_SCREENSHOT_FAIL", stage=stage, error=repr(exc))
+        _dm_log("DEBUG_SCREENSHOT_FAIL", failed_stage=stage, error=repr(exc))
         return None
 
 
@@ -203,74 +295,581 @@ async def _debug_dump_outer_html(locator: Optional[Locator], stage: str, *, tag:
     if not _debug_enabled() or locator is None:
         return None
     try:
-        _DEBUG_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        # Best-effort: only dump if it exists.
-        try:
-            if await locator.count() <= 0:
-                return None
-        except Exception:
+        if await locator.count() <= 0:
             return None
         html = await locator.first.evaluate("el => el ? el.outerHTML : ''")
         if not html:
             return None
-        # Keep dumps bounded.
-        html = str(html)
-        if len(html) > 220_000:
-            html = html[:220_000] + "\n<!-- truncated -->\n"
+        text = str(html)
+        if len(text) > 220_000:
+            text = text[:220_000] + "\n<!-- truncated -->\n"
         path = _debug_artifact_path(stage, "html", tag=tag)
-        path.write_text(html, encoding="utf-8", errors="ignore")
+        path.write_text(text, encoding="utf-8", errors="ignore")
         return str(path)
-    except Exception as exc:
-        _dm_log("DEBUG_HTML_DUMP_FAIL", stage=stage, tag=tag, error=repr(exc))
+    except Exception:
         return None
 
-
-async def _probe_locator(locator: Optional[Locator]) -> dict[str, Any]:
-    info: dict[str, Any] = {"count": 0, "visible": False, "enabled": False}
-    if locator is None:
-        return info
-    try:
-        info["count"] = await locator.count()
-    except Exception as exc:
-        info["count"] = None
-        info["count_error"] = repr(exc)
-        return info
-    if not info.get("count"):
-        return info
-    first = locator.first
-    try:
-        info["visible"] = await first.is_visible()
-    except Exception as exc:
-        info["visible"] = None
-        info["visible_error"] = repr(exc)
-    try:
-        info["enabled"] = await first.is_enabled()
-    except Exception as exc:
-        info["enabled"] = None
-        info["enabled_error"] = repr(exc)
-    return info
-
-
-
-def _compact_text(value: str, limit: int = 180) -> str:
-    cleaned = re.sub(r"\s+", " ", (value or "").strip())
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[: max(0, limit - 3)] + "..."
-
-
 class HumanInstagramSender:
-    def __init__(self, headless: bool = True) -> None:
+    def __init__(self, headless: bool = True, *, keep_browser_open_per_account: bool = False) -> None:
         self.headless = headless
+        self.keep_browser_open_per_account = bool(keep_browser_open_per_account)
+        self._active_flow_hook: Optional[Callable[[str, bool], None]] = None
+        self._session_manager = SessionManager(
+            headless=self.headless,
+            keep_browser_open_per_account=self.keep_browser_open_per_account,
+            profiles_root=BASE_PROFILES,
+            normalize_username=self._normalize_username,
+            log_event=_dm_log,
+        )
+        self._delivery_verifier = DeliveryVerifier(self)
+        self._inbox_navigator = InboxNavigator(
+            self,
+            direct_inbox=DIRECT_INBOX,
+            inbox_ready_selectors=INBOX_READY_SELECTORS,
+            inbox_ready_timeout_ms=INBOX_READY_TIMEOUT_MS,
+            log_event=_dm_log,
+        )
+        self._message_composer = MessageComposer(
+            self,
+            thread_composers=THREAD_COMPOSERS,
+            send_buttons=SEND_BUTTONS,
+            composer_visible_timeout_ms=COMPOSER_VISIBLE_TIMEOUT_MS,
+            type_delay_min_ms=TYPE_DELAY_MIN_MS,
+            type_delay_max_ms=TYPE_DELAY_MAX_MS,
+            log_event=_dm_log,
+        )
+        self._thread_resolver = SidebarThreadResolver(
+            self,
+            search_inputs=SIDEBAR_SEARCH_INPUTS,
+            result_rows=SIDEBAR_RESULT_ROWS,
+            thread_open_timeout_ms=THREAD_OPEN_TIMEOUT_MS,
+            sidebar_row_timeout_ms=min(8_000, THREAD_OPEN_TIMEOUT_MS),
+            log_event=_dm_log,
+        )
+
+    def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
+        self._session_manager.close_all_sessions_sync(timeout=timeout)
 
     async def _sleep(self, low: float, high: float) -> None:
         await asyncio.sleep(random.uniform(low, high))
 
     def _normalize_username(self, username: str) -> str:
         return username.strip().lstrip("@").split("?", 1)[0]
+
+    def _message_snippet(self, text: str, limit: int = 48) -> str:
+        for line in (text or "").splitlines():
+            cleaned = line.strip()
+            if cleaned:
+                return cleaned[:limit]
+        return (text or "").strip()[:limit]
+
+    def _normalize_text_match(self, value: str) -> str:
+        return re.sub(r"\s+", " ", (value or "").strip()).lower()
+
+    def _normalize_message_text_match(self, value: str) -> str:
+        normalized = self._normalize_text_match(value)
+        return re.sub(r"^(tú|tu|you):\s*", "", normalized)
+
+    def _extract_username_tokens(self, value: str) -> list[str]:
+        seen: set[str] = set()
+        tokens: list[str] = []
+        for raw in re.findall(r"@?[a-z0-9._]{1,30}", str(value or "").lower()):
+            candidate = self._strict_username_token(raw)
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            tokens.append(candidate)
+        return tokens
+
+    def _text_contains_exact_username(self, value: str, username: str) -> tuple[bool, str]:
+        target = self._normalize_username(username).lower()
+        if not target:
+            return False, ""
+        for token in self._extract_username_tokens(value):
+            if token == target:
+                return True, token
+        return False, ""
+
+    def _is_probable_message_noise(self, value: str) -> bool:
+        text = self._normalize_text_match(value)
+        if not text:
+            return True
+        if text in {
+            "instagram",
+            "search",
+            "buscar",
+            "send",
+            "enviar",
+            "new message",
+            "nuevo mensaje",
+        }:
+            return True
+        if re.fullmatch(r"\d{1,2}:\d{2}", text):
+            return True
+        if re.fullmatch(r"\d+\s*(s|min|m|h|d|sem|w)", text):
+            return True
+        if re.fullmatch(r"hace\s+.+", text):
+            return True
+        return False
+
+    def _filter_recent_message_texts(self, values: list[str], *, limit: int) -> list[str]:
+        safe_limit = max(6, min(60, int(limit or 28)))
+        filtered: list[str] = []
+        for value in values:
+            cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+            if not cleaned or self._is_probable_message_noise(cleaned):
+                continue
+            filtered.append(cleaned)
+        return filtered[-safe_limit:]
+
+    def _result(
+        self,
+        ok: bool,
+        detail: str,
+        payload: Dict[str, Any],
+        *,
+        return_detail: bool,
+        return_payload: bool,
+    ) -> Union[bool, Tuple[bool, Optional[str]], Tuple[bool, Optional[str], Dict[str, Any]]]:
+        if return_payload:
+            return ok, detail, payload
+        if return_detail:
+            return ok, detail
+        return ok
+
+    def _remaining_ms(self, deadline: float, cap_ms: int) -> int:
+        remaining = int((deadline - time.time()) * 1000)
+        if remaining <= 0:
+            return 0
+        return min(cap_ms, remaining)
+
+    def _is_chrome_error_url(self, page: Optional[Page]) -> bool:
+        if page is None:
+            return False
+        try:
+            current = str(page.url or "").strip().lower()
+        except Exception:
+            return False
+        return current.startswith("chrome-error://")
+
+    def _is_fatal_session_error(self, error: BaseException) -> bool:
+        text = str(error or "").strip().lower()
+        if not text:
+            return False
+        return any(
+            token in text
+            for token in (
+                "target page, context or browser has been closed",
+                "connection closed",
+                "browser has been closed",
+                "target closed",
+                "protocol error",
+                "playwright",
+            )
+        )
+
+    async def _recover_inbox_after_chrome_error(self, page: Page, *, deadline: float) -> bool:
+        if not self._is_chrome_error_url(page):
+            return False
+        _dm_log("CHROME_ERROR_DETECTED", url=page.url if page else "")
+        for attempt in range(1, 3):
+            home_timeout = self._remaining_ms(deadline, 12_000)
+            if home_timeout <= 0:
+                break
+            try:
+                await page.goto(INSTAGRAM, wait_until="domcontentloaded", timeout=home_timeout)
+            except Exception as exc:
+                _dm_log("CHROME_ERROR_RECOVER_HOME_FAIL", attempt=attempt, error=repr(exc))
+
+            inbox_timeout = self._remaining_ms(deadline, 12_000)
+            if inbox_timeout <= 0:
+                break
+            try:
+                await page.goto(DIRECT_INBOX, wait_until="domcontentloaded", timeout=inbox_timeout)
+            except Exception as exc:
+                _dm_log("CHROME_ERROR_RECOVER_INBOX_FAIL", attempt=attempt, error=repr(exc))
+
+            ready_timeout = self._remaining_ms(deadline, INBOX_READY_TIMEOUT_MS)
+            if ready_timeout > 0 and await self._inbox_navigator.wait_inbox_ready(page, ready_timeout):
+                _dm_log("CHROME_ERROR_RECOVERED", attempt=attempt, url=page.url if page else "")
+                print("[BrowserSession] chrome-error recovered and inbox restored")
+                return True
+            try:
+                await page.wait_for_timeout(220)
+            except Exception:
+                break
+
+        _dm_log("CHROME_ERROR_RECOVERY_FAILED", url=page.url if page else "")
+        return False
+
+    async def _first_visible(self, root: Any, selectors: tuple[str, ...], *, max_scan_per_selector: int = 4) -> Optional[Locator]:
+        for sel in selectors:
+            try:
+                loc = root.locator(sel)
+                count = await loc.count()
+            except Exception:
+                continue
+            for idx in range(min(count, max_scan_per_selector)):
+                candidate = loc.nth(idx)
+                try:
+                    if await candidate.is_visible():
+                        return candidate
+                except Exception:
+                    continue
+        return None
+
+    def _strict_username_token(self, value: str) -> str:
+        candidate = str(value or "").strip().lstrip("@").lower()
+        if not re.fullmatch(r"[a-z0-9._]{1,30}", candidate):
+            return ""
+        return candidate
+
+    async def _row_contains_exact_span_username(self, row: Locator, username: str) -> tuple[bool, str]:
+        target = self._normalize_username(username).lower()
+        if not target:
+            return False, ""
+        spans = row.locator("span[dir='auto']")
+        try:
+            count = await spans.count()
+        except Exception:
+            return False, ""
+        for idx in range(min(count, 14)):
+            span = spans.nth(idx)
+            try:
+                raw_text = (await span.inner_text() or "").strip()
+            except Exception:
+                try:
+                    raw_text = (await span.text_content() or "").strip()
+                except Exception:
+                    continue
+            match_ok, candidate = self._text_contains_exact_username(raw_text, target)
+            if match_ok:
+                return True, candidate
+        try:
+            row_text = (await row.inner_text() or "").strip()
+        except Exception:
+            try:
+                row_text = (await row.text_content() or "").strip()
+            except Exception:
+                row_text = ""
+        return self._text_contains_exact_username(row_text, target)
+
+    async def _focus_input_best_effort(self, search_input: Locator) -> None:
+        try:
+            await search_input.scroll_into_view_if_needed(timeout=1_500)
+        except Exception:
+            pass
+        try:
+            await search_input.click(timeout=1_500)
+            return
+        except Exception:
+            pass
+        try:
+            await search_input.focus()
+            return
+        except Exception:
+            pass
+        try:
+            await search_input.evaluate(
+                """(el) => {
+                    try {
+                        el.focus({ preventScroll: true });
+                    } catch (_error) {
+                        el.focus();
+                    }
+                }"""
+            )
+        except Exception:
+            pass
+
+    async def _set_input_value_best_effort(self, page: Page, search_input: Locator, value: str) -> None:
+        try:
+            await search_input.fill(value)
+            return
+        except Exception:
+            pass
+        try:
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Delete")
+        except Exception:
+            pass
+        try:
+            await search_input.type(value, delay=random.randint(TYPE_DELAY_MIN_MS, TYPE_DELAY_MAX_MS))
+            return
+        except Exception:
+            pass
+        await search_input.evaluate(
+            """(el, nextValue) => {
+                el.value = String(nextValue || "");
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+            }""",
+            value,
+        )
+
+    async def _clear_input_best_effort(self, page: Page, search_input: Locator) -> None:
+        await self._set_input_value_best_effort(page, search_input, "")
+
+    async def _type_input_like_human(self, page: Page, search_input: Locator, value: str) -> None:
+        text = str(value or "")
+        if not text:
+            return
+        char_count = max(1, len(text))
+        target_total_ms = max(950, min(1_500, 85 * char_count))
+        per_char_delay = max(TYPE_DELAY_MIN_MS, min(140, int(round(target_total_ms / char_count))))
+        try:
+            await search_input.type(text, delay=per_char_delay)
+            return
+        except Exception:
+            pass
+        try:
+            await page.keyboard.type(text, delay=per_char_delay)
+            return
+        except Exception:
+            pass
+        await self._set_input_value_best_effort(page, search_input, text)
+
+    def _resolve_account_quota(self, account: Dict[str, Any], username: str) -> tuple[bool, int, int | None]:
+        limit = account_message_limit(account=account, username=username, default=None)
+        try:
+            sent_today = max(0, int(account.get("sent_today")))
+        except Exception:
+            sent_today = -1
+        if sent_today >= 0:
+            if limit is None:
+                return True, sent_today, None
+            return sent_today < limit, sent_today, limit
+        return can_send_message_for_account(
+            account=account,
+            username=str(username),
+            default=None,
+        )
+
+
+    async def _capture_success(self, page: Optional[Page], username: str, target: str) -> Optional[str]:
+        if page is None:
+            return None
+        try:
+            folder = Path(BASE_PROFILES) / username / "dm_success"
+            folder.mkdir(parents=True, exist_ok=True)
+            safe_target = re.sub(r"[^a-z0-9]+", "_", target.lower()).strip("_") or "target"
+            screenshot_path = folder / f"{safe_target}_{int(time.time())}.png"
+            await page.screenshot(path=str(screenshot_path))
+            return str(screenshot_path)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _notify_stage(
+        callback: Optional[_STAGE_CALLBACK],
+        stage: str,
+        **fields: Any,
+    ) -> None:
+        if not callable(callback):
+            return
+        payload = {"stage": str(stage or "").strip()}
+        for key, value in fields.items():
+            if value is not None:
+                payload[str(key)] = value
+        try:
+            callback(payload["stage"], payload)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _stop_requested() -> bool:
+        try:
+            return STOP_EVENT.is_set()
+        except Exception:
+            return False
+
+    def _checkpoint(self, *, deadline: float, stage: str) -> None:
+        if self._stop_requested():
+            raise CampaignSendCancelled(stage)
+        if time.time() >= float(deadline):
+            raise CampaignSendDeadlineExceeded(stage)
+
+    async def _cooperative_sleep(
+        self,
+        seconds: float,
+        *,
+        deadline: float,
+        stage: str,
+    ) -> None:
+        remaining = max(0.0, float(seconds))
+        while remaining > 0:
+            self._checkpoint(deadline=deadline, stage=stage)
+            deadline_remaining = max(0.0, float(deadline) - time.time())
+            if deadline_remaining <= 0:
+                raise CampaignSendDeadlineExceeded(stage)
+            step = min(0.20, remaining, deadline_remaining)
+            await asyncio.sleep(max(0.01, step))
+            remaining = max(0.0, remaining - step)
+
+    async def _await_with_deadline(
+        self,
+        awaitable: Any,
+        *,
+        deadline: float,
+        stage: str,
+        timeout_ms: int | None = None,
+    ) -> Any:
+        self._checkpoint(deadline=deadline, stage=stage)
+        if timeout_ms is None:
+            timeout_seconds = max(0.0, float(deadline) - time.time())
+        else:
+            timeout_seconds = max(0.0, self._remaining_ms(deadline, timeout_ms) / 1000.0)
+        if timeout_seconds <= 0:
+            raise CampaignSendDeadlineExceeded(stage)
+        try:
+            return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            raise CampaignSendDeadlineExceeded(stage) from exc
+        except TimeoutError as exc:
+            raise CampaignSendDeadlineExceeded(stage) from exc
+
+    async def _open_thread_via_sidebar_flow(
+        self,
+        page: Page,
+        username: str,
+        *,
+        deadline: float,
+    ) -> ThreadOpenResult:
+        target = self._normalize_username(username).lower()
+        if not target:
+            return ThreadOpenResult(False, "invalid_username")
+
+        self._checkpoint(deadline=deadline, stage="opening_dm")
+        _dm_log("OPEN_DM_SIDEBAR_START", target_username=target, url=page.url if page else "")
+
+        inbox_ready = await self._await_with_deadline(
+            self._inbox_navigator.ensure_inbox_surface(page, deadline=deadline),
+            deadline=deadline,
+            stage="opening_dm",
+        )
+        if not inbox_ready:
+            log_browser_stage(
+                component="campaign_dm_sender",
+                stage="inbox_ready",
+                status="failed",
+                account=str(_dm_ctx().get("account") or ""),
+                lead=target,
+                reason="inbox_not_ready",
+                url=page.url if page else "",
+            )
+            _dm_log("OPEN_DM_SIDEBAR_INBOX_FAIL", target_username=target, url=page.url if page else "")
+            return ThreadOpenResult(False, "inbox_not_ready")
+        log_browser_stage(
+            component="campaign_dm_sender",
+            stage="inbox_ready",
+            status="ok",
+            account=str(_dm_ctx().get("account") or ""),
+            lead=target,
+            url=page.url if page else "",
+        )
+
+        self._checkpoint(deadline=deadline, stage="opening_dm")
+        open_result = await self._await_with_deadline(
+            self._thread_resolver.open_thread_from_sidebar(
+                page,
+                target,
+                deadline=deadline,
+            ),
+            deadline=deadline,
+            stage="opening_dm",
+        )
+        _dm_log(
+            "OPEN_DM_SIDEBAR_RESULT",
+            target_username=target,
+            opened=open_result.opened,
+            reason=open_result.reason,
+            thread_id=open_result.thread_id or "-",
+            url=page.url if page else "",
+        )
+        log_browser_stage(
+            component="campaign_dm_sender",
+            stage="thread_open",
+            status="ok" if open_result.opened else "failed",
+            account=str(_dm_ctx().get("account") or ""),
+            lead=target,
+            thread_id=open_result.thread_id or "",
+            reason=open_result.reason or "",
+            method=open_result.method or "",
+            url=page.url if page else "",
+        )
+        return open_result
+
+    async def _reconcile_unverified_via_thread_refresh(
+        self,
+        page: Optional[Page],
+        *,
+        thread_id: str,
+        snippet_norm: str,
+        before_hits: int,
+        before_tail: list[str],
+        deadline: float,
+    ) -> tuple[bool, str, Dict[str, Any]]:
+        clean_thread_id = str(thread_id or "").strip()
+        if page is None:
+            return False, "", {"mode": "thread_refresh_unavailable", "reason": "page_missing"}
+        if not clean_thread_id:
+            return False, "", {"mode": "thread_refresh_unavailable", "reason": "thread_id_missing"}
+        current_url = str(page.url or "").strip()
+        if not current_url:
+            return False, "", {"mode": "thread_refresh_unavailable", "reason": "url_missing"}
+
+        timeout_ms = self._remaining_ms(deadline, 8_000)
+        if timeout_ms <= 0:
+            return False, "", {"mode": "thread_refresh_timeout", "reason": "deadline_exhausted"}
+
+        try:
+            await page.goto(
+                current_url,
+                wait_until="domcontentloaded",
+                timeout=timeout_ms,
+            )
+        except Exception as exc:
+            return False, "", {"mode": "thread_refresh_error", "error": repr(exc)}
+
+        composer = await self._message_composer.wait_composer_visible(page, deadline=deadline)
+        if composer is None:
+            return False, "", {
+                "mode": "thread_refresh_unavailable",
+                "reason": "composer_not_found_after_refresh",
+                "thread_id": clean_thread_id,
+            }
+
+        dom_ok, dom_meta = await self._delivery_verifier.wait_dom_send_confirmation(
+            page,
+            snippet_norm=snippet_norm,
+            before_hits=before_hits,
+            before_tail=list(before_tail),
+            timeout_ms=max(1_800, int(POST_SEND_DOM_VERIFY_MS)),
+        )
+        if dom_ok:
+            meta = {
+                "mode": "thread_refresh_dom_confirmed",
+                "thread_id": clean_thread_id,
+                "dom_verify": dom_meta,
+            }
+            return True, "thread_refresh_dom", meta
+
+        bubble_ok, bubble_meta = await self._delivery_verifier.verify_message_visible_after_send(
+            page,
+            snippet_norm=snippet_norm,
+            before_hits=before_hits,
+            before_tail=list(before_tail),
+            timeout_ms=max(2_200, int(POST_SEND_DOM_VERIFY_MS) * 2),
+        )
+        meta = {
+            "mode": "thread_refresh_bubble_confirmed" if bubble_ok else "thread_refresh_no_match",
+            "thread_id": clean_thread_id,
+            "dom_verify": dom_meta,
+            "bubble_verify": bubble_meta,
+        }
+        if bubble_ok:
+            return True, "thread_refresh_bubble", meta
+        return False, "", meta
 
     def send_message_like_human_sync(
         self,
@@ -283,11 +882,9 @@ class HumanInstagramSender:
         proxy: Optional[Dict] = None,
         return_detail: bool = False,
         return_payload: bool = False,
-    ) -> Union[
-        bool,
-        Tuple[bool, Optional[str]],
-        Tuple[bool, Optional[str], Dict[str, Any]],
-    ]:
+        flow_timeout_seconds: float | None = None,
+        stage_callback: Optional[_STAGE_CALLBACK] = None,
+    ) -> Union[bool, Tuple[bool, Optional[str]], Tuple[bool, Optional[str], Dict[str, Any]]]:
         coro = self.send_message_like_human(
             account,
             target_username,
@@ -297,740 +894,41 @@ class HumanInstagramSender:
             proxy=proxy,
             return_detail=return_detail,
             return_payload=return_payload,
+            flow_timeout_seconds=flow_timeout_seconds,
+            stage_callback=stage_callback,
         )
+        flow_timeout = max(10.0, float(flow_timeout_seconds or MAX_FLOW_SECONDS))
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(coro)
-        raise RuntimeError("send_message_like_human_sync requiere contexto sync.")
-
-
-    async def _goto_inbox(self, page: Page) -> None:
-        await page.goto(DIRECT_INBOX, wait_until="domcontentloaded", timeout=45_000)
-        try:
-            await page.wait_for_selector("nav[role='navigation'], [role='dialog'], a[href='/direct/new/']", timeout=15_000)
-        except Exception:
-            pass
-
-    async def _dialog_ready(self, page: Page) -> bool:
-        search_selectors = ", ".join(SEARCH_INPUTS)
-        try:
-            if await page.locator(search_selectors).count() > 0:
-                return True
-        except Exception:
-            pass
-        try:
-            dialog = page.locator(DIALOG_SELECTOR)
-            if await dialog.count() > 0:
-                # Fallback: el modal puede renderizar antes que el input de búsqueda.
-                if await dialog.locator("input[name='queryBox'], button:has-text('Chat'), div[role='button']:has-text('Chat')").count() > 0:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    async def _wait_dialog_ready(self, page: Page, timeout_ms: int = 6000) -> bool:
-        deadline = time.time() + (max(0, timeout_ms) / 1000.0)
-        while time.time() < deadline:
-            if await self._dialog_ready(page):
-                return True
-            try:
-                await page.wait_for_timeout(250)
-            except Exception:
-                pass
-        return await self._dialog_ready(page)
-
-    async def _open_new_message_dialog(self, page: Page) -> bool:
-        dialog_selectors = ", ".join((DIALOG_SELECTOR, *SEARCH_INPUTS))
-        _dm_log("DIRECT_NEW_NAV_START", target=DIRECT_NEW, url=page.url if page else "")
-        t0 = time.time()
-        try:
-            await page.goto(DIRECT_NEW, wait_until="domcontentloaded", timeout=45_000)
-        except PwTimeoutError:
-            pass
-        _dm_log("DIRECT_NEW_NAV_DONE", url=page.url if page else "", elapsed_ms=int((time.time() - t0) * 1000))
-        try:
-            await page.wait_for_selector(dialog_selectors, timeout=6_000)
-        except Exception:
-            pass
-        ready = await self._wait_dialog_ready(page, timeout_ms=6_000)
-        _dm_log("DIRECT_NEW_DIALOG_READY", ready=ready, url=page.url if page else "")
-        if ready:
-            return True
-
-        await self._goto_inbox(page)
-        _dm_log("DIRECT_INBOX_READY", url=page.url if page else "")
-        buttons = page.locator(", ".join(NEW_MESSAGE_BUTTONS))
-        try:
-            btn_count = await buttons.count()
-        except Exception:
-            btn_count = 0
-        if _debug_enabled():
-            probe_btn = await _probe_locator(buttons)
-            _dm_log("DIRECT_NEW_BUTTONS", url=page.url if page else "", **probe_btn)
-        if btn_count > 0:
-            target = buttons.first
-            try:
-                await target.scroll_into_view_if_needed(timeout=2_000)
-            except Exception:
-                pass
-            await target.click()
-            _dm_log("DIRECT_NEW_BUTTON_CLICKED", url=page.url if page else "")
-            try:
-                await page.wait_for_selector(dialog_selectors, timeout=15_000)
-            except Exception:
-                pass
-        ready = await self._wait_dialog_ready(page, timeout_ms=8_000)
-        _dm_log("DIRECT_NEW_DIALOG_READY", ready=ready, url=page.url if page else "")
-        return ready
-
-    async def _read_search_value(self, field: Locator) -> str:
-        try:
-            return await field.input_value() or ""
-        except Exception:
-            try:
-                return await field.evaluate("el => el.value || el.textContent || ''") or ""
-            except Exception:
-                return ""
-
-    async def _type_search_handle(self, field: Locator, handle: str) -> None:
-        try:
-            await field.click()
-        except Exception:
-            pass
-        try:
-            await field.fill("")
-        except Exception:
-            try:
-                await field.press("Control+A")
-                await field.press("Delete")
-            except Exception:
-                pass
-        try:
-            await field.type(handle, delay=random.randint(55, 85))
-        except Exception:
-            try:
-                await field.fill(handle)
-            except Exception:
-                pass
-        current = (await self._read_search_value(field)).strip().lower()
-        if handle and handle not in current:
-            try:
-                await field.fill(handle)
-            except Exception:
-                pass
-
-    async def _search_and_select(self, page: Page, handle: str) -> bool:
-        cleaned = handle.strip().lstrip("@")
-        if not cleaned:
-            return False
-        search_locator = page.locator(", ".join(SEARCH_INPUTS))
-        try:
-            search_count = await search_locator.count()
-        except Exception:
-            search_count = 0
-        if _debug_enabled():
-            probe_search = await _probe_locator(search_locator)
-            _dm_log("DIRECT_NEW_SEARCH_INPUTS", url=page.url if page else "", **probe_search)
-        if search_count == 0:
-            _dm_log("DIRECT_NEW_SEARCH_INPUT_MISSING", url=page.url if page else "")
-            return False
-        field = search_locator.first
-        normalized = cleaned.lower()
-        _dm_log("DIRECT_NEW_SEARCH_TYPE", handle=normalized, url=page.url if page else "")
-        await self._type_search_handle(field, normalized)
-        typed_value = (await self._read_search_value(field)).strip().lower()
-        if normalized not in typed_value:
-            logger.info("Busqueda incompleta ('%s' -> '%s'), reintentando.", normalized, typed_value)
-            await self._type_search_handle(field, normalized)
-        _dm_log("DIRECT_NEW_SEARCH_TYPED", handle=normalized, typed_value=typed_value, url=page.url if page else "")
-        try:
-            # Aumentamos espera para que IG cargue resultados 
-            await page.wait_for_timeout(4000)
-        except Exception:
-            pass
-        _dm_log("DIRECT_NEW_SEARCH_WAITED", ms=4000, url=page.url if page else "")
-
-        # Estrategia 1: Buscar por selectores estándar (globales)
-        buttons = page.locator("[role='button']")
-        candidate = buttons.filter(has_text=re.compile(rf"^{re.escape(normalized)}$", re.IGNORECASE))
-        
-        selection: Optional[Locator] = None
-        strategy_used: str | None = None
-        if await candidate.count() > 0:
-            selection = candidate.first
-            strategy_used = "role_button_exact_text"
-        else:
-            # Estrategia 2: Buscar contenedor directo que tenga el texto
-            direct_text = page.locator(f"div[role='dialog'] div").filter(has_text=normalized)
-            if await direct_text.count() > 0:
-                selection = direct_text.last # Usamos last porque suele ser el nodo texto mas profundo
-                strategy_used = "dialog_div_has_text"
-             
-        if selection is None:
-              # Estrategia 4: Buscar inputs de tipo radio/checkbox GLOBALMENTE
-            radio_inputs = page.locator("input[type='radio'], input[type='checkbox']")
-            if await radio_inputs.count() > 0:
-                  logger.info("Encontrados inputs de selección (radio/checkbox). Clickeando el primero.")
-                  selection = radio_inputs.first
-                  strategy_used = "radio_or_checkbox_first"
-                  # A veces hay que clickear el padre o label
-                  try:
-                      await selection.click(force=True)
-                      _dm_log("DIRECT_NEW_SELECT", ok=True, strategy=strategy_used, url=page.url if page else "")
-                      return True
-                  except: 
-                      pass
-
-              # Estrategia 5: Fallback a lista genérica GLOBAL
-            items = page.locator("[role='button'], li")
-            visible_count = await items.count()
-            _dm_log("DIRECT_NEW_RESULTS", count=visible_count, url=page.url if page else "")
-            limit = min(visible_count, 5)
-            for idx in range(limit):
-                try:
-                    text_value = (await items.nth(idx).inner_text() or "").strip().lower()
-                except Exception:
-                    continue
-                if normalized in text_value:
-                    selection = items.nth(idx)
-                    strategy_used = "first_item_contains_handle"
-                    break
-            if selection is None and visible_count > 0:
-                selection = items.first
-                strategy_used = "items_first_fallback"
-        
-        if selection is None:
-            # Ultimo intento desesperado: Buscar el texto literal y clickearlo
-            logger.info(f"Búsqueda estándar falló. Intentando clic por texto: {normalized}")
-            try:
-                # Buscamos en todo el dialogo
-                fallback = page.locator("div[role='dialog']").get_by_text(normalized, exact=False).first
-                await fallback.click()
-                _dm_log("DIRECT_NEW_SELECT", ok=True, strategy="dialog_get_by_text", url=page.url if page else "")
-                return True
-            except:
-                _dm_log("DIRECT_NEW_SELECT", ok=False, strategy="dialog_get_by_text", url=page.url if page else "")
-                return False
-
-        try:
-            await selection.scroll_into_view_if_needed(timeout=2_000)
-        except Exception:
-            pass
-        try:
-            await selection.click()
-            if _debug_enabled():
-                probe_sel = await _probe_locator(selection)
-                _dm_log("DIRECT_NEW_SELECT", ok=True, strategy=strategy_used, url=page.url if page else "", **probe_sel)
-            else:
-                _dm_log("DIRECT_NEW_SELECT", ok=True, strategy=strategy_used, url=page.url if page else "")
-        except Exception as exc:
-            _dm_log("DIRECT_NEW_SELECT", ok=False, strategy=strategy_used, url=page.url if page else "", error=repr(exc))
-            return False
-        return True
-
-    async def _confirm_next(self, page: Page) -> bool:
-        _dm_log("DIRECT_NEW_CONFIRM_START", url=page.url if page else "")
-        # 1. Verificar si ya estamos en el chat (si al seleccionar usuario nos llevó directo)
-        try:
-            if await self._composer(page):
-                logger.info("Composer ya visible inmediatamente. Asumiendo éxito.")
-                _dm_log("DIRECT_NEW_CONFIRM", ok=True, method="composer_already_visible", url=page.url if page else "")
-                return True
-        except: pass
-
-        # 2. Buscar botones de confirmación
-        potential_texts = ["Next", "Siguiente", "Chat", "Conversar"]
-        
-        # Intentar clic en botones estandar
-        try:
-            nxt = page.locator(", ".join(NEXT_BTNS))
-            if await nxt.count() > 0:
-                # Filtrar visibilidad
-                for i in range(await nxt.count()):
-                    if await nxt.nth(i).is_visible():
-                        await nxt.nth(i).click()
-                        await self._sleep(1, 2)
-                        _dm_log("DIRECT_NEW_CONFIRM", ok=True, method="next_btns_css", index=i, url=page.url if page else "")
-                        return True
-        except Exception as e:
-            logger.debug(f"Fallo click selector estandar: {e}")
-            _dm_log("DIRECT_NEW_CONFIRM", ok=False, method="next_btns_css", url=page.url if page else "", error=repr(e))
-
-        # 3. Fuerza bruta: Buscar texto 'Chat'/'Next' arriba a la derecha (común en web)
-        logger.info("Buscando botón Next/Chat por texto...")
-        for text in potential_texts:
-            try:
-                # Buscamos botones o divs con ese texto exacto
-                el = page.get_by_role("button", name=text).first
-                if await el.is_visible():
-                    await el.click()
-                    await self._sleep(1, 2)
-                    _dm_log("DIRECT_NEW_CONFIRM", ok=True, method="get_by_role_button", name=text, url=page.url if page else "")
-                    return True
-                
-                # O simplemente texto clickeable
-                el_text = page.get_by_text(text, exact=True).first
-                if await el_text.is_visible():
-                    await el_text.click()
-                    await self._sleep(1, 2)
-                    _dm_log("DIRECT_NEW_CONFIRM", ok=True, method="get_by_text_exact", name=text, url=page.url if page else "")
-                    return True
-            except:
-                continue
-
-        # 4. Esperar un poco y verificar composer de nuevo
-        try:
-            await page.wait_for_selector(", ".join(COMPOSERS), timeout=5000)
-            _dm_log("DIRECT_NEW_CONFIRM", ok=True, method="wait_for_composer", url=page.url if page else "")
-            return True
-        except:
-            pass
-
-        _dm_log("DIRECT_NEW_CONFIRM", ok=False, method="all_failed", url=page.url if page else "")
-        return False
-
-    async def _composer(self, page: Page) -> Optional[Locator]:
-        locator = page.locator(", ".join(COMPOSERS))
-        try:
-            count = await locator.count()
-        except Exception:
-            count = 0
-        _dm_log("COMPOSER_SCAN", url=page.url if page else "", count=count)
-        if count <= 0:
-            return None
-        for idx in range(count):
-            candidate = locator.nth(idx)
-            try:
-                if not await candidate.is_visible():
-                    continue
-            except Exception:
-                continue
-            if _debug_enabled():
-                matched_selector: Optional[str] = None
-                for sel in COMPOSERS:
-                    try:
-                        if await candidate.evaluate("(el, s) => !!el && el.matches(s)", sel):
-                            matched_selector = sel
-                            break
-                    except Exception:
-                        continue
-                probe = await _probe_locator(candidate)
-                _dm_log(
-                    "COMPOSER_FOUND",
-                    url=page.url if page else "",
-                    index=idx,
-                    selector=matched_selector,
-                    **probe,
-                )
-            return candidate
-        return None
-
-    async def _focus_composer(self, page: Page, composer: Locator) -> Locator:
-        # IG re-renderiza el contenteditable al hacer focus; por eso re-resolvemos
-        # el locator y verificamos que el foco realmente quedó dentro.
-        last = composer
-        for _ in range(4):
-            try:
-                await last.scroll_into_view_if_needed(timeout=2_000)
-            except Exception:
-                pass
-            try:
-                await last.click(timeout=5_000)
-            except Exception:
-                pass
-            try:
-                await page.wait_for_timeout(random.randint(80, 180))
-            except Exception:
-                pass
-            refreshed = await self._composer(page)
-            if refreshed is not None:
-                last = refreshed
-            try:
-                focused = await last.evaluate(
-                    "el => !!el && !!document.activeElement && (el === document.activeElement || el.contains(document.activeElement))"
-                )
-            except Exception:
-                focused = False
-            if focused:
-                return last
-        return last
-
-    async def _clear_composer(self, page: Page, composer: Locator) -> None:
-        composer = await self._focus_composer(page, composer)
-        # Preferimos limpiar con teclado: es más consistente en contenteditable.
-        try:
-            await page.keyboard.press("Control+A")
-            await page.keyboard.press("Delete")
-            await page.wait_for_timeout(random.randint(60, 140))
-            return
-        except Exception:
-            pass
-        try:
-            await composer.fill("")
-            return
-        except Exception:
-            pass
-        try:
-            await composer.evaluate(
-                "(el) => {"
-                "  if (!el) return;"
-                "  if (typeof el.value === 'string') el.value = '';"
-                "  if (el.isContentEditable) el.textContent = '';"
-                "}"
+            return run_coroutine_sync(
+                coro,
+                timeout=flow_timeout + 5.0,
+                cancel_reason="campaign_send_cancelled",
+                on_cancel=lambda: self.close_all_sessions_sync(timeout=2.0),
             )
-        except Exception:
-            return
-
-    async def _type_text(self, page: Page, composer: Locator, text: str) -> None:
-        payload = (text or "").replace("\r\n", "\n")
-        if not payload.strip():
-            raise ValueError("El mensaje está vacío.")
-
-        # Verificación ligera: si no aparece el snippet en el composer, reintenta.
-        snippet = self._message_snippet(payload)
-        prefix_len = min(18, len(snippet))
-        prefix = snippet[:prefix_len].lower()
-        _dm_log(
-            "TYPE_START",
-            url=page.url if page else "",
-            chars=len(payload),
-            lines=payload.count("\n") + 1,
-        )
-
-        async def _typed_ok() -> bool:
-            try:
-                current = await self._composer(page)
-                if current is not None:
-                    current_text = await self._composer_text(current)
-                else:
-                    current_text = await self._composer_text(composer)
-            except Exception:
-                return False
-            lowered = (current_text or "").strip().lower()
-            if not snippet:
-                return True
-            return (snippet.lower() in lowered) or (prefix and prefix in lowered)
-
-        for attempt in range(3):
-            _dm_log("TYPE_ATTEMPT", attempt=attempt + 1, url=page.url if page else "")
-            current = await self._composer(page)
-            if current is not None:
-                composer = current
-
-            composer = await self._focus_composer(page, composer)
-            await self._clear_composer(page, composer)
-            composer = await self._focus_composer(page, composer)
-
-            parts = payload.split("\n")
-            for idx, part in enumerate(parts):
-                if idx > 0:
-                    try:
-                        await page.keyboard.press("Shift+Enter")
-                    except Exception:
-                        try:
-                            await composer.press("Shift+Enter")
-                        except Exception:
-                            pass
-                    await self._sleep(0.08, 0.25)
-                if not part:
-                    continue
-                for ch in part:
-                    try:
-                        await page.keyboard.type(ch, delay=random.randint(30, 120))
-                    except Exception:
-                        # Si el foco se perdió por re-render, lo recuperamos y seguimos.
-                        composer = await self._focus_composer(page, composer)
-                        await page.keyboard.type(ch, delay=random.randint(30, 120))
-                await self._sleep(0.05, 0.2)
-
-            if await _typed_ok():
-                _dm_log("TYPE_OK", attempt=attempt + 1, url=page.url if page else "")
-                return
-            # Si no se reflejó lo tipeado, reintento controlado.
-            try:
-                await page.wait_for_timeout(200 + attempt * 150)
-            except Exception:
-                pass
-
-        raise RuntimeError("No se pudo tipear el mensaje (composer inestable / re-render continuo).")
-
-    async def _type_and_send(self, page: Page, text: str) -> str:
-        _dm_log(
-            "TYPE_AND_SEND_START",
-            url=page.url if page else "",
-            snippet=self._message_snippet(text),
-        )
-        try:
-            await page.wait_for_selector(", ".join(COMPOSERS), timeout=20_000)
-        except Exception:
-            pass
-        composer = await self._composer(page)
-        if composer is None:
-            snap = await _debug_screenshot(page, "COMPOSER_NOT_FOUND", tag="type_and_send")
-            main_html = await _debug_dump_outer_html(page.locator("main"), "COMPOSER_NOT_FOUND", tag="main")
-            _dm_log("COMPOSER_NOT_FOUND", url=page.url if page else "", screenshot=snap, main_html=main_html)
-            raise RuntimeError("Composer no encontrado.")
-        await self._type_text(page, composer, text)
-        _dm_log("TYPE_AND_SEND_TYPED", url=page.url if page else "")
-        await self._sleep(0.25, 0.9)
-        send_candidates = [
-            SEND_BUTTONS,
-            "button[aria-label*='Send']",
-            "button[aria-label*='Enviar']",
-            "div[role='button'][aria-label*='Send']",
-            "div[role='button'][aria-label*='Enviar']",
-        ]
-        clicked = False
-        clicked_sel: Optional[str] = None
-        clicked_idx: Optional[int] = None
-        for sel in send_candidates:
-            btn = page.locator(sel)
-            try:
-                count = await btn.count()
-            except Exception:
-                count = 0
-            if count <= 0:
-                continue
-            for idx in range(min(count, 3)):
-                candidate = btn.nth(idx)
-                try:
-                    if not await candidate.is_visible():
-                        continue
-                except Exception:
-                    continue
-                try:
-                    await candidate.click()
-                    clicked = True
-                    clicked_sel = sel
-                    clicked_idx = idx
-                    break
-                except Exception:
-                    continue
-            if clicked:
-                break
-        if not clicked:
-            _dm_log("SEND_FALLBACK", method="enter", url=page.url if page else "")
-            await composer.press("Enter")
-            await self._sleep(0.25, 0.6)
-            try:
-                composer_text = await self._composer_text(composer)
-            except Exception:
-                composer_text = ""
-            if composer_text:
-                try:
-                    await composer.press("Control+Enter")
-                except Exception:
-                    pass
-                await self._sleep(0.25, 0.6)
-                for sel in send_candidates:
-                    btn = page.locator(sel)
-                    try:
-                        count = await btn.count()
-                    except Exception:
-                        count = 0
-                    if count <= 0:
-                        continue
-                    try:
-                        await btn.first.click()
-                        break
-                    except Exception:
-                        continue
-                _dm_log("SEND_METHOD", method="enter_ctrl_fallback", url=page.url if page else "")
-                return "enter_ctrl_fallback"
-            _dm_log("SEND_METHOD", method="enter_fallback", url=page.url if page else "")
-            return "enter_fallback"
-        _dm_log("SEND_CLICK", ok=True, selector=clicked_sel, index=clicked_idx, url=page.url if page else "")
-        await self._sleep(0.3, 1.0)
-        _dm_log("SEND_METHOD", method="click", url=page.url if page else "")
-        return "click"
-
-    async def _composer_text(self, composer: Locator) -> str:
-        try:
-            value = await composer.input_value()
-            if isinstance(value, str):
-                return value.strip()
-        except Exception:
-            pass
-        try:
-            text = await composer.inner_text()
-            if isinstance(text, str):
-                return text.strip()
-        except Exception:
-            pass
-        try:
-            text = await composer.text_content()
-            if isinstance(text, str):
-                return text.strip()
-        except Exception:
-            pass
-        return ""
-
-    def _message_snippet(self, text: str, limit: int = 48) -> str:
-        for line in (text or "").splitlines():
-            cleaned = line.strip()
-            if cleaned:
-                return cleaned[:limit]
-        return (text or "").strip()[:limit]
-
-    async def _confirm_message_sent(
-        self,
-        page: Page,
-        text: str,
-        composer: Optional[Locator] = None,
-    ) -> tuple[bool, str]:
-        snippet = self._message_snippet(text)
-        if not snippet:
-            return False, "snippet_empty"
-
-        current_url = page.url or ""
-        if "accounts/login" in current_url:
-            return False, "login_lost"
-        if any(token in current_url for token in ("challenge", "checkpoint", "accounts/confirm_email", "two_factor")):
-            return False, "challenge_detected"
-
-        toast_selectors = [
-            "[role='alert']",
-            "[data-testid='toast']",
-            "div[role='status']",
-            "[aria-live='assertive']",
-            "[aria-live='polite']",
-        ]
-        toast_success = re.compile(r"(sent|enviado|mensaje enviado|message sent)", re.IGNORECASE)
-        toast_negative = _TOAST_FAILURE_RE
-
-        message_selectors = [
-            "div[role='list'] div[role='listitem']",
-            "div[role='list'] div[role='row']",
-            "div[role='log'] div[role='listitem']",
-            "div[role='log'] div[role='row']",
-            "div[role='main'] div[role='listitem']",
-            "div[role='main'] div[role='row']",
-            "div[role='row']",
-            "[data-testid='message-bubble']",
-        ]
-
-        def _contains_snippet(value: str) -> bool:
-            return snippet.lower() in (value or "").lower()
-
-        prefix_len = min(18, len(snippet))
-        prefix = snippet[:prefix_len].lower()
-
-        def _contains_prefix(value: str) -> bool:
-            if not prefix:
-                return False
-            return prefix in (value or "").lower()
-
-        deadline = time.time() + VERIFY_TIMEOUT_S
-        while time.time() < deadline:
-            try:
-                await page.wait_for_timeout(500)
-            except Exception:
-                pass
-            for selector in toast_selectors:
-                try:
-                    toasts = page.locator(selector)
-                    count = await toasts.count()
-                    if count > 0:
-                        toast = toasts.nth(max(0, count - 1))
-                        toast_text = _compact_text((await toast.inner_text() or ""))
-                        if toast_text and toast_negative.search(toast_text):
-                            return False, f"send_failed_toast: {toast_text}"
-                        if toast_text and toast_success.search(toast_text) and not toast_negative.search(toast_text):
-                            return True, "toast_sent"
-                except Exception:
-                    continue
-            if composer is not None:
-                try:
-                    composer_text = await self._composer_text(composer)
-                    if composer_text == "":
-                        return True, "composer_cleared"
-                    if _contains_snippet(composer_text):
-                        continue
-                except Exception:
-                    pass
-            for sel in message_selectors:
-                try:
-                    items = page.locator(sel)
-                    count = await items.count()
-                    if count > 0:
-                        start = max(0, count - 3)
-                        for idx in range(start, count):
-                            item = items.nth(idx)
-                            try:
-                                text_value = await item.inner_text()
-                            except Exception:
-                                text_value = await item.text_content() or ""
-                            if _contains_snippet(text_value) or _contains_prefix(text_value):
-                                indicator_text = ""
-                                for marker_selector in _UNSENT_INDICATOR_SELECTORS:
-                                    try:
-                                        markers = item.locator(marker_selector)
-                                        marker_count = await markers.count()
-                                        if marker_count <= 0:
-                                            continue
-                                        marker = markers.nth(max(0, marker_count - 1))
-                                        for attr in ("aria-label", "title", "data-tooltip-content"):
-                                            value = await marker.get_attribute(attr)
-                                            if value:
-                                                indicator_text = value
-                                                break
-                                        if not indicator_text:
-                                            indicator_text = (await marker.inner_text() or "").strip()
-                                        break
-                                    except Exception:
-                                        continue
-                                if indicator_text:
-                                    return False, f"send_failed_indicator: {_compact_text(indicator_text)}"
-                                return True, "message_present"
-                        matches = items.filter(has_text=snippet)
-                        if await matches.count() > 0:
-                            matched_item = matches.nth(max(0, (await matches.count()) - 1))
-                            indicator_text = ""
-                            for marker_selector in _UNSENT_INDICATOR_SELECTORS:
-                                try:
-                                    markers = matched_item.locator(marker_selector)
-                                    marker_count = await markers.count()
-                                    if marker_count <= 0:
-                                        continue
-                                    marker = markers.nth(max(0, marker_count - 1))
-                                    for attr in ("aria-label", "title", "data-tooltip-content"):
-                                        value = await marker.get_attribute(attr)
-                                        if value:
-                                            indicator_text = value
-                                            break
-                                    if not indicator_text:
-                                        indicator_text = (await marker.inner_text() or "").strip()
-                                    break
-                                except Exception:
-                                    continue
-                            if indicator_text:
-                                return False, f"send_failed_indicator: {_compact_text(indicator_text)}"
-                            return True, "message_present"
-                except Exception:
-                    continue
-
-        if composer is not None:
-            try:
-                if _contains_snippet(await self._composer_text(composer)):
-                    return False, "composer_not_cleared"
-            except Exception:
-                pass
-        return False, "message_not_present_after_send"
-
-    async def _capture_success(self, page: Optional[Page], username: str, target: str) -> Optional[str]:
-        if page is None:
-            return None
-        try:
-            folder = Path(BASE_PROFILES) / username / "dm_success"
-            folder.mkdir(parents=True, exist_ok=True)
-            safe_target = re.sub(r"[^a-z0-9]+", "_", target.lower()).strip("_") or "target"
-            ts = int(time.time())
-            screenshot_path = folder / f"{safe_target}_{ts}.png"
-            await page.screenshot(path=str(screenshot_path))
-            return str(screenshot_path)
-        except Exception:
-            return None
+        except PlaywrightRuntimeCancelledError:
+            return self._result(
+                False,
+                "send_cancelled",
+                {
+                    "method": "outbound_compose",
+                    "verified": False,
+                    "reason_code": "STOP_REQUESTED",
+                },
+                return_detail=return_detail,
+                return_payload=return_payload,
+            )
+        except PlaywrightRuntimeTimeoutError:
+            return self._result(
+                False,
+                "send_deadline_exceeded",
+                {
+                    "method": "outbound_compose",
+                    "verified": False,
+                    "reason_code": "FLOW_TIMEOUT",
+                },
+                return_detail=return_detail,
+                return_payload=return_payload,
+            )
 
     async def send_message_like_human(
         self,
@@ -1043,678 +941,529 @@ class HumanInstagramSender:
         proxy: Optional[Dict] = None,
         return_detail: bool = False,
         return_payload: bool = False,
-    ) -> Union[
-        bool,
-        Tuple[bool, Optional[str]],
-        Tuple[bool, Optional[str], Dict[str, Any]],
-    ]:
-        detail: Optional[str] = None
-        payload: Dict[str, Any] = {}
+        flow_timeout_seconds: float | None = None,
+        stage_callback: Optional[_STAGE_CALLBACK] = None,
+    ) -> Union[bool, Tuple[bool, Optional[str]], Tuple[bool, Optional[str], Dict[str, Any]]]:
+        payload: Dict[str, Any] = {"method": "outbound_compose"}
         username = account.get("username") or ""
         if not username:
-            detail = "Cuenta sin username configurado."
-            if return_payload:
-                return False, detail, payload
-            return (False, detail) if return_detail else False
-        logger.info("Engine=playwright_async sender=human account=@%s", username)
-        svc: Optional[PlaywrightService] = None
-        ctx = None
-        page: Optional[Page] = None
+            return self._result(False, "send_not_confirmed", payload, return_detail=return_detail, return_payload=return_payload)
+
         normalized_target = self._normalize_username(target_username)
         if not normalized_target:
-            detail = "Lead sin username."
-            if return_payload:
-                return False, detail, payload
-            return (False, detail) if return_detail else False
+            return self._result(False, "send_not_confirmed", payload, return_detail=return_detail, return_payload=return_payload)
+
+        can_send, sent_today, limit = self._resolve_account_quota(account, str(username))
+        if not can_send:
+            payload["reason_code"] = "ACCOUNT_QUOTA_REACHED"
+            payload["quota"] = {
+                "sent_today": int(sent_today),
+                "limit": int(limit or 0),
+            }
+            return self._result(
+                False,
+                "account_quota_reached",
+                payload,
+                return_detail=return_detail,
+                return_payload=return_payload,
+            )
+
         debug_token = None
+        debug_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+        log_path = _DEBUG_SCREENSHOT_DIR / f"{debug_id}_{_safe_slug(username)}_{_safe_slug(normalized_target)}.log"
         if _debug_enabled():
             try:
                 _DEBUG_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
             except Exception:
                 pass
-            debug_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
-            log_path = _DEBUG_SCREENSHOT_DIR / f"{debug_id}_{_safe_slug(username)}_{_safe_slug(normalized_target)}.log"
-            debug_token = _DM_CTX.set(
-                {
-                    "account": username,
-                    "lead": normalized_target,
-                    "debug_id": debug_id,
-                    "log_path": str(log_path),
-                }
+        debug_token = _DM_CTX.set(
+            {
+                "account": username,
+                "lead": normalized_target,
+                "debug_id": debug_id,
+                "log_path": str(log_path),
+            }
+        )
+
+        session: Optional[ManagedSession] = None
+        page: Optional[Page] = None
+        proxy_payload = normalize_playwright_proxy(proxy) if proxy else proxy_from_account(account)
+        flow_started_at = time.time()
+        flow_timeout = max(10.0, float(flow_timeout_seconds or MAX_FLOW_SECONDS))
+        deadline = flow_started_at + flow_timeout
+        network_waiter: Optional[asyncio.Task[Any]] = None
+        flow_state: Dict[str, str] = {"current": "opening session"}
+        send_started = False
+
+        def _stage(stage: str, status: str, **fields: Any) -> None:
+            log_browser_stage(
+                component="campaign_dm_sender",
+                stage=stage,
+                status=status,
+                account=str(username),
+                lead=normalized_target,
+                **fields,
             )
 
-        delay_total = 0.0
-        if base_delay_seconds or jitter_seconds:
-            jitter = max(0.0, jitter_seconds)
-            delay_total = max(0.0, base_delay_seconds) + random.uniform(0, jitter)
-            if delay_total > 0:
-                _dm_log("DELAY", seconds=f"{delay_total:.2f}")
-                await asyncio.sleep(delay_total)
+        def _flow_event(message: str, track_current: bool = False) -> None:
+            text_value = str(message or "").strip()
+            if not text_value:
+                return
+            if track_current:
+                flow_state["current"] = text_value
+            _flow_log(f"[FLOW] {text_value}")
 
-        strategy = os.getenv("HUMAN_DM_STRATEGY", "auto").strip().lower()
-        if strategy not in {"profile", "direct_new", "auto"}:
-            strategy = "profile"
-        _dm_log("BEGIN", headless=self.headless, strategy=strategy)
-
-        async def _send_via_profile() -> str:
-            if page is None:
-                raise RuntimeError("Pagina no inicializada.")
-
-            profile_url = f"https://www.instagram.com/{normalized_target}/"
-            logger.info("Navegando al perfil directo: %s", profile_url)
-            _dm_log("PROFILE_GOTO", url=profile_url)
-
-            try:
-                await page.goto(profile_url, wait_until="domcontentloaded", timeout=45_000)
-                await self._sleep(2, 4)
-            except Exception as exc:
-                logger.warning("Error cargando perfil: %s", exc)
-                _dm_log("PROFILE_GOTO_FAIL", url=page.url if page else "", error=repr(exc))
-
-            clicked = False
-            click_error: Exception | None = None
-            dm_button = await find_profile_dm_button(page)
-            if _debug_enabled():
-                probe_dm = await _probe_locator(dm_button)
-                _dm_log("PROFILE_MESSAGE_BUTTON", url=page.url if page else "", **probe_dm)
-            else:
-                _dm_log("PROFILE_MESSAGE_BUTTON", url=page.url if page else "", found=bool(dm_button is not None))
-            if dm_button is not None:
-                try:
-                    logger.info("Clickeando boton de mensaje en perfil.")
-                    # Avoid false negatives from clicking too early (attached but not visible/enabled yet).
-                    try:
-                        await dm_button.wait_for(state="visible", timeout=6_000)
-                    except Exception:
-                        pass
-                    await dm_button.click()
-                    clicked = True
-                    _dm_log("PROFILE_MESSAGE_BUTTON_CLICK", ok=True, url=page.url if page else "")
-                except Exception as exc:
-                    click_error = exc
-                    _dm_log("PROFILE_MESSAGE_BUTTON_CLICK", ok=False, url=page.url if page else "", error=repr(exc))
-
-            if not clicked:
-                async def _profile_menu_check_and_click_dm() -> tuple[bool, bool]:
-                    """Returns (checked, clicked_dm). checked=True means menu opened and DM option was searched."""
-                    if page is None:
-                        return False, False
-                    header = page.locator("header")
-                    menu_btn: Optional[Locator] = None
-                    try:
-                        if await header.count() <= 0:
-                            _dm_log("PROFILE_MENU_BTN_MISSING", reason="no_header", url=page.url if page else "")
-                            return False, False
-                    except Exception:
-                        return False, False
-
-                    candidates = [
-                        header.locator(
-                            "button[aria-label*='Options'], "
-                            "button[aria-label*='More'], "
-                            "button[aria-label*='Opciones'], "
-                            "button[aria-label*='Más'], "
-                            "div[role='button'][aria-label*='Options'], "
-                            "div[role='button'][aria-label*='More'], "
-                            "div[role='button'][aria-label*='Opciones'], "
-                            "div[role='button'][aria-label*='Más'], "
-                            "button:has(svg[aria-label*='Options']), "
-                            "button:has(svg[aria-label*='More']), "
-                            "button:has(svg[aria-label*='Opciones']), "
-                            "button:has(svg[aria-label*='Más']), "
-                            "div[role='button']:has(svg[aria-label*='Options']), "
-                            "div[role='button']:has(svg[aria-label*='More']), "
-                            "div[role='button']:has(svg[aria-label*='Opciones']), "
-                            "div[role='button']:has(svg[aria-label*='Más'])"
-                        ),
-                    ]
-                    for loc in candidates:
-                        try:
-                            if await loc.count() <= 0:
-                                continue
-                            candidate = loc.first
-                            try:
-                                if not await candidate.is_visible():
-                                    continue
-                            except Exception:
-                                pass
-                            menu_btn = candidate
-                            break
-                        except Exception:
-                            continue
-                    if menu_btn is None:
-                        # Fallback: role-based detection (A/B tests can rename aria-labels).
-                        try:
-                            role_btn = header.get_by_role(
-                                "button",
-                                name=re.compile(r"(more|options|opciones)", re.IGNORECASE),
-                            )
-                            if await role_btn.count() > 0:
-                                menu_btn = role_btn.first
-                        except Exception:
-                            menu_btn = None
-                    if menu_btn is None:
-                        _dm_log("PROFILE_MENU_BTN_MISSING", reason="not_found", url=page.url if page else "")
-                        return False, False
-
-                    if _debug_enabled():
-                        probe_btn = await _probe_locator(menu_btn)
-                        _dm_log("PROFILE_MENU_BTN", url=page.url if page else "", **probe_btn)
-                    else:
-                        _dm_log("PROFILE_MENU_BTN", url=page.url if page else "", found=True)
-                    try:
-                        await menu_btn.scroll_into_view_if_needed(timeout=2_000)
-                    except Exception:
-                        pass
-                    try:
-                        await menu_btn.click()
-                    except Exception as exc:
-                        _dm_log("PROFILE_MENU_CLICK_FAIL", url=page.url if page else "", error=repr(exc))
-                        raise
-
-                    overlay = page.locator("[role='menu'], [role='dialog'], div[aria-modal='true']").last
-                    try:
-                        await overlay.wait_for(state="visible", timeout=3_000)
-                    except Exception:
-                        # If the overlay didn't materialize, we can't confirm absence.
-                        _dm_log("PROFILE_MENU_OVERLAY_MISSING", url=page.url if page else "")
-                        return False, False
-
-                    _dm_log("PROFILE_MENU_OPEN", url=page.url if page else "")
-                    dm_regex_exact = re.compile(r"^(send message|enviar mensaje|message|mensaje)$", re.IGNORECASE)
-                    dm_item: Optional[Locator] = None
-                    for role in ("menuitem", "button", "link"):
-                        try:
-                            loc = overlay.get_by_role(role, name=dm_regex_exact)
-                            if await loc.count() > 0:
-                                dm_item = loc.first
-                                break
-                        except Exception:
-                            continue
-                    if dm_item is None:
-                        # Some menus render as plain text nodes; try a text-based fallback inside overlay only.
-                        try:
-                            loc = overlay.locator(
-                                "text=/^(Send message|Enviar mensaje|Message|Mensaje)$/i"
-                            )
-                            if await loc.count() > 0:
-                                dm_item = loc.first
-                        except Exception:
-                            dm_item = None
-
-                    if dm_item is None:
-                        _dm_log("PROFILE_MENU_DM_ITEM_MISSING", url=page.url if page else "")
-                        # Close menu to avoid interfering with subsequent steps.
-                        try:
-                            await page.keyboard.press("Escape")
-                        except Exception:
-                            pass
-                        return True, False
-
-                    if _debug_enabled():
-                        probe_item = await _probe_locator(dm_item)
-                        _dm_log("PROFILE_MENU_DM_ITEM", url=page.url if page else "", **probe_item)
-                    try:
-                        await dm_item.click()
-                    except Exception as exc:
-                        _dm_log("PROFILE_MENU_DM_ITEM_CLICK_FAIL", url=page.url if page else "", error=repr(exc))
-                        raise
-                    _dm_log("PROFILE_MENU_DM_ITEM_CLICKED", url=page.url if page else "")
-                    return True, True
-
-                availability = await detect_dm_availability(page)
-                if availability == DmAvailability.NO_DM:
-                    snap = await _debug_screenshot(page, "SKIP_NO_DM", tag="profile")
-                    header_html = await _debug_dump_outer_html(page.locator("header"), "SKIP_NO_DM", tag="header")
-                    main_html = await _debug_dump_outer_html(page.locator("main"), "SKIP_NO_DM", tag="main")
-                    _dm_log(
-                        "SKIP_NO_DM",
-                        url=page.url if page else "",
-                        availability=getattr(availability, "value", str(availability)),
-                        screenshot=snap,
-                        header_html=header_html,
-                        main_html=main_html,
-                    )
-                    logger.info(NO_DM_PERMISSION_DETECTED_LOG)
-                    logger.info(NO_DM_SKIP_LOG)
-                    return NO_DM_SEND_METHOD
-                _dm_log(
-                    "PROFILE_MESSAGE_BUTTON_MISSING",
-                    url=page.url if page else "",
-                    availability=getattr(availability, "value", str(availability)),
+        async def _fail(
+            detail: str,
+            *,
+            stage: Optional[str] = None,
+            skip_reason: Optional[str] = None,
+            reason_code: Optional[str] = None,
+        ) -> Union[bool, Tuple[bool, Optional[str]], Tuple[bool, Optional[str], Dict[str, Any]]]:
+            payload["verified"] = False
+            payload["flow_stage_detail"] = flow_state.get("current") or ""
+            if skip_reason:
+                payload["skip_reason"] = skip_reason
+            if reason_code:
+                payload["reason_code"] = reason_code
+            if send_started:
+                _stage(
+                    "send_fail",
+                    "failed",
+                    detail=detail,
+                    stage_hint=stage or "",
+                    reason_code=reason_code or "",
+                    skip_reason=skip_reason or "",
                 )
-                # Recovery: en muchos perfiles (p.ej. cuentas privadas) no hay botón "Mensaje"
-                # en el header, pero el DM igualmente funciona por /direct/new.
-                try:
-                    _dm_log("PROFILE_RECOVERY_DIRECT_NEW_START", url=page.url if page else "")
-                    recovered_method = await _send_via_direct_new()
-                    _dm_log(
-                        "PROFILE_RECOVERY_DIRECT_NEW_OK",
-                        method=recovered_method,
-                        url=page.url if page else "",
-                    )
-                    return recovered_method
-                except Exception as exc2:
-                    snap = await _debug_screenshot(page, "PROFILE_RECOVERY_DIRECT_NEW_FAIL", tag="recover")
-                    dialog_html = await _debug_dump_outer_html(
-                        page.locator("[role='dialog']"), "PROFILE_RECOVERY_DIRECT_NEW_FAIL", tag="dialog"
-                    )
-                    _dm_log(
-                        "PROFILE_RECOVERY_DIRECT_NEW_FAIL",
-                        url=page.url if page else "",
-                        error=repr(exc2),
-                        screenshot=snap,
-                        dialog_html=dialog_html,
-                    )
-                    # Si direct/new dejó la vista en inbox, restauramos el perfil antes de seguir.
-                    try:
-                        current_url = (page.url or "").lower()
-                        if not current_url.startswith(profile_url.lower()):
-                            _dm_log(
-                                "PROFILE_RECOVERY_RESTORE_PROFILE",
-                                from_url=page.url if page else "",
-                                to_url=profile_url,
-                            )
-                            await page.goto(profile_url, wait_until="domcontentloaded", timeout=45_000)
-                            await self._sleep(1, 2)
-                    except Exception as exc_restore:
-                        _dm_log(
-                            "PROFILE_RECOVERY_RESTORE_PROFILE_FAIL",
-                            url=page.url if page else "",
-                            error=repr(exc_restore),
-                        )
 
-                # Profile overflow menu (3 dots): some accounts only expose DM from here.
-                menu_checked = False
-                menu_clicked = False
-                try:
-                    _dm_log("PROFILE_MENU_CHECK_START", url=page.url if page else "")
-                    menu_checked, menu_clicked = await _profile_menu_check_and_click_dm()
-                except Exception as exc_menu:
-                    # Technical failure opening/using the menu, keep as real error.
-                    snap = await _debug_screenshot(page, "PROFILE_MENU_CHECK_FAIL", tag="menu")
-                    overlay_html = await _debug_dump_outer_html(
-                        page.locator("[role='menu'], [role='dialog'], div[aria-modal='true']").last,
-                        "PROFILE_MENU_CHECK_FAIL",
-                        tag="overlay",
-                    )
-                    _dm_log(
-                        "PROFILE_MENU_CHECK_FAIL",
-                        url=page.url if page else "",
-                        error=repr(exc_menu),
-                        screenshot=snap,
-                        overlay_html=overlay_html,
-                    )
-                    raise
-
-                if menu_clicked:
-                    t0 = time.time()
-                    try:
-                        await page.wait_for_selector(", ".join(COMPOSERS), timeout=25_000)
-                        _dm_log(
-                            "PROFILE_MENU_COMPOSER_READY",
-                            url=page.url if page else "",
-                            elapsed_ms=int((time.time() - t0) * 1000),
-                        )
-                    except Exception as exc:
-                        snap = await _debug_screenshot(page, "PROFILE_MENU_COMPOSER_MISSING", tag="after_menu")
-                        main_html = await _debug_dump_outer_html(page.locator("main"), "PROFILE_MENU_COMPOSER_MISSING", tag="main")
-                        _dm_log(
-                            "PROFILE_MENU_COMPOSER_MISSING",
-                            url=page.url if page else "",
-                            elapsed_ms=int((time.time() - t0) * 1000),
-                            error=repr(exc),
-                            screenshot=snap,
-                            main_html=main_html,
-                        )
-                        raise RuntimeError("No aparecio la caja de texto del chat tras usar el menu (3 puntos).")
-                    return await self._type_and_send(page, text)
-
-                if menu_checked:
-                    # Confirmed: no DM option available in profile button nor menu.
-                    snap = await _debug_screenshot(page, "SKIP_NO_DM", tag="profile_menu")
-                    header_html = await _debug_dump_outer_html(page.locator("header"), "SKIP_NO_DM", tag="header")
-                    main_html = await _debug_dump_outer_html(page.locator("main"), "SKIP_NO_DM", tag="main")
-                    _dm_log(
-                        "SKIP_NO_DM",
-                        url=page.url if page else "",
-                        availability=getattr(availability, "value", str(availability)),
-                        screenshot=snap,
-                        header_html=header_html,
-                        main_html=main_html,
-                    )
-                    logger.info(NO_DM_PERMISSION_DETECTED_LOG)
-                    logger.info(NO_DM_SKIP_LOG)
-                    return NO_DM_SEND_METHOD
-
-                if click_error is not None:
-                    logger.debug("Error clickeando boton de mensaje: %s", click_error)
-                snap = await _debug_screenshot(page, "PROFILE_NO_MESSAGE_BUTTON", tag="missing")
-                header_html = await _debug_dump_outer_html(page.locator("header"), "PROFILE_NO_MESSAGE_BUTTON", tag="header")
-                _dm_log(
-                    "PROFILE_NO_MESSAGE_BUTTON",
-                    url=page.url if page else "",
-                    screenshot=snap,
-                    header_html=header_html,
-                )
-                raise RuntimeError("No se encontro boton 'Enviar mensaje' en el perfil del usuario.")
-
-            t0 = time.time()
-            try:
-                await page.wait_for_selector(", ".join(COMPOSERS), timeout=25_000)
-                _dm_log(
-                    "PROFILE_COMPOSER_READY",
-                    url=page.url if page else "",
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                )
-            except Exception as exc:
-                snap = await _debug_screenshot(page, "PROFILE_COMPOSER_MISSING", tag="after_click")
-                main_html = await _debug_dump_outer_html(page.locator("main"), "PROFILE_COMPOSER_MISSING", tag="main")
-                _dm_log(
-                    "PROFILE_COMPOSER_MISSING",
-                    url=page.url if page else "",
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                    error=repr(exc),
-                    screenshot=snap,
-                    main_html=main_html,
-                )
-                try:
-                    _dm_log("PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_START", url=page.url if page else "")
-                    recovered_method = await _send_via_direct_new()
-                    _dm_log(
-                        "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_OK",
-                        method=recovered_method,
-                        url=page.url if page else "",
-                    )
-                    return recovered_method
-                except Exception as exc_recover:
-                    snap_recover = await _debug_screenshot(page, "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_FAIL", tag="recover")
-                    dialog_html = await _debug_dump_outer_html(
-                        page.locator("[role='dialog']"),
-                        "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_FAIL",
-                        tag="dialog",
-                    )
-                    _dm_log(
-                        "PROFILE_COMPOSER_RECOVERY_DIRECT_NEW_FAIL",
-                        url=page.url if page else "",
-                        error=repr(exc_recover),
-                        screenshot=snap_recover,
-                        dialog_html=dialog_html,
-                    )
-                raise RuntimeError("No aparecio la caja de texto del chat tras clickear 'Enviar mensaje'.")
-
-            return await self._type_and_send(page, text)
-
-        async def _send_via_direct_new() -> str:
-            if page is None:
-                raise RuntimeError("Pagina no inicializada.")
-
-            _dm_log("DIRECT_NEW_START", url=page.url if page else "")
-            if not await self._open_new_message_dialog(page):
-                snap = await _debug_screenshot(page, "DIRECT_NEW_NO_DIALOG", tag="open")
-                dialog_html = await _debug_dump_outer_html(page.locator("[role='dialog']"), "DIRECT_NEW_NO_DIALOG", tag="dialog")
-                _dm_log(
-                    "DIRECT_NEW_NO_DIALOG",
-                    url=page.url if page else "",
-                    screenshot=snap,
-                    dialog_html=dialog_html,
-                )
-                raise RuntimeError("No se pudo abrir el dialogo de nuevo mensaje (/direct/new).")
-
-            if not await self._search_and_select(page, normalized_target):
-                snap = await _debug_screenshot(page, "DIRECT_NEW_SELECT_FAIL", tag="search")
-                dialog_html = await _debug_dump_outer_html(page.locator("[role='dialog']"), "DIRECT_NEW_SELECT_FAIL", tag="dialog")
-                _dm_log(
-                    "DIRECT_NEW_SELECT_FAIL",
-                    url=page.url if page else "",
-                    screenshot=snap,
-                    dialog_html=dialog_html,
-                )
-                raise RuntimeError("No se pudo seleccionar el usuario en el dialogo.")
-
-            if not await self._confirm_next(page):
-                snap = await _debug_screenshot(page, "DIRECT_NEW_CONFIRM_FAIL", tag="next")
-                dialog_html = await _debug_dump_outer_html(page.locator("[role='dialog']"), "DIRECT_NEW_CONFIRM_FAIL", tag="dialog")
-                _dm_log(
-                    "DIRECT_NEW_CONFIRM_FAIL",
-                    url=page.url if page else "",
-                    screenshot=snap,
-                    dialog_html=dialog_html,
-                )
-                raise RuntimeError("No se pudo abrir el chat (Next/Chat).")
-
-            t0 = time.time()
-            try:
-                await page.wait_for_selector(", ".join(COMPOSERS), timeout=25_000)
-                _dm_log(
-                    "DIRECT_NEW_COMPOSER_READY",
-                    url=page.url if page else "",
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                )
-            except Exception as exc:
-                snap = await _debug_screenshot(page, "DIRECT_NEW_COMPOSER_MISSING", tag="chat")
-                main_html = await _debug_dump_outer_html(page.locator("main"), "DIRECT_NEW_COMPOSER_MISSING", tag="main")
-                _dm_log(
-                    "DIRECT_NEW_COMPOSER_MISSING",
-                    url=page.url if page else "",
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                    error=repr(exc),
-                    screenshot=snap,
-                    main_html=main_html,
-                )
-                raise RuntimeError("No aparecio la caja de texto del chat tras abrir el dialogo.")
-
-            return await self._type_and_send(page, text)
-
-        try:
-            svc, ctx, page = await ensure_logged_in_async(
-                account,
-                headless=self.headless,
-                proxy=(
-                    normalize_playwright_proxy(proxy)
-                    if proxy
-                    else proxy_from_account(account)
-                ),
+            artifacts = await _capture_failure_artifacts(
+                page,
+                stage or detail,
+                detail=detail,
+                payload=payload,
             )
-            _dm_log("LOGIN_OK", url=page.url if page else "")
+            if artifacts:
+                payload["failure_artifacts"] = artifacts
+                payload["diagnostic_ref"] = artifacts.get("meta") or artifacts.get("screenshot")
 
-            used_strategy = "profile"
-            if strategy == "direct_new":
-                send_method = await _send_via_direct_new()
-                used_strategy = "direct_new"
-            elif strategy == "auto":
-                try:
-                    send_method = await _send_via_direct_new()
-                    used_strategy = "direct_new"
-                except Exception as exc:
-                    _dm_log("DIRECT_NEW_FAILED", url=page.url if page else "", error=repr(exc))
-                    # Soft fail: only becomes an error if profile fallback fails too.
-                    logger.info(
-                        "Direct/new fallo para @%s -> @%s: %s. Fallback a perfil.",
-                        username,
-                        normalized_target,
-                        exc,
-                    )
-                    send_method = await _send_via_profile()
-                    used_strategy = "profile"
-            else:
-                send_method = await _send_via_profile()
-                used_strategy = "profile"
+            return self._result(False, detail, payload, return_detail=return_detail, return_payload=return_payload)
 
-            if send_method == NO_DM_SEND_METHOD:
-                snap = await _debug_screenshot(page, "SKIP_NO_DM", tag="final")
-                if snap:
-                    payload.setdefault("debug_screenshot", snap)
-                _dm_log("SKIP_DECISION", reason=NO_DM_SKIP_REASON, url=page.url if page else "", screenshot=snap)
-                payload.update(
-                    {
-                        "engine": "playwright_async",
-                        "url": page.url if page else "",
-                        "strategy": used_strategy,
-                        "send_method": NO_DM_SEND_METHOD,
-                        "skip_reason": SKIPPED_NO_DM_REASON,
-                        "skip_reason_legacy": LEGACY_NO_DM_REASON,
-                        "skip_detail": NO_DM_SKIP_DETAIL,
-                        "skipped": True,
-                    }
-                )
-                if return_payload:
-                    return False, SKIPPED_NO_DM_REASON, payload
-                return (False, SKIPPED_NO_DM_REASON) if return_detail else False
-
-            composer = await self._composer(page)
-            ok, reason = await self._confirm_message_sent(page, text, composer=composer)
-            _dm_log("VERIFY", ok=ok, reason=reason, url=page.url if page else "")
-            payload["verified"] = bool(ok)
-            if not ok and reason in {"login_lost", "challenge_detected"}:
-                # Health is Playwright-only. If we lose login or hit a challenge mid-send,
-                # persist the account as blocked/session-expired without altering business flow.
-                try:
-                    import health_store
-
-                    if reason == "login_lost":
-                        health_store.update_from_playwright_status(username, "session_expired", reason=reason)
-                    else:
-                        health_store.update_from_playwright_status(username, "checkpoint", reason=reason)
-                except Exception:
-                    pass
-            if not ok and reason in {"message_not_present_after_send", "composer_not_cleared"}:
-                try:
-                    composer_text = await self._composer_text(composer) if composer else ""
-                except Exception:
-                    composer_text = ""
-                if composer_text:
-                    try:
-                        await composer.press("Control+Enter")
-                        await self._sleep(0.25, 0.6)
-                    except Exception:
-                        pass
-                ok_retry, reason_retry = await self._confirm_message_sent(
-                    page,
-                    text,
-                    composer=composer,
-                )
-                if ok_retry:
-                    ok = True
-                    reason = reason_retry
-                    payload["verified"] = True
-            if not ok:
-                if reason in _UNVERIFIED_REASONS:
-                    current_url = page.url if page else ""
-                    detail = "sent_request" if "/direct/requests" in (current_url or "") else "sent_unverified"
-                    payload["verification_reason"] = reason
-                    payload["detail"] = detail
-                    if detail == "sent_unverified":
-                        payload["sent_unverified"] = True
-                        payload["reason_code"] = "SENT_UNVERIFIED"
-                    if detail == "sent_unverified" and not ALLOW_UNVERIFIED:
-                        strict_detail = f"sent_unverified ({reason})"
-                        if return_payload:
-                            return False, strict_detail, payload
-                        return (False, strict_detail) if return_detail else False
-                    if return_payload:
-                        return True, detail, payload
-                    return (True, detail) if return_detail else True
-                raise RuntimeError(reason)
-
-            storage_path = Path(BASE_PROFILES) / username / "storage_state.json"
+        async def _success(detail: str, *, verify_source: str) -> Union[bool, Tuple[bool, Optional[str]], Tuple[bool, Optional[str], Dict[str, Any]]]:
+            payload["verified"] = True
+            payload["verify_source"] = verify_source
+            _stage(
+                "send_success",
+                "ok",
+                verify_source=verify_source,
+                url=page.url if page else "",
+            )
+            _dm_log(
+                "SEND_OK",
+                verify_source=verify_source,
+                url=page.url if page else "",
+            )
             try:
-                await svc.save_storage_state(ctx, storage_path)
+                if session is not None:
+                    await self._session_manager.save_storage_state(session, username)
             except Exception:
                 pass
-            payload.update(
-                {
-                    "engine": "playwright_async",
-                    "url": page.url if page else "",
-                    "strategy": used_strategy,
-                    "send_method": send_method,
-                    "verified": payload.get("verified", True),
-                }
-            )
             screenshot = await self._capture_success(page, username, normalized_target)
             if screenshot:
                 payload["screenshot"] = screenshot
-            logger.info(
-                "Mensaje enviado con Playwright (%s): @%s -> @%s",
-                used_strategy,
-                username,
-                normalized_target,
+            return self._result(True, detail, payload, return_detail=return_detail, return_payload=return_payload)
+
+        try:
+            self._active_flow_hook = _flow_event
+            _stage("spawn", "started", flow_timeout_seconds=flow_timeout)
+            delay_total = 0.0
+            if base_delay_seconds or jitter_seconds:
+                delay_total = max(0.0, base_delay_seconds) + random.uniform(0.0, max(0.0, jitter_seconds))
+                if delay_total > 0:
+                    _dm_log("DELAY", seconds=f"{delay_total:.2f}")
+                    await self._cooperative_sleep(delay_total, deadline=deadline, stage="delay")
+
+            self._notify_stage(stage_callback, "opening_session", account=username, lead=normalized_target)
+            session = await self._await_with_deadline(
+                self._session_manager.open_session(
+                    account=account,
+                    proxy=proxy_payload,
+                    login_func=ensure_logged_in_async,
+                    deadline=deadline,
+                ),
+                deadline=deadline,
+                stage="opening_session",
             )
-            if return_payload:
-                return True, payload.get("detail"), payload
-            return (True, payload.get("detail")) if return_detail else True
-        except Exception as exc:
-            detail = str(exc)
-            snap = await _debug_screenshot(page, "EXCEPTION", tag=type(exc).__name__)
-            main_html = await _debug_dump_outer_html(page.locator("main") if page else None, "EXCEPTION", tag="main")
-            _dm_log(
-                "EXCEPTION",
+            page = session.page
+            _dm_log("LOGIN_OK", url=page.url if page else "")
+
+            payload["normalized_username"] = normalized_target
+            self._notify_stage(
+                stage_callback,
+                "opening_dm",
+                account=username,
+                lead=normalized_target,
+            )
+            open_result = await self._await_with_deadline(
+                self._open_thread_via_sidebar_flow(
+                    page,
+                    normalized_target,
+                    deadline=deadline,
+                ),
+                deadline=deadline,
+                stage="opening_dm",
+            )
+            payload["thread_open_method"] = open_result.method
+            if not open_result.opened:
+                if open_result.reason == "username_not_found":
+                    detail = "SKIPPED_USERNAME_NOT_FOUND"
+                    skip_reason = detail
+                elif open_result.reason == "inbox_not_ready":
+                    detail = "INBOX_NOT_READY"
+                    skip_reason = None
+                elif open_result.reason == "ui_not_found":
+                    detail = "UI_NOT_FOUND"
+                    skip_reason = None
+                elif open_result.reason == "chrome_error":
+                    detail = "SKIPPED_CHROME_ERROR"
+                    skip_reason = detail
+                else:
+                    detail = "THREAD_OPEN_FAILED"
+                    skip_reason = None
+                return await _fail(
+                    detail,
+                    stage="OPEN_DM_FAILED",
+                    skip_reason=skip_reason,
+                    reason_code=open_result.reason.upper() if open_result.reason else None,
+                )
+            payload["thread_id"] = open_result.thread_id
+
+            _flow_event("waiting chat load", True)
+            try:
+                composer = await self._message_composer.thread_composer(page)
+            except Exception:
+                composer = None
+            if composer is None:
+                composer = await self._await_with_deadline(
+                    self._message_composer.wait_composer_visible(page, deadline=deadline),
+                    deadline=deadline,
+                    stage="opening_dm",
+                )
+            if composer is None:
+                _stage(
+                    "composer_ready",
+                    "failed",
+                    thread_id=str(open_result.thread_id or ""),
+                    reason="composer_not_found",
+                )
+                return await _fail(
+                    "THREAD_OPEN_FAILED",
+                    stage="THREAD_OPEN_FAILED",
+                    reason_code="THREAD_OPEN_FAILED",
+                )
+            _stage(
+                "composer_ready",
+                "ok",
+                thread_id=str(open_result.thread_id or ""),
                 url=page.url if page else "",
-                error=repr(exc),
-                screenshot=snap,
-                main_html=main_html,
             )
-            await self._capture_debug(page, username, normalized_target, detail)
-            logger.warning(
-                "Fallo envio humano con @%s -> @%s: %s",
-                username,
-                normalized_target,
+            _flow_event("chat loaded")
+
+            self._notify_stage(
+                stage_callback,
+                "sending",
+                account=username,
+                lead=normalized_target,
+                reason="compose_message",
+            )
+            _flow_event("sending message", True)
+            send_started = True
+            _stage(
+                "send_attempt",
+                "started",
+                thread_id=str(open_result.thread_id or ""),
+                message_length=len(text),
+            )
+            delivery_snapshot = await self._await_with_deadline(
+                self._delivery_verifier.build_snapshot(page, text, limit=30),
+                deadline=deadline,
+                stage="sending",
+            )
+
+            await self._await_with_deadline(
+                self._message_composer.type_message(page, composer, text),
+                deadline=deadline,
+                stage="sending",
+            )
+
+            network_timeout = self._remaining_ms(deadline, SEND_NETWORK_TIMEOUT_MS)
+            if network_timeout <= 0:
+                return await _fail("send_not_confirmed", stage="SEND_NETWORK_TIMEOUT")
+
+            network_waiter = asyncio.create_task(
+                self._delivery_verifier.wait_send_network_ok(
+                    page,
+                    delivery_snapshot.snippet,
+                    timeout_ms=network_timeout,
+                )
+            )
+            await asyncio.sleep(0)
+            self._checkpoint(deadline=deadline, stage="sending")
+
+            enter_ok = False
+            try:
+                await composer.press("Enter")
+                enter_ok = True
+            except Exception:
+                try:
+                    await page.keyboard.press("Enter")
+                    enter_ok = True
+                except Exception:
+                    enter_ok = False
+
+            fallback_clicked = False
+            if not network_waiter.done():
+                text_change_timeout = self._remaining_ms(deadline, 1_200)
+                current_text = await self._message_composer.wait_for_text_change(
+                    composer,
+                    previous_text=text,
+                    timeout_ms=text_change_timeout if text_change_timeout > 0 else 80,
+                )
+                current_text = current_text.strip().lower()
+                if current_text:
+                    fallback_clicked = await self._message_composer.click_send_button(page)
+            _dm_log("SEND_TRIGGER", enter_ok=enter_ok, fallback_clicked=fallback_clicked, url=page.url if page else "")
+            self._notify_stage(
+                stage_callback,
+                "sending",
+                account=username,
+                lead=normalized_target,
+                reason="verify_send",
+            )
+            dom_ok, dom_meta = await self._await_with_deadline(
+                self._delivery_verifier.wait_dom_send_confirmation(
+                    page,
+                    snippet_norm=delivery_snapshot.snippet_norm,
+                    before_hits=delivery_snapshot.before_hits,
+                    before_tail=list(delivery_snapshot.before_tail),
+                    timeout_ms=POST_SEND_DOM_VERIFY_MS,
+                ),
+                deadline=deadline,
+                stage="sending",
+            )
+            payload["dom_verify"] = dom_meta
+            _dm_log(
+                "SEND_DOM_VERIFY",
+                ok=dom_ok,
+                mode=dom_meta.get("mode"),
+                before_hits=dom_meta.get("before_hits"),
+                after_hits=dom_meta.get("after_hits"),
+                tail_changed=dom_meta.get("tail_changed"),
+            )
+
+            net_ok = False
+            net_meta: Dict[str, Any] = {}
+            if network_waiter.done():
+                net_ok, net_meta = await network_waiter
+            elif not dom_ok:
+                net_ok, net_meta = await self._await_with_deadline(
+                    network_waiter,
+                    deadline=deadline,
+                    stage="sending",
+                )
+            else:
+                network_waiter.cancel()
+                try:
+                    await network_waiter
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+
+            payload["network"] = net_meta
+            _dm_log(
+                "SEND_NETWORK_RESULT",
+                ok=net_ok,
+                matched_responses=net_meta.get("matched_responses"),
+                last_status=net_meta.get("last_status"),
+                last_json_status=net_meta.get("last_json_status"),
+                last_url=net_meta.get("last_url"),
+            )
+
+            bubble_ok, bubble_meta = await self._await_with_deadline(
+                self._delivery_verifier.verify_message_visible_after_send(
+                    page,
+                    snippet_norm=delivery_snapshot.snippet_norm,
+                    before_hits=delivery_snapshot.before_hits,
+                    before_tail=list(delivery_snapshot.before_tail),
+                    timeout_ms=max(1400, int(POST_SEND_DOM_VERIFY_MS)),
+                ),
+                deadline=deadline,
+                stage="sending",
+            )
+            payload["bubble_verify"] = bubble_meta
+            composer_after = (await self._message_composer.composer_text(composer)).strip()
+            composer_cleared = composer_after == ""
+            payload["composer_cleared"] = composer_cleared
+
+            _dm_log(
+                "SEND_CONFIRM_STEPS",
+                network_ok=net_ok,
+                dom_ok=dom_ok,
+                bubble_ok=bubble_ok,
+                composer_cleared=composer_cleared,
+            )
+
+            decision = self._delivery_verifier.decide_confirmation(
+                net_ok=net_ok,
+                dom_ok=dom_ok,
+                bubble_ok=bubble_ok,
+                composer_cleared=composer_cleared,
+                allow_unverified=ALLOW_UNVERIFIED,
+            )
+
+            if decision.ok and decision.verified:
+                return await _success(decision.detail, verify_source=decision.verify_source)
+
+            if composer_cleared:
+                refresh_ok, refresh_source, refresh_meta = await self._reconcile_unverified_via_thread_refresh(
+                    page,
+                    thread_id=str(open_result.thread_id or ""),
+                    snippet_norm=delivery_snapshot.snippet_norm,
+                    before_hits=delivery_snapshot.before_hits,
+                    before_tail=list(delivery_snapshot.before_tail),
+                    deadline=deadline,
+                )
+                payload["thread_refresh_verify"] = refresh_meta
+                _dm_log(
+                    "SEND_THREAD_REFRESH_VERIFY",
+                    ok=refresh_ok,
+                    mode=refresh_meta.get("mode"),
+                    thread_id=refresh_meta.get("thread_id"),
+                )
+                if refresh_ok:
+                    return await _success("sent_verified", verify_source=refresh_source)
+
+            if decision.ok and decision.sent_unverified:
+                payload["verified"] = False
+                payload["reason_code"] = decision.reason_code
+                payload["sent_unverified"] = True
+                return self._result(
+                    True,
+                    decision.detail,
+                    payload,
+                    return_detail=return_detail,
+                    return_payload=return_payload,
+                )
+
+            return await _fail(
+                decision.detail,
+                stage=decision.stage,
+                reason_code=decision.reason_code or None,
+            )
+
+        except CampaignSendCancelled:
+            raise
+        except CampaignSendDeadlineExceeded as exc:
+            payload["flow_stage"] = exc.stage
+            payload["flow_stage_detail"] = flow_state.get("current") or ""
+            _flow_log(
+                f"[FLOW ERROR] timeout at stage: {payload['flow_stage_detail'] or exc.stage}",
+                level=logging.WARNING,
+            )
+            if send_started:
+                _stage(
+                    "send_fail",
+                    "failed",
+                    detail="send_deadline_exceeded",
+                    stage_hint=exc.stage,
+                    reason_code="FLOW_TIMEOUT",
+                )
+            return await _fail(
+                "send_deadline_exceeded",
+                stage=exc.stage,
+                reason_code="FLOW_TIMEOUT",
+            )
+        except Exception as exc:
+            payload["verified"] = False
+            payload["method"] = "outbound_compose"
+            payload["error"] = repr(exc)
+            if session is None:
+                payload["reason_code"] = "SESSION_OPEN_FAILED"
+                payload["flow_stage"] = "opening_session"
+            elif page is not None and not payload.get("thread_id"):
+                payload["reason_code"] = "THREAD_OPEN_FAILED"
+                payload["flow_stage"] = "opening_dm"
+            elif send_started:
+                payload["reason_code"] = "SEND_FAILED"
+                payload["flow_stage"] = "sending"
+            await self._session_manager.discard_if_unhealthy(
+                session,
                 exc,
+                is_fatal_error=self._is_fatal_session_error,
             )
-            if return_payload:
-                return False, detail, payload
-            return (False, detail) if return_detail else False
+            snap = await _debug_screenshot(page, "EXCEPTION", tag=type(exc).__name__)
+            main_locator = None
+            if page is not None and hasattr(page, "locator"):
+                try:
+                    main_locator = page.locator("main")
+                except Exception:
+                    main_locator = None
+            html = await _debug_dump_outer_html(main_locator, "EXCEPTION", tag="main")
+            if snap:
+                payload["debug_screenshot"] = snap
+            if html:
+                payload["debug_main_html"] = html
+            artifacts = await _capture_failure_artifacts(page, "EXCEPTION", detail="send_not_confirmed", payload=payload)
+            if artifacts:
+                payload["failure_artifacts"] = artifacts
+                payload["diagnostic_ref"] = artifacts.get("meta") or artifacts.get("screenshot")
+            _dm_log("EXCEPTION", url=page.url if page else "", error=repr(exc), screenshot=snap, main_html=html)
+            detail = "send_not_confirmed"
+            if payload.get("reason_code") == "SESSION_OPEN_FAILED":
+                detail = "session_open_failed"
+            elif payload.get("reason_code") == "THREAD_OPEN_FAILED":
+                detail = "thread_open_failed"
+            elif payload.get("reason_code") == "SEND_FAILED":
+                detail = "send_failed"
+                _stage(
+                    "send_fail",
+                    "failed",
+                    detail=detail,
+                    stage_hint=str(payload.get("flow_stage") or ""),
+                    error=str(exc) or type(exc).__name__,
+                )
+            return self._result(False, detail, payload, return_detail=return_detail, return_payload=return_payload)
+
         finally:
-            # Si quedamos en captcha/suspension o two_factor, dejamos el navegador abierto
-            stay_open = False
+            if network_waiter is not None and not network_waiter.done():
+                network_waiter.cancel()
+                try:
+                    await network_waiter
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+            current_url = ""
             try:
                 current_url = page.url if page else ""
-                if current_url:
-                    stay_open = any(
-                        token in current_url
-                        for token in (
-                            "accounts/suspended",
-                            "two_factor",
-                            "challenge",
-                            "checkpoint",
-                            "accounts/confirm_email",
-                        )
-                    )
             except Exception:
-                stay_open = False
+                current_url = ""
 
-            if not stay_open:
-                if ctx is not None:
-                    try:
-                        await ctx.close()
-                    except Exception:
-                        pass
-                if svc is not None:
-                    try:
-                        await svc.close()
-                    except Exception:
-                        pass
+            await self._session_manager.finalize_session(session, current_url=current_url)
+            self._active_flow_hook = None
+
             if debug_token is not None:
                 try:
                     _DM_CTX.reset(debug_token)
                 except Exception:
                     pass
 
-    async def _capture_debug(self, page: Optional[Page], username: str, target: str, reason: Optional[str]) -> None:
-        if page is None:
-            return
-        try:
-            folder = Path(BASE_PROFILES) / username / "dm_errors"
-            folder.mkdir(parents=True, exist_ok=True)
-            safe_target = re.sub(r"[^a-z0-9]+", "_", target.lower()).strip("_") or "target"
-            safe_reason = re.sub(r"[^a-z0-9]+", "_", (reason or "error").lower()).strip("_") or "error"
-            ts = int(time.time())
-            await page.screenshot(path=str(folder / f"{safe_target}_{safe_reason}_{ts}.png"))
-            try:
-                html = await page.content()
-                html_path = folder / f"{safe_target}_{safe_reason}_{ts}.html"
-                html_path.write_text(html, encoding="utf-8")
-            except Exception:
-                pass
-        except Exception:
-            pass
+
+
+
+
+
+
+
+
+

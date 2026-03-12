@@ -12,12 +12,15 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 from dotenv import dotenv_values, load_dotenv
-from paths import runtime_base
+from paths import app_root, logs_root, runtime_base, storage_root
 
-_ROOT = runtime_base(Path(__file__).resolve().parent)
+_BASE_ROOT = runtime_base(Path(__file__).resolve().parent)
+_ROOT = app_root(_BASE_ROOT)
 _ENV_FILENAMES = (".env", ".env.local")
-_CONFIG_FILE = _ROOT / "storage" / "config.json"
-_LICENSE_PAYLOAD = _ROOT / "storage" / "license_payload.json"
+_STORAGE_ROOT = storage_root(_BASE_ROOT)
+_APP_CONFIG_DIR = _BASE_ROOT / "app"
+_CONFIG_FILE = _APP_CONFIG_DIR / "config.json"
+_LEGACY_CONFIG_FILE = _STORAGE_ROOT / "config.json"
 
 
 def _load_file_values() -> Dict[str, str]:
@@ -68,7 +71,7 @@ class Settings:
     delay_max: int = 55
     autoresponder_delay: int = 10
     quiet: bool = False
-    log_dir: Path = _ROOT / "storage" / "logs"
+    log_dir: Path = logs_root(_BASE_ROOT)
     log_file: str = "app.log"
     supabase_url: str = ""
     supabase_key: str = ""
@@ -112,33 +115,52 @@ def _validated_ranges(values: Dict[str, str]) -> Tuple[int, int, int, int]:
     return max_per_account, max_concurrency, delay_min, delay_max
 
 
-def _client_distribution_flag(env_values: Dict[str, str], default: bool) -> bool:
+def _client_distribution_flag(
+    env_values: Dict[str, str],
+    app_config: Dict[str, str],
+    default: bool,
+) -> bool:
     env_value = env_values.get("CLIENT_DISTRIBUTION")
     if env_value is not None:
         return _coerce_bool(env_value, default)
 
-    if _LICENSE_PAYLOAD.exists():
-        try:
-            payload = json.loads(_LICENSE_PAYLOAD.read_text(encoding="utf-8"))
-        except Exception:
-            return True
+    config_value = app_config.get("client_distribution")
+    if config_value is not None and str(config_value).strip() != "":
+        return _coerce_bool(str(config_value), default)
 
-        edition = str(payload.get("edition", "")).strip().lower()
-        if edition:
-            return edition == "client"
-
-        return bool(payload)
+    channel = str(app_config.get("channel") or app_config.get("edition") or "").strip().lower()
+    if channel:
+        return channel == "client"
 
     return default
 
 
 def load_settings() -> Settings:
     file_values = _load_file_values()
+    app_config = read_app_config()
     env_values = {**file_values, **os.environ}
     max_per_account, max_concurrency, delay_min, delay_max = _validated_ranges(env_values)
 
     defaults = Settings()
-    client_distribution = _client_distribution_flag(env_values, defaults.client_distribution)
+    client_distribution = _client_distribution_flag(
+        env_values,
+        app_config,
+        defaults.client_distribution,
+    )
+    supabase_url = str(
+        env_values.get("SUPABASE_URL")
+        or app_config.get("supabase_url")
+        or app_config.get("SUPABASE_URL")
+        or ""
+    ).strip()
+    supabase_key = str(
+        env_values.get("SUPABASE_KEY")
+        or env_values.get("SUPABASE_ANON_KEY")
+        or env_values.get("SUPABASE_SERVICE_ROLE_KEY")
+        or app_config.get("supabase_key")
+        or app_config.get("SUPABASE_KEY")
+        or ""
+    ).strip()
     low_profile_age_days = max(1, _coerce_int(env_values.get("LOW_PROFILE_AGE_DAYS"), defaults.low_profile_age_days))
     low_profile_profile_edit_threshold = max(
         1,
@@ -178,8 +200,8 @@ def load_settings() -> Settings:
         quiet=_coerce_bool(env_values.get("QUIET"), defaults.quiet),
         log_dir=_coerce_path(env_values.get("LOG_DIR"), defaults.log_dir),
         log_file=env_values.get("LOG_FILE", defaults.log_file),
-        supabase_url=env_values.get("SUPABASE_URL", ""),
-        supabase_key=env_values.get("SUPABASE_KEY", ""),
+        supabase_url=supabase_url,
+        supabase_key=supabase_key,
         openai_api_key=env_values.get("OPENAI_API_KEY", ""),
         client_distribution=client_distribution,
         proxy_default_url=env_values.get("PROXY_DEFAULT_URL", defaults.proxy_default_url),
@@ -231,12 +253,17 @@ def update_env_local(updates: Dict[str, str]) -> Path:
 
 
 def read_app_config() -> Dict[str, str]:
-    if not _CONFIG_FILE.exists():
-        return {}
-    try:
-        return json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    payload: Dict[str, str] = {}
+    for path in (_LEGACY_CONFIG_FILE, _CONFIG_FILE):
+        if not path.exists():
+            continue
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(loaded, dict):
+            payload.update(loaded)
+    return payload
 
 
 def update_app_config(updates: Dict[str, str]) -> Dict[str, str]:
@@ -247,6 +274,23 @@ def update_app_config(updates: Dict[str, str]) -> Dict[str, str]:
         json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return current
+
+
+def read_supabase_config() -> Dict[str, str]:
+    payload = read_app_config()
+    return {
+        "supabase_url": str(payload.get("supabase_url") or payload.get("SUPABASE_URL") or "").strip(),
+        "supabase_key": str(payload.get("supabase_key") or payload.get("SUPABASE_KEY") or "").strip(),
+    }
+
+
+def update_supabase_config(*, supabase_url: str, supabase_key: str) -> Dict[str, str]:
+    return update_app_config(
+        {
+            "supabase_url": str(supabase_url or "").strip(),
+            "supabase_key": str(supabase_key or "").strip(),
+        }
+    )
 
 
 def refresh_settings() -> Settings:

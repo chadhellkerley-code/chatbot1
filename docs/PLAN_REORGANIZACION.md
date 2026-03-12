@@ -16,10 +16,10 @@ chat/
 ├── scripts/                    # Scripts de utilidad ✅
 ├── optin_browser/             # Módulo de automatización de navegador ✅
 ├── adapters/                   # Adaptadores de clientes ✅
-├── integraciones/             # Integraciones externas ✅
+├── adapters/integrations/     # Integraciones externas ✅
 ├── actions/                    # Acciones de Instagram
 ├── tests/                      # Tests principales
-├── tests_optin/               # Tests de opt-in
+├── tests/optin/               # Tests de opt-in
 ├── .venv/                      # Entorno virtual principal
 ├── .venv-1/                    # Entorno virtual duplicado ⚠️
 ├── .venv_win/                  # Entorno virtual Windows ⚠️
@@ -252,10 +252,10 @@ chat/
 │   ├── run_test_jobs.py        # MOVIDO
 │   └── test_instagram_adapter.py
 │
-├── tests_optin/               # Tests opt-in
+├── tests/optin/               # Tests opt-in
 ├── optin_browser/             # Módulo opt-in
 ├── adapters/                  # Adaptadores de clientes
-├── integraciones/             # Integraciones externas
+├── adapters/integrations/     # Integraciones externas
 ├── actions/                   # Acciones
 ├── infra/                     # Infraestructura
 │

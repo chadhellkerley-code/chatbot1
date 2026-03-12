@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union
 
 from playwright.async_api import BrowserContext, Page
+from paths import logs_root
 from src.instagram_adapter import (
     BASE_URL,
     check_logged_in,
@@ -19,11 +20,21 @@ from src.instagram_adapter import (
 )
 from src.playwright_service import BASE_PROFILES, PlaywrightService, get_page
 from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
+from src.runtime.playwright_runtime import (
+    PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+    is_driver_crash_error,
+    run_coroutine_sync,
+)
+from src.browser_profile_paths import browser_storage_state_path
 
 logger = logging.getLogger(__name__)
 
 LOGIN_FAILED_DIRNAME = "login_failed_screenshots"
 STORAGE_FILENAME = "storage_state.json"
+ACCOUNTS_LOGIN_NAV_TIMEOUT_ENV = "ACCOUNTS_LOGIN_NAV_TIMEOUT_MS"
+ACCOUNTS_LOGIN_INIT_TIMEOUT_ENV = "ACCOUNTS_LOGIN_INIT_TIMEOUT_SECONDS"
+LEGACY_LEADS_LOGIN_NAV_TIMEOUT_ENV = "LEADS_INIT_NAV_TIMEOUT_MS"
+LEGACY_LEADS_LOGIN_INIT_TIMEOUT_ENV = "LEADS_INIT_ACCOUNT_TIMEOUT_SECONDS"
 
 _EMAIL_CHALLENGE_URL_PARTS = (
     "challenge",
@@ -50,6 +61,66 @@ class ChallengeRequired(RuntimeError):
     pass
 
 
+def _run_sync(coro):
+    return run_coroutine_sync(coro)
+
+
+def _has_chrome_error_url(page: Optional[Page]) -> bool:
+    if page is None:
+        return False
+    try:
+        current_url = str(page.url or "").strip().lower()
+    except Exception:
+        return False
+    return current_url.startswith("chrome-error://")
+
+
+def _bootstrap_nav_timeout_ms() -> int:
+    raw = os.getenv(ACCOUNTS_LOGIN_NAV_TIMEOUT_ENV)
+    if raw is None:
+        raw = os.getenv(LEGACY_LEADS_LOGIN_NAV_TIMEOUT_ENV)
+    try:
+        value = int(raw) if raw is not None else 10_000
+    except Exception:
+        value = 10_000
+    return max(4_000, min(30_000, value))
+
+
+def _accounts_login_init_timeout_seconds(*, headless: bool) -> float:
+    default_init_timeout = 180.0 if not headless else 120.0
+    raw = os.getenv(ACCOUNTS_LOGIN_INIT_TIMEOUT_ENV)
+    if raw is None:
+        raw = os.getenv(LEGACY_LEADS_LOGIN_INIT_TIMEOUT_ENV)
+    try:
+        value = float(raw) if raw is not None else default_init_timeout
+    except Exception:
+        value = default_init_timeout
+    return max(10.0, value)
+
+
+async def _safe_nav_candidates(
+    page: Page,
+    urls: tuple[str, ...],
+    *,
+    timeout_ms: int,
+) -> tuple[bool, str]:
+    candidates = [str(url or "").strip() for url in urls if str(url or "").strip()]
+    if not candidates:
+        return False, "no_url_candidates"
+    wait_modes = ("domcontentloaded", "commit")
+    last_error = ""
+    for url in candidates:
+        for wait_mode in wait_modes:
+            try:
+                await page.goto(url, wait_until=wait_mode, timeout=timeout_ms)
+                return True, ""
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if "ERR_HTTP_RESPONSE_CODE_FAILURE" in str(exc):
+                    continue
+    return False, last_error or "navigation_failed"
+
+
 def _overnight_enabled() -> bool:
     return os.getenv("IG_OVERNIGHT", "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -73,7 +144,7 @@ def _session_log_root(profile_root: Optional[Union[str, Path]]) -> Path:
 
 def _session_log_path(profile_root: Optional[Union[str, Path]]) -> Path:
     root = _session_log_root(profile_root)
-    return root / "storage" / "session_debug.log"
+    return logs_root(root) / "session_debug.log"
 
 
 def _session_log(profile_root: Optional[Union[str, Path]], message: str) -> None:
@@ -97,8 +168,43 @@ def _debug_log(message: str, *args: object) -> None:
 
 
 def _storage_state_path(username: str, profile_root: Optional[Union[str, Path]] = None) -> Path:
-    base = Path(profile_root or BASE_PROFILES)
-    return base / username / STORAGE_FILENAME
+    return browser_storage_state_path(
+        username,
+        profiles_root=profile_root or BASE_PROFILES,
+        filename=STORAGE_FILENAME,
+    )
+
+
+def _login_playwright_service(*, headless: bool, profile_root: Path) -> PlaywrightService:
+    return PlaywrightService(
+        headless=headless,
+        base_profiles=profile_root,
+        prefer_persistent=True,
+        browser_mode=PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+    )
+
+
+def _has_persistent_profile_state(profile_dir: Path) -> bool:
+    try:
+        if not profile_dir.exists() or not profile_dir.is_dir():
+            return False
+    except Exception:
+        return False
+
+    storage_state = profile_dir / STORAGE_FILENAME
+    try:
+        if storage_state.exists():
+            return True
+    except Exception:
+        return False
+
+    try:
+        next(profile_dir.iterdir())
+    except StopIteration:
+        return False
+    except Exception:
+        return False
+    return True
 
 
 def _is_challenge_url(url: str) -> bool:
@@ -221,26 +327,117 @@ async def ensure_logged_in_async(
         or account.get("force_relogin")
         or account.get("relogin")
     )
+    reuse_session_only = bool(
+        account.get("reuse_session_only")
+        or account.get("reuse_existing_session")
+        or account.get("skip_session_validation")
+    )
+    validate_reused_session = bool(
+        account.get("validate_reused_session")
+        or account.get("require_valid_session")
+        or account.get("require_logged_in_session")
+    )
+    strict_visible_browser = bool(
+        account.get("manual_visible_browser")
+        or account.get("disable_safe_browser_recovery")
+    )
+    strict_login = bool(account.get("strict_login"))
+    if strict_login:
+        # Flujos de login/relogin explícito no deben gastar tiempo en probe de
+        # sesión previa; se fuerza una corrida limpia.
+        force_login = True
+        reuse_session_only = False
+    init_timeout_seconds = _accounts_login_init_timeout_seconds(headless=headless)
+    loop = asyncio.get_running_loop()
+    init_started_mono = loop.time()
+
+    def _remaining_timeout() -> float:
+        elapsed = loop.time() - init_started_mono
+        remaining = init_timeout_seconds - elapsed
+        if remaining <= 0:
+            raise asyncio.TimeoutError("init_timeout_global")
+        return max(0.1, remaining)
 
     _session_log(profile_root_path, f"login_start username={username} headless={headless}")
 
     _trace_msg(f"Launch browser ({'headful' if not headless else 'headless'})")
-    svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
-    await svc.start(launch_proxy=proxy_payload)
+    svc = _login_playwright_service(headless=headless, profile_root=profile_root_path)
 
-    async def _new_context(use_storage: bool) -> tuple[BrowserContext, Page]:
+    async def _new_context(use_storage: bool, *, safe_mode: bool = False) -> tuple[BrowserContext, Page]:
         ctx = await svc.new_context_for_account(
             profile_dir=account_profile,
             storage_state=str(storage_state) if use_storage and storage_state.exists() else None,
-            proxy=proxy_payload,
+            proxy=None if safe_mode else proxy_payload,
+            safe_mode=safe_mode,
         )
-        page = await get_page(ctx)
         try:
-            page.set_default_timeout(20_000)
-            page.set_default_navigation_timeout(45_000)
+            page = await get_page(ctx)
+        except Exception:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+            raise
+        nav_timeout = _bootstrap_nav_timeout_ms()
+        try:
+            page.set_default_timeout(nav_timeout)
+            page.set_default_navigation_timeout(nav_timeout)
         except Exception:
             pass
         return ctx, page
+
+    async def _new_context_with_recovery(use_storage: bool) -> tuple[BrowserContext, Page]:
+        nonlocal svc
+        try:
+            context_timeout = _remaining_timeout()
+            return await asyncio.wait_for(
+                _new_context(use_storage, safe_mode=False),
+                timeout=context_timeout,
+            )
+        except Exception as exc:
+            if strict_visible_browser and is_driver_crash_error(exc):
+                try:
+                    await svc.record_diagnostic_failure(
+                        code="driver_crash_no_safe_recovery",
+                        error=exc,
+                        extra={"username": username, "stage": "new_context"},
+                    )
+                except Exception:
+                    pass
+                raise
+            if not is_driver_crash_error(exc):
+                raise
+            try:
+                await svc.record_diagnostic_failure(
+                    code="driver_crash_new_page_retry",
+                    error=exc,
+                    extra={"username": username, "stage": "new_context"},
+                )
+            except Exception:
+                pass
+            try:
+                await svc.close()
+            except Exception:
+                pass
+            svc = _login_playwright_service(headless=True, profile_root=profile_root_path)
+            try:
+                safe_context_timeout = _remaining_timeout()
+                return await asyncio.wait_for(
+                    _new_context(use_storage, safe_mode=True),
+                    timeout=safe_context_timeout,
+                )
+            except Exception as safe_exc:
+                if is_driver_crash_error(safe_exc):
+                    try:
+                        await svc.record_diagnostic_failure(
+                            code="driver_crash_safe_retry_failed",
+                            error=safe_exc,
+                            extra={"username": username, "stage": "new_context_safe"},
+                        )
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"PW-CTX-FAILED: {safe_exc}") from safe_exc
+                raise
 
     ctx: Optional[BrowserContext] = None
     page: Optional[Page] = None
@@ -262,14 +459,76 @@ async def ensure_logged_in_async(
             return
 
     try:
+        if reuse_session_only:
+            if not _has_persistent_profile_state(account_profile):
+                raise RuntimeError(f"persistent_profile_missing:{username}")
+            ctx, page = await _new_context_with_recovery(use_storage=storage_state.exists())
+            _session_log(
+                profile_root_path,
+                (
+                    f"session_reuse_only username={username} "
+                    f"profile={account_profile} proxy={bool(proxy_payload)}"
+                ),
+            )
+            if validate_reused_session:
+                remaining_timeout_ms = int(
+                    max(1_000, min(_bootstrap_nav_timeout_ms(), _remaining_timeout() * 1000.0))
+                )
+                await _load_home(page, timeout_ms=remaining_timeout_ms)
+                if _has_chrome_error_url(page):
+                    await _update_account_health_best_effort()
+                    try:
+                        await ctx.close()
+                    except Exception:
+                        pass
+                    ctx = None
+                    page = None
+                    try:
+                        await svc.close()
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"session_invalid:{username}:chrome_error_page")
+                session_check_timeout = _remaining_timeout()
+                ok, reason = await asyncio.wait_for(check_logged_in(page), timeout=session_check_timeout)
+                if not ok:
+                    _session_log(
+                        profile_root_path,
+                        f"session_reuse_validation_fail username={username} reason={reason} url={page.url}",
+                    )
+                    await _update_account_health_best_effort()
+                    try:
+                        await ctx.close()
+                    except Exception:
+                        pass
+                    ctx = None
+                    page = None
+                    try:
+                        await svc.close()
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"session_invalid:{username}:{reason}")
+                _session_log(
+                    profile_root_path,
+                    f"session_reuse_validation_ok username={username} reason={reason} url={page.url}",
+                )
+                logger.info("Sesion persistente validada y reutilizada para @%s", username)
+                await _update_account_health_best_effort()
+                return svc, ctx, page
+            logger.info("Sesion persistente reusada para @%s sin verificacion previa.", username)
+            return svc, ctx, page
+
         if storage_state.exists() and not force_login:
             _session_log(
                 profile_root_path,
                 f"session_loaded path={storage_state} size={_safe_stat_size(storage_state)}",
             )
-            ctx, page = await _new_context(use_storage=True)
-            await _load_home(page)
-            ok, reason = await check_logged_in(page)
+            ctx, page = await _new_context_with_recovery(use_storage=True)
+            remaining_timeout_ms = int(max(1_000, min(_bootstrap_nav_timeout_ms(), _remaining_timeout() * 1000.0)))
+            await _load_home(page, timeout_ms=remaining_timeout_ms)
+            if _has_chrome_error_url(page):
+                raise RuntimeError("instagram_navigation_failed:chrome_error_page")
+            session_check_timeout = _remaining_timeout()
+            ok, reason = await asyncio.wait_for(check_logged_in(page), timeout=session_check_timeout)
             if ok:
                 _session_log(profile_root_path, f"session_check_ok reason={reason}")
                 logger.info("Sesi?n existente reutilizada para @%s", username)
@@ -292,9 +551,35 @@ async def ensure_logged_in_async(
             await svc.close()
             raise RuntimeError("Se requiere password para iniciar sesión por primera vez")
     
-        ctx, page = await _new_context(use_storage=False)
-        await _load_home(page)
-        await _ensure_login_view(page)
+        ctx, page = await _new_context_with_recovery(use_storage=False)
+        # Para login forzado/no-storage, ir directo al formulario reduce latencia
+        # y evita agotar el timeout global en probes redundantes.
+        remaining_timeout_ms = int(max(1_000, min(_bootstrap_nav_timeout_ms(), _remaining_timeout() * 1000.0)))
+        nav_ok, nav_err = await _safe_nav_candidates(
+            page,
+            ("https://www.instagram.com/accounts/login/", "https://www.instagram.com/"),
+            timeout_ms=remaining_timeout_ms,
+        )
+        if not nav_ok:
+            raise RuntimeError(f"instagram_navigation_failed:{nav_err}")
+        if _has_chrome_error_url(page):
+            raise RuntimeError("instagram_navigation_failed:chrome_error_page")
+        # En algunos perfiles Instagram redirige directo al home/feed aunque se pida
+        # /accounts/login. Si ya estamos autenticados, tratamos como exito.
+        pre_login_ok, pre_login_reason = await check_logged_in(page)
+        if pre_login_ok:
+            _session_log(profile_root_path, f"session_check_ok reason={pre_login_reason}")
+            _session_log(profile_root_path, f"login_success_condition_met condition={pre_login_reason}")
+            await svc.save_storage_state(ctx, str(storage_state))
+            _session_log(
+                profile_root_path,
+                f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
+            )
+            logger.info("Sesion ya activa para @%s. Se reutiliza login existente.", username)
+            await _update_account_health_best_effort()
+            return svc, ctx, page
+        ensure_view_timeout = _remaining_timeout()
+        await asyncio.wait_for(_ensure_login_view(page), timeout=ensure_view_timeout)
     
         logger.info("No se encontró sesión activa para @%s. Iniciando login humano.", username)
         try:
@@ -303,17 +588,42 @@ async def ensure_logged_in_async(
                 or account.get("challenge_code_callback")
                 or account.get("code_provider")
             )
-            login_ok = await human_login(
-                page,
-                username,
-                password,
-                totp_secret=account.get("totp_secret"),
-                totp_provider=account.get("totp_callback"),
-                code_provider=code_provider,
-                trace=trace if callable(trace) else None,
-                retry_on_still_login=not bool(account.get("strict_login")),
+            login_timeout = _remaining_timeout()
+            login_ok = await asyncio.wait_for(
+                human_login(
+                    page,
+                    username,
+                    password,
+                    totp_secret=account.get("totp_secret"),
+                    totp_provider=account.get("totp_callback"),
+                    code_provider=code_provider,
+                    trace=trace if callable(trace) else None,
+                    retry_on_still_login=not strict_login,
+                ),
+                timeout=login_timeout,
             )
         except Exception as exc:
+            # Si el intento de login lanza error pero ya estamos autenticados,
+            # evitamos falso negativo y persistimos storage_state.
+            try:
+                fallback_ok, fallback_reason = await check_logged_in(page)
+            except Exception:
+                fallback_ok, fallback_reason = False, "exception"
+            if fallback_ok:
+                _session_log(profile_root_path, f"session_check_ok reason={fallback_reason}")
+                _session_log(profile_root_path, f"login_success_condition_met condition={fallback_reason}")
+                await svc.save_storage_state(ctx, str(storage_state))
+                _session_log(
+                    profile_root_path,
+                    f"storage_state_saved path={storage_state} size={_safe_stat_size(storage_state)}",
+                )
+                logger.info(
+                    "Sesion confirmada tras error de login para @%s. Se marca exito (reason=%s).",
+                    username,
+                    fallback_reason,
+                )
+                await _update_account_health_best_effort()
+                return svc, ctx, page
             await _update_account_health_best_effort()
             raise await _raise_login_failure(page, username, profile_root_path, exc) from exc
     
@@ -369,7 +679,7 @@ async def ensure_logged_in_async(
         await _update_account_health_best_effort()
 
         raise await _raise_login_failure(page, username, profile_root_path)
-    except Exception:
+    except BaseException:
         if ctx is not None:
             try:
                 await ctx.close()
@@ -394,7 +704,7 @@ def ensure_logged_in(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(
+        return _run_sync(
             ensure_logged_in_async(
                 account,
                 headless=headless,
@@ -427,29 +737,79 @@ async def check_session_async(
             profile_root_path,
             f"session_check_fail stage=missing username={username} path={storage_state}",
         )
+        with contextlib.suppress(Exception):
+            import health_store
+
+            health_store.mark_session_expired(username, reason="storage_state_missing")
         return False, "storage_state_missing"
 
     _session_log(profile_root_path, f"session_check_start username={username} headless={headless}")
 
-    svc = PlaywrightService(headless=headless, base_profiles=profile_root_path)
+    svc = _login_playwright_service(headless=headless, profile_root=profile_root_path)
     svc_proxy = normalize_playwright_proxy(proxy)
-    await svc.start(launch_proxy=svc_proxy)
     ctx: Optional[BrowserContext] = None
     page: Optional[Page] = None
     try:
-        ctx = await svc.new_context_for_account(
-            profile_dir=storage_state.parent,
-            storage_state=str(storage_state),
-            proxy=proxy,
-        )
-        page = await get_page(ctx)
+        try:
+            ctx = await svc.new_context_for_account(
+                profile_dir=storage_state.parent,
+                storage_state=str(storage_state),
+                proxy=svc_proxy,
+            )
+            page = await get_page(ctx)
+        except Exception as exc:
+            if not is_driver_crash_error(exc):
+                raise
+            try:
+                await svc.record_diagnostic_failure(
+                    code="driver_crash_check_session_no_fallback",
+                    error=exc,
+                    extra={"username": username, "stage": "check_session"},
+                )
+            except Exception:
+                pass
+            raise RuntimeError(f"PW-CHECK-SESSION-FAILED: {exc}") from exc
         try:
             page.set_default_timeout(10_000)
             page.set_default_navigation_timeout(20_000)
         except Exception:
             pass
         await _load_home(page)
+        if _has_chrome_error_url(page):
+            _session_log(
+                profile_root_path,
+                f"session_check_fail stage=load username={username} reason=chrome_error_page",
+            )
+            return False, "chrome_error_page"
+        try:
+            from src.health_playwright import detect_account_health_async
+
+            import health_store
+
+            state, reason = await detect_account_health_async(page)
+            health_store.update_from_playwright_status(username, state, reason=reason)
+            ok = state == health_store.HEALTH_STATE_ALIVE
+            _session_log(
+                profile_root_path,
+                (
+                    f"session_check_{'ok' if ok else 'fail'} "
+                    f"state={state} reason={reason} url={page.url}"
+                ),
+            )
+            return ok, reason
+        except Exception as probe_exc:
+            _session_log(
+                profile_root_path,
+                f"session_check_probe_fallback username={username} error={probe_exc}",
+            )
         ok, reason = await check_logged_in(page)
+        with contextlib.suppress(Exception):
+            import health_store
+
+            if ok:
+                health_store.mark_alive(username, reason=reason)
+            else:
+                health_store.mark_session_expired(username, reason=reason)
         _session_log(
             profile_root_path,
             f"session_check_{'ok' if ok else 'fail'} reason={reason} url={page.url}",
@@ -480,7 +840,7 @@ def check_session(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(
+        return _run_sync(
             check_session_async(
                 username,
                 profile_root=profile_root,
@@ -496,23 +856,27 @@ def check_session(
     )
 
 
-async def _load_home(page: Page) -> None:
-    # MODIFICADO: Vamos directo al INBOX, es más seguro y rápido para verificar sesión
-    inbox_url = "https://www.instagram.com/direct/inbox/"
-    try:
-        await page.goto(inbox_url, wait_until="domcontentloaded", timeout=60_000)
-    except Exception:
-        try:
-            # Segundo intento sin propagar el fallo de navegación del proxy.
-            await page.goto(inbox_url, wait_until="domcontentloaded", timeout=60_000)
-        except Exception:
-            pass
+async def _load_home(page: Page, *, timeout_ms: Optional[int] = None) -> None:
+    nav_timeout_ms = max(5_000, int(timeout_ms or _bootstrap_nav_timeout_ms()))
+    ok, _err = await _safe_nav_candidates(
+        page,
+        (
+            "https://www.instagram.com/",
+            "https://www.instagram.com/accounts/login/",
+            "https://www.instagram.com/direct/inbox/",
+        ),
+        timeout_ms=nav_timeout_ms,
+    )
+    if not ok:
+        return
     
     try:
-        # Esperamos elementos clave del inbox
-        await page.wait_for_selector("a[href='/direct/inbox/'], nav[role='navigation'], textarea", timeout=10_000)
+        await page.wait_for_selector(
+            "a[href='/direct/inbox/'], nav[role='navigation'], textarea, input[name='username']",
+            timeout=min(12_000, nav_timeout_ms),
+        )
     except Exception:
-        pass  # is_logged_in hara la verificacion real
+        pass
 
 
 async def _raise_login_failure(
@@ -526,6 +890,8 @@ async def _raise_login_failure(
     error_details = ", ".join(errors) if errors else "sin mensajes visibles"
 
     base_msg = f"Falló el login para @{username}. URL actual: {page.url}. Errores: {error_details}."
+    if _has_chrome_error_url(page):
+        base_msg += " Diagnostico: navegacion bloqueada (proxy/red o respuesta HTTP invalida)."
     if screenshot_path:
         base_msg += f" Screenshot: {screenshot_path}"
     if original_exc:
