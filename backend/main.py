@@ -5,19 +5,23 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import logging
 import os
 import secrets
 import string
 from typing import Any, Dict, Optional
 
-import psycopg2
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
+from src.content_publisher.content_api import router as content_router
 
 load_dotenv()
 
 app = FastAPI(title="License Backend", version="1.0.0")
+app.include_router(content_router)
+
+logger = logging.getLogger(__name__)
 
 
 class CreateLicenseIn(BaseModel):
@@ -77,6 +81,10 @@ def _database_url() -> str:
 
 
 def _get_conn():
+    try:
+        import psycopg2  # type: ignore
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="psycopg2 is not installed.") from exc
     try:
         return psycopg2.connect(_database_url())
     except Exception as exc:
@@ -168,7 +176,14 @@ def _get_or_create_customer(conn, name: str, email: Optional[str]) -> str:
 
 @app.on_event("startup")
 def _startup() -> None:
-    _ensure_schema()
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url:
+        logger.warning("DATABASE_URL missing; skipping license schema startup.")
+        return
+    try:
+        _ensure_schema()
+    except HTTPException as exc:
+        logger.warning("Skipping license schema startup: %s", exc.detail)
 
 
 @app.get("/health")

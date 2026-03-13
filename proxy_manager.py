@@ -4,13 +4,18 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Optional
-from urllib.parse import urlparse, urlunparse, quote
+from typing import Any, Dict, Optional
+from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 from requests import exceptions as req_exc
 
 from config import SETTINGS
+from core.proxy_registry import (
+    ProxyResolutionError,
+    record_proxy_failure as record_registry_proxy_failure,
+    record_proxy_success as record_registry_proxy_success,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +59,7 @@ def _mask_ip(ip: str) -> str:
     if ":" in ip:
         parts = ip.split(":")
         if len(parts) > 2:
-            return ":".join(parts[:2]) + ":…"
+            return ":".join(parts[:2]) + ":..."
         return ip
     blocks = ip.split(".")
     if len(blocks) == 4:
@@ -68,19 +73,20 @@ def _generate_session_id(username: str) -> str:
 
 
 def _format_with_auth(url: str, user: Optional[str], password: Optional[str]) -> str:
-    parsed = urlparse(url)
+    candidate = url if "://" in str(url or "") else f"http://{str(url or '').strip()}"
+    parsed = urlparse(candidate)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("El proxy debe comenzar con http:// o https://")
     username = user if user is not None else parsed.username or ""
-    password = password if password is not None else parsed.password or ""
+    password_value = password if password is not None else parsed.password or ""
     hostname = parsed.hostname or ""
     port = f":{parsed.port}" if parsed.port else ""
 
     netloc = hostname + port
     if username:
         auth = quote(username, safe="")
-        if password:
-            auth += ":" + quote(password, safe="")
+        if password_value:
+            auth += ":" + quote(password_value, safe="")
         netloc = f"{auth}@{netloc}"
 
     rebuilt = urlunparse(
@@ -99,7 +105,7 @@ def _format_with_auth(url: str, user: Optional[str], password: Optional[str]) ->
 def _build_url(config: ProxyConfig, session_id: str) -> str:
     base_url = config.url.strip()
     if not base_url:
-        raise ValueError("No se definió URL de proxy")
+        raise ValueError("No se definio URL de proxy")
     formatted = base_url.replace("{session}", session_id)
     user = (config.user or "").replace("{session}", session_id) or None
     password = (config.password or "").replace("{session}", session_id) or None
@@ -134,13 +140,50 @@ def _create_binding(username: str, config: ProxyConfig) -> ProxyBinding:
     return binding
 
 
+def _proxy_payload_from_account(account: Optional[dict]) -> Optional[Dict[str, str]]:
+    account_data = account if isinstance(account, dict) else {}
+    try:
+        from src.proxy_payload import proxy_from_account
+    except Exception:
+        return None
+
+    try:
+        payload = proxy_from_account(account_data)
+    except ProxyResolutionError:
+        raise
+    except Exception:
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def config_from_account(account: Optional[dict]) -> Optional[ProxyConfig]:
-    if account is None:
-        account = {}
-    url = (account.get("proxy_url") or SETTINGS.proxy_default_url or "").strip()
+    account_data = account if isinstance(account, dict) else {}
+    payload = _proxy_payload_from_account(account_data)
+
+    url = ""
+    user = ""
+    password = ""
+    if payload:
+        url = _text(payload.get("server") or payload.get("url") or payload.get("proxy"))
+        user = _text(payload.get("username") or payload.get("user"))
+        password = _text(payload.get("password") or payload.get("pass"))
+
+    if not url:
+        url = _text(account_data.get("proxy_url") or SETTINGS.proxy_default_url)
     if not url:
         return None
-    sticky = account.get("proxy_sticky_minutes") or SETTINGS.proxy_sticky_minutes or 10
+
+    if not user:
+        user = _text(account_data.get("proxy_user") or SETTINGS.proxy_default_user)
+    if not password:
+        password = _text(account_data.get("proxy_pass") or SETTINGS.proxy_default_pass)
+
+    sticky = account_data.get("proxy_sticky_minutes") or SETTINGS.proxy_sticky_minutes or 10
     try:
         sticky_int = int(sticky)
     except Exception:
@@ -148,8 +191,8 @@ def config_from_account(account: Optional[dict]) -> Optional[ProxyConfig]:
     sticky_int = max(1, sticky_int)
     return ProxyConfig(
         url=url,
-        user=(account.get("proxy_user") or SETTINGS.proxy_default_user or "") or None,
-        password=(account.get("proxy_pass") or SETTINGS.proxy_default_pass or "") or None,
+        user=user or None,
+        password=password or None,
         sticky_minutes=sticky_int,
     )
 
@@ -172,6 +215,18 @@ def ensure_binding(username: str, account: Optional[dict], *, reason: str = "gen
         binding.latency,
         config.sticky_minutes,
     )
+    assigned_proxy_id = str((account or {}).get("assigned_proxy_id") or "").strip()
+    if assigned_proxy_id:
+        try:
+            record_registry_proxy_success(
+                assigned_proxy_id,
+                event="proxy_binding",
+                public_ip=binding.public_ip,
+                latency_ms=binding.latency * 1000.0,
+                message=f"Binding operativo para @{username}.",
+            )
+        except Exception:
+            logger.debug("No se pudo actualizar salud del proxy %s", assigned_proxy_id, exc_info=False)
     return binding
 
 
@@ -215,6 +270,23 @@ def record_proxy_failure(username: str, exc: Optional[Exception] = None) -> None
     if username in _BINDINGS:
         _BINDINGS.pop(username, None)
         logger.warning("Proxy reiniciado para @%s tras error: %s", username, exc)
+    assigned_proxy_id = ""
+    try:
+        from core.accounts import get_account  # import lazily to avoid cyclic import at module load
+
+        account = get_account(username)
+        assigned_proxy_id = str((account or {}).get("assigned_proxy_id") or "").strip()
+    except Exception:
+        assigned_proxy_id = ""
+    if assigned_proxy_id:
+        try:
+            record_registry_proxy_failure(
+                assigned_proxy_id,
+                event="proxy_runtime_failure",
+                error=str(exc) or type(exc).__name__ if exc is not None else "proxy_runtime_failure",
+            )
+        except Exception:
+            logger.debug("No se pudo registrar fallo del proxy %s", assigned_proxy_id, exc_info=False)
 
 
 def clear_proxy(username: str) -> None:

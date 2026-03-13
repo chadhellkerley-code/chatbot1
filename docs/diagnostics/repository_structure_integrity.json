@@ -1,0 +1,425 @@
+{
+  "generated_on": "2026-03-06",
+  "root_structure": {
+    "entries": [
+      {
+        "name": ".env",
+        "kind": "file"
+      },
+      {
+        "name": ".env.local",
+        "kind": "file"
+      },
+      {
+        "name": ".gitattributes",
+        "kind": "file"
+      },
+      {
+        "name": ".gitignore",
+        "kind": "file"
+      },
+      {
+        "name": ".session_key",
+        "kind": "file"
+      },
+      {
+        "name": "__init__.py",
+        "kind": "file"
+      },
+      {
+        "name": "accounts.py",
+        "kind": "file"
+      },
+      {
+        "name": "actions",
+        "kind": "dir"
+      },
+      {
+        "name": "adapters",
+        "kind": "dir"
+      },
+      {
+        "name": "app.py",
+        "kind": "file"
+      },
+      {
+        "name": "automation",
+        "kind": "dir"
+      },
+      {
+        "name": "backend",
+        "kind": "dir"
+      },
+      {
+        "name": "backend_license_client.py",
+        "kind": "file"
+      },
+      {
+        "name": "browser_sessions",
+        "kind": "dir"
+      },
+      {
+        "name": "browsers",
+        "kind": "dir"
+      },
+      {
+        "name": "cd",
+        "kind": "file"
+      },
+      {
+        "name": "client_factory.py",
+        "kind": "file"
+      },
+      {
+        "name": "client_launcher.py",
+        "kind": "file"
+      },
+      {
+        "name": "cloudflare",
+        "kind": "dir"
+      },
+      {
+        "name": "config.py",
+        "kind": "file"
+      },
+      {
+        "name": "core",
+        "kind": "dir"
+      },
+      {
+        "name": "data",
+        "kind": "dir"
+      },
+      {
+        "name": "docs",
+        "kind": "dir"
+      },
+      {
+        "name": "flow_editor",
+        "kind": "dir"
+      },
+      {
+        "name": "git",
+        "kind": "file"
+      },
+      {
+        "name": "gui",
+        "kind": "dir"
+      },
+      {
+        "name": "gui_app.py",
+        "kind": "file"
+      },
+      {
+        "name": "health_store.py",
+        "kind": "file"
+      },
+      {
+        "name": "ig.py",
+        "kind": "file"
+      },
+      {
+        "name": "infra",
+        "kind": "dir"
+      },
+      {
+        "name": "integraciones",
+        "kind": "dir"
+      },
+      {
+        "name": "io_adapter.py",
+        "kind": "file"
+      },
+      {
+        "name": "launchers",
+        "kind": "dir"
+      },
+      {
+        "name": "leads.py",
+        "kind": "file"
+      },
+      {
+        "name": "license_backend_menu.py",
+        "kind": "file"
+      },
+      {
+        "name": "license_client.py",
+        "kind": "file"
+      },
+      {
+        "name": "licensekit.py",
+        "kind": "file"
+      },
+      {
+        "name": "main_window.py",
+        "kind": "file"
+      },
+      {
+        "name": "media_norm.py",
+        "kind": "file"
+      },
+      {
+        "name": "models",
+        "kind": "dir"
+      },
+      {
+        "name": "ms-playwright",
+        "kind": "dir"
+      },
+      {
+        "name": "optin_browser",
+        "kind": "dir"
+      },
+      {
+        "name": "out",
+        "kind": "dir"
+      },
+      {
+        "name": "owner_gui_launcher.py",
+        "kind": "file"
+      },
+      {
+        "name": "paths.py",
+        "kind": "file"
+      },
+      {
+        "name": "profiles",
+        "kind": "dir"
+      },
+      {
+        "name": "proxy_manager.py",
+        "kind": "file"
+      },
+      {
+        "name": "python",
+        "kind": "file"
+      },
+      {
+        "name": "README.md",
+        "kind": "file"
+      },
+      {
+        "name": "requirements.txt",
+        "kind": "file"
+      },
+      {
+        "name": "requirements_build.txt",
+        "kind": "file"
+      },
+      {
+        "name": "requirements_optin.txt",
+        "kind": "file"
+      },
+      {
+        "name": "responder.py",
+        "kind": "file"
+      },
+      {
+        "name": "runtime",
+        "kind": "dir"
+      },
+      {
+        "name": "runtime_parity.py",
+        "kind": "file"
+      },
+      {
+        "name": "screenshots",
+        "kind": "dir"
+      },
+      {
+        "name": "scripts",
+        "kind": "dir"
+      },
+      {
+        "name": "sdk_sanitize.py",
+        "kind": "file"
+      },
+      {
+        "name": "session_store.py",
+        "kind": "file"
+      },
+      {
+        "name": "src",
+        "kind": "dir"
+      },
+      {
+        "name": "state_view.py",
+        "kind": "file"
+      },
+      {
+        "name": "Station ID",
+        "kind": "dir"
+      },
+      {
+        "name": "step10_stability_fixes_report.json",
+        "kind": "file"
+      },
+      {
+        "name": "step11b_production_hardening_report.json",
+        "kind": "file"
+      },
+      {
+        "name": "storage",
+        "kind": "dir"
+      },
+      {
+        "name": "storage.py",
+        "kind": "file"
+      },
+      {
+        "name": "styles.qss",
+        "kind": "file"
+      },
+      {
+        "name": "supabase_migrations.py",
+        "kind": "file"
+      },
+      {
+        "name": "templates_store.py",
+        "kind": "file"
+      },
+      {
+        "name": "test_headless_send.py",
+        "kind": "file"
+      },
+      {
+        "name": "test_login_improved.py",
+        "kind": "file"
+      },
+      {
+        "name": "test_playwright_login.py",
+        "kind": "file"
+      },
+      {
+        "name": "tests",
+        "kind": "dir"
+      },
+      {
+        "name": "tests_optin",
+        "kind": "dir"
+      },
+      {
+        "name": "text",
+        "kind": "dir"
+      },
+      {
+        "name": "tools",
+        "kind": "dir"
+      },
+      {
+        "name": "totp_store.py",
+        "kind": "file"
+      },
+      {
+        "name": "traces",
+        "kind": "dir"
+      },
+      {
+        "name": "ui.py",
+        "kind": "file"
+      },
+      {
+        "name": "update_manifest.json",
+        "kind": "file"
+      },
+      {
+        "name": "update_system.py",
+        "kind": "file"
+      },
+      {
+        "name": "utils.py",
+        "kind": "file"
+      },
+      {
+        "name": "whatsapp.py",
+        "kind": "file"
+      },
+      {
+        "name": "whatsapp_automation.json",
+        "kind": "file"
+      },
+      {
+        "name": "whatsapp_exports",
+        "kind": "dir"
+      }
+    ],
+    "staged_refactor_moves": {
+      "automation": 5,
+      "core": 6,
+      "gui": 3,
+      "launchers": 2,
+      "runtime": 2
+    }
+  },
+  "duplicate_domains": [
+    {
+      "domain": "core",
+      "locations": [
+        "accounts.py",
+        "ig.py",
+        "leads.py",
+        "responder.py",
+        "session_store.py",
+        "storage.py",
+        "core/"
+      ]
+    },
+    {
+      "domain": "gui",
+      "locations": [
+        "gui_app.py",
+        "io_adapter.py",
+        "main_window.py",
+        "gui/"
+      ]
+    },
+    {
+      "domain": "automation",
+      "locations": [
+        "actions/",
+        "automation/actions/",
+        "whatsapp.py",
+        "automation/whatsapp.py"
+      ]
+    },
+    {
+      "domain": "launchers",
+      "locations": [
+        "client_launcher.py",
+        "owner_gui_launcher.py",
+        "launchers/"
+      ]
+    },
+    {
+      "domain": "runtime",
+      "locations": [
+        "runtime_parity.py",
+        "runtime/runtime_parity.py"
+      ]
+    },
+    {
+      "domain": "opt_in",
+      "locations": [
+        "optin_browser/",
+        "src/opt_in/"
+      ]
+    }
+  ],
+  "orphan_modules": [
+    "cd",
+    "git",
+    "python",
+    "license_backend_menu.py",
+    "Station ID/",
+    "actions/",
+    "accounts.py",
+    "main_window.py",
+    "runtime_parity.py"
+  ],
+  "recommended_unifications": [
+    "Decide whether root wrappers are permanent compatibility files or cleanup targets.",
+    "Collapse actions/ into automation/actions/.",
+    "Unify or explicitly separate optin_browser/ and src/opt_in/.",
+    "Move runtime/generated artifacts out of the repository root."
+  ]
+}

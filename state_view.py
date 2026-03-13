@@ -9,7 +9,8 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, Iterable, List, Optional
 
 try:  # pragma: no cover - depende de la versión de Python
     from zoneinfo import ZoneInfo as _BuiltinZoneInfo
@@ -26,14 +27,12 @@ try:  # pragma: no cover - depende de dependencia opcional
 except Exception:  # pragma: no cover - si falta dateutil
     _dateutil_tz = None  # type: ignore[assignment]
 
-from accounts import has_valid_session_settings, list_all, mark_connected
-from client_factory import get_instagram_client
-from proxy_manager import apply_proxy_to_client, record_proxy_failure, should_retry_proxy
-from session_store import has_session, load_into
-from storage import TZ
+from core.accounts import list_all
+from core.storage import TZ
 from utils import ask
 from ui import banner
-from paths import runtime_base
+from paths import storage_root
+from src.inbox.endpoint_reader import sync_account_threads_from_storage
 
 _STATUS_FALLO = "FALLO"
 _STATUS_DESCONOCIDO = "DESCONOCIDO"
@@ -50,8 +49,7 @@ _ALLOWED_STATUSES = {
     _STATUS_DESCONOCIDO,
 }
 
-_BASE = runtime_base(Path(__file__).resolve().parent)
-_DB_PATH = _BASE / "storage" / "conversation_state.db"
+_DB_PATH = storage_root(Path(__file__).resolve().parent) / "conversation_state.db"
 _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 _THREAD_LIMIT = 40
 _CONTEXT_MESSAGES = 12
@@ -380,82 +378,84 @@ def _classify_messages(messages: List, self_user_id: int | str, now: datetime) -
     return _STATUS_DESCONOCIDO
 
 
-def _resolve_username(client, user_id: int | str) -> str:
+def _message_timestamp(value: Any) -> datetime | None:
     try:
-        info = client.user_info(int(user_id))
-        username = getattr(info, "username", None)
-        if username:
-            return username
+        numeric = float(value)
     except Exception:
-        pass
-    return str(user_id)
-
-
-def _other_username(client, thread, self_user_id: int | str, fallback: str) -> str:
-    self_id = str(self_user_id)
-    for participant in getattr(thread, "users", []) or []:
-        pk = str(getattr(participant, "pk", getattr(participant, "id", "")))
-        if pk != self_id:
-            username = getattr(participant, "username", None)
-            if username:
-                return username
-    for message in getattr(thread, "messages", []) or []:
-        if str(getattr(message, "user_id", "")) != self_id:
-            user_obj = getattr(message, "user", None)
-            username = getattr(user_obj, "username", None)
-            if username:
-                return username
-            target_id = getattr(message, "user_id", None)
-            if target_id:
-                return _resolve_username(client, target_id)
-    return fallback
-
-
-def _message_identifier(message) -> str:
-    return str(getattr(message, "id", getattr(message, "pk", "")))
-
-
-def _thread_timestamp(thread, last_message) -> datetime:
-    ts = getattr(last_message, "timestamp", None)
-    if ts:
-        return _to_local(ts)
-    return _to_local(getattr(thread, "last_activity_at", None))
-
-
-def _snapshot_from_thread(client, account: str, thread, cache: ConversationCache, now: datetime) -> Optional[ThreadSnapshot]:
-    if getattr(thread, "is_group", False):
         return None
+    if numeric <= 0:
+        return None
+    return datetime.fromtimestamp(numeric, TZ)
 
-    messages = list(getattr(thread, "messages", []) or [])
+
+def _preview_messages_from_row(row: dict[str, Any]) -> list[SimpleNamespace]:
+    messages: list[SimpleNamespace] = []
+    for raw in row.get("preview_messages") or []:
+        if not isinstance(raw, dict):
+            continue
+        direction = str(raw.get("direction") or "").strip().lower()
+        if direction not in {"inbound", "outbound"}:
+            direction = "unknown"
+        messages.append(
+            SimpleNamespace(
+                id=str(raw.get("message_id") or "").strip(),
+                pk=str(raw.get("message_id") or "").strip(),
+                user_id="self" if direction == "outbound" else "other",
+                text=str(raw.get("text") or "").strip(),
+                timestamp=_message_timestamp(raw.get("timestamp")),
+            )
+        )
+    if messages:
+        messages.sort(key=lambda item: item.timestamp.timestamp() if item.timestamp else 0.0, reverse=True)
+        return messages[:_CONTEXT_MESSAGES]
+
+    fallback_text = str(row.get("last_message_text") or "").strip()
+    if not fallback_text:
+        return []
+    direction = str(row.get("last_message_direction") or "").strip().lower()
+    return [
+        SimpleNamespace(
+            id=str(row.get("last_message_id") or "").strip(),
+            pk=str(row.get("last_message_id") or "").strip(),
+            user_id="self" if direction == "outbound" else "other",
+            text=fallback_text,
+            timestamp=_message_timestamp(row.get("last_message_timestamp")),
+        )
+    ]
+
+
+def _snapshot_from_row(
+    account: str,
+    row: dict[str, Any],
+    cache: ConversationCache,
+    now: datetime,
+) -> Optional[ThreadSnapshot]:
+    thread_id = str(row.get("thread_id") or "").strip()
+    if not thread_id:
+        return None
+    messages = _preview_messages_from_row(row)
     if not messages:
         return None
 
-    messages = messages[:_CONTEXT_MESSAGES]
     last_message = messages[0]
-    last_item_id = _message_identifier(last_message)
-    if not last_item_id:
-        return None
-
-    thread_id = str(getattr(thread, "id", getattr(thread, "pk", "")))
-    if not thread_id:
-        return None
-
-    timestamp = _thread_timestamp(thread, last_message)
+    last_item_id = str(getattr(last_message, "id", "") or "").strip() or thread_id
+    timestamp = _to_local(getattr(last_message, "timestamp", None))
     message_ts_actual = int(timestamp.timestamp())
     cache_entry = cache.lookup(account, thread_id)
-    other_username: str
+    other_username = (
+        str(row.get("recipient_username") or "").strip()
+        or str(row.get("title") or "").strip()
+        or (cache_entry.other_username if cache_entry else "")
+        or "-"
+    )
     status: str
     message_ts_for_age = message_ts_actual
     store_message_ts = message_ts_actual
     if cache_entry and cache_entry.last_item == last_item_id:
         status = cache_entry.status
-        other_username = cache_entry.other_username
         cached_ts = cache_entry.message_ts or message_ts_actual
         message_ts_for_age = cached_ts
-        if cache_entry.message_ts != message_ts_actual:
-            store_message_ts = message_ts_actual
-        else:
-            store_message_ts = cached_ts
+        store_message_ts = message_ts_actual if cache_entry.message_ts != message_ts_actual else cached_ts
         if (
             status == "MENSAJE_ENVIADO"
             and now - datetime.fromtimestamp(message_ts_for_age, TZ) >= timedelta(hours=48)
@@ -463,17 +463,9 @@ def _snapshot_from_thread(client, account: str, thread, cache: ConversationCache
             status = "SIN_RESPUESTA_48H"
             store_message_ts = message_ts_for_age
     else:
-        other_username = _other_username(
-            client,
-            thread,
-            client.user_id,
-            cache_entry.other_username if cache_entry else "-",
-        )
-        status = _classify_messages(messages, client.user_id, now)
-        store_message_ts = message_ts_actual
+        status = _classify_messages(messages, "self", now)
 
-    other_username = other_username or "-"
-    if str(getattr(last_message, "user_id", "")) == str(client.user_id):
+    if str(getattr(last_message, "user_id", "")) == "self":
         emitter = account
         recipient = other_username
     else:
@@ -491,52 +483,11 @@ def _snapshot_from_thread(client, account: str, thread, cache: ConversationCache
         emitter,
         recipient,
     )
-
     return ThreadSnapshot(timestamp=timestamp, emitter=emitter, recipient=recipient, status=status)
 
 
 def _failure_snapshot(account: str, when: datetime) -> ThreadSnapshot:
     return ThreadSnapshot(timestamp=when, emitter=account, recipient="-", status=_STATUS_FALLO)
-
-
-def _client_for(account_record: Dict) -> Optional:
-    username = account_record.get("username")
-    if not username:
-        return None
-
-    cl = get_instagram_client(account=account_record)
-    binding = None
-    try:
-        binding = apply_proxy_to_client(
-            cl,
-            username,
-            account_record,
-            reason="estado_conversacion",
-        )
-    except Exception as exc:
-        if account_record.get("proxy_url"):
-            record_proxy_failure(username, exc)
-        raise
-
-    try:
-        load_into(cl, username)
-    except FileNotFoundError:
-        mark_connected(username, False)
-        raise
-    except Exception as exc:
-        if binding and should_retry_proxy(exc):
-            record_proxy_failure(username, exc)
-        mark_connected(username, False)
-        raise
-
-    if not has_valid_session_settings(cl):
-        mark_connected(username, False)
-        raise RuntimeError(
-            f"La sesión guardada para @{username} no contiene credenciales activas. Iniciá sesión nuevamente."
-        )
-
-    mark_connected(username, True)
-    return cl
 
 
 def _gather_snapshots(cache: ConversationCache) -> list[ThreadSnapshot]:
@@ -547,33 +498,19 @@ def _gather_snapshots(cache: ConversationCache) -> list[ThreadSnapshot]:
         username = account.get("username")
         if not username:
             continue
-        if not has_session(username):
-            snapshots.append(_failure_snapshot(username, now))
-            continue
         try:
-            client = _client_for(account)
+            rows = sync_account_threads_from_storage(
+                dict(account),
+                thread_limit=_THREAD_LIMIT,
+                message_limit=_CONTEXT_MESSAGES,
+                max_pages=1,
+            )
         except Exception:
             snapshots.append(_failure_snapshot(username, now))
             continue
 
-        threads: Dict[str, object] = {}
-        try:
-            inbox_threads = client.direct_threads(amount=_THREAD_LIMIT, thread_message_limit=_CONTEXT_MESSAGES)
-            for thread in inbox_threads:
-                threads[str(getattr(thread, "id", getattr(thread, "pk", "")))] = thread
-        except Exception:
-            snapshots.append(_failure_snapshot(username, now))
-            continue
-
-        try:
-            pending_threads = client.direct_pending_inbox(amount=_THREAD_LIMIT)
-            for thread in pending_threads:
-                threads[str(getattr(thread, "id", getattr(thread, "pk", "")))] = thread
-        except Exception:
-            snapshots.append(_failure_snapshot(username, now))
-
-        for thread in threads.values():
-            snapshot = _snapshot_from_thread(client, username, thread, cache, now)
+        for row in rows:
+            snapshot = _snapshot_from_row(str(username), row, cache, now)
             if snapshot:
                 snapshots.append(snapshot)
 

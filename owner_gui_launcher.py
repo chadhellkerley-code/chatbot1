@@ -1,15 +1,13 @@
-# owner_gui_launcher.py
-# -*- coding: utf-8 -*-
-"""Entrypoint dedicado para build owner GUI."""
-
 from __future__ import annotations
 
 import os
-
-from gui_app import launch_gui_app
+import runpy
+from pathlib import Path
 
 
 if __name__ == "__main__":
-    # El build owner no debe bloquearse por gate de licencia de distribucion.
+    # El build owner no debe bloquearse por gate de licencia de distribución.
     os.environ.setdefault("LICENSE_ALREADY_VALIDATED", "1")
-    raise SystemExit(launch_gui_app(mode="owner"))
+
+    target = Path(__file__).resolve().parent / "launchers" / "owner_gui_launcher.py"
+    runpy.run_path(str(target), run_name="__main__")

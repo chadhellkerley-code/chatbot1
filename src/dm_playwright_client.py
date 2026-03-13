@@ -15,21 +15,35 @@ from urllib.parse import urlencode
 from ui import Fore, style_text
 
 try:  # pragma: no cover - optional dependency guard
-    from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+    from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 except Exception:  # pragma: no cover
     Page = object  # type: ignore
     PlaywrightTimeoutError = Exception  # type: ignore
-    sync_playwright = None  # type: ignore
 
 from src.playwright_service import (
     BASE_PROFILES,
-    DEFAULT_ARGS,
     DEFAULT_LOCALE,
     DEFAULT_TIMEZONE,
     DEFAULT_USER_AGENT,
-    DEFAULT_VIEWPORT,
+    build_launch_args,
+    context_viewport_kwargs,
     resolve_playwright_executable,
 )
+from src.auth.persistent_login import ensure_logged_in_async
+from src.browser_profile_paths import browser_storage_state_path
+from src.browser_telemetry import log_browser_stage
+from core.account_limits import can_send_message_for_account
+from core.storage_atomic import atomic_write_json, atomic_write_text, load_json_file
+from paths import logs_root, storage_root
+from src.runtime.playwright_runtime import (
+    launch_sync_browser,
+    mark_sync_runtime_context_closed,
+    mark_sync_runtime_context_open,
+    register_sync_runtime_owner,
+    safe_runtime_stop,
+    start_sync_playwright,
+)
+from src.transport.session_manager import SessionManager, SyncSessionRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +63,7 @@ def _env_enabled(name: str, default: bool = False) -> bool:
 
 _DM_VERBOSE_PROBES = _env_enabled("AUTORESPONDER_DM_VERBOSE_PROBES", False)
 
-# Selectores mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nimos necesarios (eliminadas constantes legacy de anchors)
+# Selectores mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nimos necesarios (eliminadas constantes legacy de anchors)
 ROW_SELECTOR = "div[role='button'][tabindex='0']"
 _MESSAGE_CONTAINER_SELECTORS = (
     "main",
@@ -139,13 +153,13 @@ _DM_API_WAIT_TIMEOUT_MS = _env_int(
 )
 _DM_THREAD_VISUAL_SYNC_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_THREAD_VISUAL_SYNC_TIMEOUT_MS",
-    2_500,
+    6_000,
     min_value=1_000,
     max_value=20_000,
 )
 _DM_THREAD_NETWORK_SYNC_TIMEOUT_MS = _env_int(
     "AUTORESPONDER_DM_THREAD_NETWORK_SYNC_TIMEOUT_MS",
-    1_800,
+    4_500,
     min_value=1_000,
     max_value=20_000,
 )
@@ -167,6 +181,18 @@ _DM_API_CACHE_MAX_THREADS = _env_int(
     min_value=100,
     max_value=20_000,
 )
+_DM_AUDIO_VERIFY_TIMEOUT_MS = _env_int(
+    "AUTORESPONDER_DM_AUDIO_VERIFY_TIMEOUT_MS",
+    12_000,
+    min_value=2_000,
+    max_value=90_000,
+)
+_DM_AUDIO_VERIFY_POLL_MS = _env_int(
+    "AUTORESPONDER_DM_AUDIO_VERIFY_POLL_MS",
+    140,
+    min_value=60,
+    max_value=1_500,
+)
 
 
 def _status_check_timeout_ms() -> int:
@@ -183,13 +209,13 @@ def _status_log_path() -> Path:
         return Path(explicit).expanduser()
     app_root = (os.getenv("APP_DATA_ROOT") or "").strip()
     if app_root:
-        return Path(app_root).expanduser() / "storage" / "accounts_status.json"
-    return Path(__file__).resolve().parents[1] / "storage" / "accounts_status.json"
+        return storage_root(Path(app_root).expanduser()) / "accounts_status.json"
+    return storage_root(Path(__file__).resolve().parents[1]) / "accounts_status.json"
 
 
 def log_account_status(username: str, status: str) -> None:
     user = str(username or "").strip().lstrip("@")
-    current = str(status or "unknown").strip().lower() or "unknown"
+    current = str(status or "NO ACTIVA").strip().upper() or "NO ACTIVA"
     now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     logger.info("PlaywrightDM account_status account=@%s status=%s", user, current)
     if not user:
@@ -200,7 +226,7 @@ def log_account_status(username: str, status: str) -> None:
         payload: dict[str, dict[str, str]] = {}
         if path.exists():
             try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
+                loaded = load_json_file(path, {}, label="dm_playwright.account_status")
                 if isinstance(loaded, dict):
                     payload = loaded
             except Exception:
@@ -210,94 +236,22 @@ def log_account_status(username: str, status: str) -> None:
             "status": current,
             "last_checked": now_utc,
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, payload)
     except Exception:
         return
 
 
-def _safe_page_text(page: Page) -> str:
-    try:
-        body = page.locator("body")
-        if body.count() > 0:
-            return (body.first.inner_text() or "").strip().lower()
-    except Exception:
-        pass
-    try:
-        html = page.content() or ""
-    except Exception:
-        return ""
-    cleaned = re.sub(r"<[^>]+>", " ", html)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.strip().lower()
-
-
 def _detect_account_status_impl(page: Page) -> str:
     try:
-        url = (getattr(page, "url", "") or "").lower()
-    except Exception:
-        url = ""
+        from src.health_playwright import detect_account_health_sync
 
-    try:
-        if "/accounts/login/" in url or "/accounts/login" in url:
-            return "session_expired"
-        if "/challenge/" in url or "/checkpoint/" in url or "two_factor" in url:
-            return "checkpoint"
-        if "/accounts/suspended/" in url:
-            return "suspended"
-        if "/accounts/disabled/" in url:
-            return "blocked"
-
-        try:
-            if page.locator("input[name='username'], input[name='password']").count() > 0:
-                return "session_expired"
-        except Exception:
-            pass
-
-        text = _safe_page_text(page)
-        if "temporarily blocked" in text or "bloqueada temporalmente" in text:
-            return "blocked"
-        if "disabled your account" in text or "your account has been disabled" in text:
-            return "blocked"
-        if "suspended" in text or "cuenta suspendida" in text:
-            return "suspended"
-        if "checkpoint" in text or "challenge required" in text:
-            return "checkpoint"
-
-        alive_selector = ",".join(
-            (
-                "a[href='/direct/inbox/']",
-                "a[href*='/direct/inbox/']",
-                "a[href*='/direct/t/']",
-                "a[aria-label='Direct']",
-                "a[aria-label='Mensajes']",
-                "input[placeholder='Buscar']",
-                "input[placeholder='Search']",
-                "input[name='queryBox']",
-                "div[role='textbox'][contenteditable='true']",
-                "textarea[placeholder*='Message']",
-                "textarea[placeholder*='Mensaje']",
-                "svg[aria-label='Home']",
-                "svg[aria-label='Inicio']",
-            )
+        state, _reason = detect_account_health_sync(
+            page,
+            timeout_ms=_status_check_timeout_ms(),
         )
-        try:
-            if page.locator(alive_selector).count() > 0:
-                return "alive"
-        except Exception:
-            pass
-
-        try:
-            page.wait_for_selector(alive_selector, timeout=_status_check_timeout_ms())
-            return "alive"
-        except Exception:
-            pass
-
-        if "/direct/inbox/" in url or "/direct/t/" in url:
-            return "alive"
-
-        return "unknown"
+        return str(state or "").strip().upper() or "NO ACTIVA"
     except Exception:
-        return "unknown"
+        return "NO ACTIVA"
 
 
 async def detect_account_status(page: Page) -> str:
@@ -355,7 +309,7 @@ class PlaywrightDMClient:
         slow_mo_ms: int = 1000,
         dump_on_error: bool = True,
     ) -> None:
-        if sync_playwright is None:
+        if Page is object:
             raise RuntimeError(
                 "Playwright no esta instalado. Ejecuta 'pip install playwright' y luego 'playwright install'."
             )
@@ -368,11 +322,26 @@ class PlaywrightDMClient:
         self.headless = bool(headless)
         self.slow_mo_ms = max(0, int(slow_mo_ms or 0))
         self.dump_on_error = bool(dump_on_error)
+        self._session_manager = SessionManager(
+            headless=self.headless,
+            keep_browser_open_per_account=True,
+            profiles_root=str(BASE_PROFILES),
+            normalize_username=lambda value: str(value or "").strip().lstrip("@"),
+            log_event=lambda *_args, **_kwargs: None,
+        )
+        self._runtime = SyncSessionRuntime(
+            account=self.account,
+            session_manager=self._session_manager,
+            login_func=ensure_logged_in_async,
+            proxy_resolver=_proxy_from_account,
+            open_timeout_seconds=max(60.0, float(os.getenv("AUTORESPONDER_DM_SESSION_OPEN_TIMEOUT_SECONDS", "150"))),
+        )
 
         self._playwright = None
         self._browser = None
         self._context = None
         self._page: Optional[Page] = None
+        self._sync_runtime_id = ""
         self._current_thread_id: Optional[str] = None
         self._thread_cache: dict[str, ThreadLike] = {}
         self._thread_cache_meta: dict[str, dict] = {}
@@ -381,44 +350,34 @@ class PlaywrightDMClient:
         self._thread_id_aliases: dict[str, set[str]] = {}
         self._response_listener_registered = False
         self._account_status_checked = False
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="spawn",
+            status="started",
+            account=self.username,
+            headless=self.headless,
+            slow_mo_ms=self.slow_mo_ms,
+        )
         self._last_thread_discovery_reason = "other"
         self._last_thread_discovery_detail = "-"
         self._last_thread_discovery_count = 0
         self._last_thread_discovery_target = 0
+        self._last_open_thread_diag: dict[str, object] = {}
 
     @staticmethod
     def storage_state_path(username: str) -> Path:
-        safe = (username or "").strip().lstrip("@")
-        return Path(BASE_PROFILES) / safe / "storage_state.json"
+        return browser_storage_state_path(username, profiles_root=BASE_PROFILES)
 
     def close(self) -> None:
         try:
-            if self._page is not None:
-                try:
-                    if not self._page.is_closed():
-                        self._page.close()
-                except Exception:
-                    pass
-            if self._context is not None:
-                try:
-                    self._context.close()
-                except Exception:
-                    pass
-            if self._browser is not None:
-                try:
-                    self._browser.close()
-                except Exception:
-                    pass
+            with contextlib.suppress(Exception):
+                self._runtime.shutdown(timeout=10.0)
         finally:
-            if self._playwright is not None:
-                try:
-                    self._playwright.stop()
-                except Exception:
-                    pass
             self._playwright = None
             self._browser = None
             self._context = None
             self._page = None
+            self._sync_runtime_id = ""
             self._current_thread_id = None
             self._api_messages_by_thread = {}
             self._api_thread_last_seen = {}
@@ -429,6 +388,7 @@ class PlaywrightDMClient:
             self._last_thread_discovery_detail = "closed"
             self._last_thread_discovery_count = 0
             self._last_thread_discovery_target = 0
+            self._last_open_thread_diag = {}
 
     def get_my_username(self) -> str:
         return self.username
@@ -457,6 +417,17 @@ class PlaywrightDMClient:
         include_visible_href_resolution: bool = True,
         ingest_payload_cache: bool = False,
     ) -> dict[str, Any]:
+        del cursor
+        del limit
+        del message_limit
+        del request_timeout_ms
+        del total_timeout_ms
+        del include_visible_href_resolution
+        del ingest_payload_cache
+        raise RuntimeError(
+            "Inbox thread discovery moved to src.inbox.endpoint_reader.fetch_account_threads_page_from_storage; "
+            "PlaywrightDMClient is browser-only."
+        )
         self._ensure_inbox_workspace_fast()
         page = self._ensure_page()
         self._register_response_listener()
@@ -1156,10 +1127,27 @@ class PlaywrightDMClient:
             return False
         return self._open_thread(thread)
 
-    def open_thread_by_href(self, href: str) -> bool:
+    def open_thread_by_href(
+        self,
+        href: str,
+        *,
+        visual_timeout_ms: Optional[int] = None,
+    ) -> bool:
         href_value = _normalize_direct_link(str(href or "").strip())
         thread_id = _extract_thread_id(href_value)
         if not href_value or not thread_id:
+            self._set_last_open_thread_diag(
+                failed_condition="href_invalid",
+                row_stale=False,
+            )
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="thread_open",
+                status="failed",
+                account=self.username,
+                reason="href_invalid",
+                href=href,
+            )
             logger.error(
                 "PlaywrightDM open_thread_by_href_invalid account=@%s href=%s",
                 self.username,
@@ -1167,16 +1155,99 @@ class PlaywrightDMClient:
             )
             return False
 
+        from src.inbox.conversation_sync import ensure_thread_page
+
+        page = self._ensure_page()
+        timeout_ms = _DM_THREAD_VISUAL_SYNC_TIMEOUT_MS if visual_timeout_ms is None else max(1_000, int(visual_timeout_ms))
+        try:
+            opened = bool(
+                self._runtime.run_async(
+                    ensure_thread_page(page, thread_id=thread_id, thread_href=href_value, timeout_ms=timeout_ms),
+                    timeout=max(15.0, float(timeout_ms) / 1000.0 + 5.0),
+                )
+            )
+        except Exception as exc:
+            self._set_last_open_thread_diag(
+                failed_condition="thread_open_error",
+                post_url=str(getattr(page, "url", "") or ""),
+            )
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="thread_open",
+                status="failed",
+                account=self.username,
+                thread_id=thread_id,
+                href=href_value,
+                reason="thread_open_error",
+                error=str(exc) or type(exc).__name__,
+            )
+            return False
+        self._last_open_thread_diag = {
+            "thread_id": thread_id,
+            "post_url": str(getattr(page, "url", "") or ""),
+            "failed_condition": "" if opened else "thread_not_opened",
+        }
+        if not opened:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="thread_open",
+                status="failed",
+                account=self.username,
+                thread_id=thread_id,
+                href=href_value,
+                reason="thread_not_opened",
+            )
+            return False
+        self._current_thread_id = thread_id
+        meta = self._thread_cache_meta.get(thread_id, {})
+        meta["link"] = href_value
+        self._thread_cache_meta[thread_id] = meta
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="thread_open",
+            status="ok",
+            account=self.username,
+            thread_id=thread_id,
+            href=href_value,
+            url=str(getattr(page, "url", "") or ""),
+        )
+        return True
+
         page = self._ensure_page()
         if not self._is_in_direct_workspace(page):
             self._ensure_inbox_workspace_fast()
             page = self._ensure_page()
         pre_url = page.url or ""
+        visual_timeout_value = (
+            _DM_THREAD_VISUAL_SYNC_TIMEOUT_MS
+            if visual_timeout_ms is None
+            else max(1_000, int(visual_timeout_ms))
+        )
         try:
             page.goto(href_value, wait_until="domcontentloaded", timeout=45_000)
         except PlaywrightTimeoutError:
             pass
         except Exception as exc:
+            self._set_last_open_thread_diag(
+                pre_url=pre_url,
+                post_url=str(page.url or pre_url),
+                was_in_thread=bool("/direct/t/" in str(pre_url or "")),
+                visual_wait_ms=0,
+                network_wait_ms=0,
+                failed_condition="href_goto",
+                row_stale=False,
+                visual_timeout_ms=visual_timeout_value,
+                network_timeout_ms=0,
+            )
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="thread_open",
+                status="failed",
+                account=self.username,
+                reason="href_goto",
+                href=href_value,
+                error=str(exc) or type(exc).__name__,
+            )
             logger.error(
                 "PlaywrightDM open_thread_by_href_goto_error account=@%s href=%s error=%s",
                 self.username,
@@ -1186,12 +1257,14 @@ class PlaywrightDMClient:
             return False
 
         self._dismiss_overlays(page)
+        visual_started = time.perf_counter()
         visual_ok, state = self._wait_for_visual_thread_sync(
             page,
-            timeout_ms=_DM_THREAD_VISUAL_SYNC_TIMEOUT_MS,
+            timeout_ms=visual_timeout_value,
             require_both=False,
             stable_hits_required=1,
         )
+        visual_wait_ms = int((time.perf_counter() - visual_started) * 1000.0)
         post_url = str(state.get("post_url") or (page.url or ""))
         post_thread_id = str(state.get("post_thread_id") or _extract_thread_id(post_url)).strip()
         resolved_thread_id = post_thread_id or thread_id
@@ -1228,6 +1301,26 @@ class PlaywrightDMClient:
                     href_value,
                     pre_url,
                     post_url,
+                )
+                self._set_last_open_thread_diag(
+                    pre_url=pre_url,
+                    post_url=post_url,
+                    was_in_thread=bool("/direct/t/" in str(pre_url or "")),
+                    visual_wait_ms=visual_wait_ms,
+                    network_wait_ms=0,
+                    failed_condition="href_visual_sync",
+                    row_stale=False,
+                    visual_timeout_ms=visual_timeout_value,
+                    network_timeout_ms=0,
+                )
+                log_browser_stage(
+                    component="playwright_dm_client",
+                    stage="thread_open",
+                    status="failed",
+                    account=self.username,
+                    reason="href_visual_sync",
+                    href=href_value,
+                    post_url=post_url,
                 )
                 return False
 
@@ -1270,6 +1363,26 @@ class PlaywrightDMClient:
             self.username,
             href_value,
             resolved_thread_id,
+        )
+        self._set_last_open_thread_diag(
+            pre_url=pre_url,
+            post_url=post_url,
+            was_in_thread=bool("/direct/t/" in str(pre_url or "")),
+            visual_wait_ms=visual_wait_ms,
+            network_wait_ms=0,
+            failed_condition="ok",
+            row_stale=False,
+            visual_timeout_ms=visual_timeout_value,
+            network_timeout_ms=0,
+        )
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="thread_open",
+            status="ok",
+            account=self.username,
+            thread_id=resolved_thread_id,
+            href=href_value,
+            post_url=post_url,
         )
         return True
 
@@ -1346,7 +1459,7 @@ class PlaywrightDMClient:
                 }
         return resolved
 
-    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
+    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_anchors(...)
 
     def _row_lines(self, row) -> List[str]:
@@ -1510,12 +1623,12 @@ class PlaywrightDMClient:
                 loc = page.locator(selector)
                 if loc.count() > 0:
                     if _DM_VERBOSE_PROBES:
-                        print(style_text(f"[Probe] _get_inbox_panel encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ '{selector}'", color=Fore.WHITE))
+                        print(style_text(f"[Probe] _get_inbox_panel encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ '{selector}'", color=Fore.WHITE))
                     return loc.first, "selector", selector, {"count": loc.count()}
             except Exception:
                 continue
         if _DM_VERBOSE_PROBES:
-            print(style_text("[Probe] _get_inbox_panel no encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ nada, usando page", color=Fore.YELLOW))
+            print(style_text("[Probe] _get_inbox_panel no encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ nada, usando page", color=Fore.YELLOW))
         return page, "page", "", {"count": 1}
 
     def _stagnation_limit(self, target: int) -> int:
@@ -1679,7 +1792,7 @@ class PlaywrightDMClient:
 
     def _row_is_valid(self, row, *, selector: str | None = None, fast: bool = False) -> bool:
         """
-        ValidaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nima pre-click.
+        ValidaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nima pre-click.
         El filtrado real ocurre POST-CLICK en _open_thread.
         """
         try:
@@ -1687,7 +1800,7 @@ class PlaywrightDMClient:
             if not lines:
                 return False
 
-            # Filtros de exclusiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de UI bÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡sica (incluye Notas)
+            # Filtros de exclusiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de UI bÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡sica (incluye Notas)
             first_line = lines[0].lower()
             if first_line in {
                 "primary",
@@ -1735,7 +1848,7 @@ class PlaywrightDMClient:
                 )
                 return False
 
-            # Descartar botones internos (avatar/nota) por tamaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±o.
+            # Descartar botones internos (avatar/nota) por tamaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±o.
             if not self._row_has_thread_dimensions(row):
                 logger.info(
                     "PlaywrightDM row_discard reason=small_button selector=%s first_line=%s",
@@ -1767,7 +1880,7 @@ class PlaywrightDMClient:
             "nuevo mensaje",
             "new message",
             "icono de comilla angular",
-            "desde el corazÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
+            "desde el corazÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
             "solicitudes",
             "requests",
         )
@@ -1905,12 +2018,39 @@ class PlaywrightDMClient:
                 continue
         return valid
 
-    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
+    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (reemplazada por click-first scan)
     # def _list_threads_from_rows(...) -> List[ThreadLike]
 
 
     def get_messages(self, thread: ThreadLike, amount: int = 20, *, log: bool = True) -> List[MessageLike]:
         page = self._ensure_page()
+        del log
+        from src.inbox.conversation_sync import read_conversation_async
+
+        payload = self._runtime.run_async(
+            read_conversation_async(
+                page,
+                account=self.account,
+                thread_id=str(getattr(thread, "id", "") or "").strip(),
+                thread_href=str(getattr(thread, "link", "") or "").strip(),
+                message_limit=max(20, min(80, int(amount or 20))),
+            ),
+            timeout=30.0,
+        )
+        rows: list[MessageLike] = []
+        for raw in payload.get("messages", []):
+            if not isinstance(raw, dict):
+                continue
+            rows.append(
+                MessageLike(
+                    id=str(raw.get("message_id") or "").strip(),
+                    user_id=str(raw.get("user_id") or "").strip(),
+                    text=str(raw.get("text") or "").strip(),
+                    timestamp=raw.get("timestamp"),
+                    direction=str(raw.get("direction") or "unknown"),
+                )
+            )
+        return rows
 
         # [CLICK-FIRST] Abrir y verificar thread post-click
         try:
@@ -1925,7 +2065,7 @@ class PlaywrightDMClient:
                         [],
                     )
                 return []
-        except Exception as e:
+        except Exception as exc:
             if log:
                 logger.warning("PlaywrightDM error al abrir thread %s: %s", thread.id, e)
                 logger.info(
@@ -2056,7 +2196,892 @@ class PlaywrightDMClient:
             )
         return collected
 
+    def _thread_from_id_strict(self, thread_id: str) -> Optional[ThreadLike]:
+        thread_id_clean = str(thread_id or "").strip()
+        if not thread_id_clean:
+            return None
+        existing = self._thread_cache.get(thread_id_clean)
+        if isinstance(existing, ThreadLike):
+            return existing
+        thread_link = ""
+        if _is_probably_web_thread_id(thread_id_clean):
+            thread_link = THREAD_URL_TEMPLATE.format(thread_id=thread_id_clean)
+        synthetic = ThreadLike(
+            id=thread_id_clean,
+            pk=thread_id_clean,
+            users=[UserLike(pk=thread_id_clean, id=thread_id_clean, username=thread_id_clean)],
+            unread_count=0,
+            link=thread_link,
+            title=thread_id_clean,
+            snippet="",
+            source_index=-1,
+        )
+        self._thread_cache[thread_id_clean] = synthetic
+        self._thread_cache_meta.setdefault(
+            thread_id_clean,
+            {
+                "title": thread_id_clean,
+                "snippet": "",
+                "link": thread_link,
+                "idx": -1,
+                "selector": "strict_thread_id",
+                "key_source": "strict_thread_id",
+            },
+        )
+        return synthetic
+
+    def _is_broadcast_ack_response(self, response) -> bool:
+        try:
+            status = int(getattr(response, "status", 0) or 0)
+        except Exception:
+            status = 0
+        if status != 200:
+            return False
+        try:
+            url = str(getattr(response, "url", "") or "").strip().lower()
+        except Exception:
+            url = ""
+        if not url:
+            return False
+        if "/direct_v2/threads/broadcast/" in url:
+            return True
+        if "/api/graphql" not in url and "/graphql/query" not in url:
+            return False
+        post_data = ""
+        try:
+            request = getattr(response, "request", None)
+            post_data_attr = getattr(request, "post_data", None)
+            if callable(post_data_attr):
+                post_data = str(post_data_attr() or "")
+            else:
+                post_data = str(post_data_attr or "")
+        except Exception:
+            post_data = ""
+        lowered_post = post_data.lower()
+        if "broadcast" not in lowered_post:
+            return False
+        return ("mutation" in lowered_post) or ("direct_v2" in lowered_post) or ("thread" in lowered_post)
+
+    def _extract_client_context_from_payload(self, payload: Any, *, target_item_id: str = "") -> str:
+        wanted_item_id = str(target_item_id or "").strip()
+        first_context = ""
+        stack: list[Any] = [payload]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, list):
+                for item in current:
+                    if isinstance(item, (dict, list)):
+                        stack.append(item)
+                continue
+            if not isinstance(current, dict):
+                continue
+            current_context = _coerce_str(current.get("client_context"))
+            if current_context and not first_context:
+                first_context = current_context
+            if wanted_item_id:
+                current_item_id = _coerce_str(
+                    current.get("item_id")
+                    or current.get("itemid")
+                    or current.get("message_id")
+                    or current.get("messageid")
+                    or current.get("id")
+                    or current.get("pk")
+                )
+                if current_item_id and current_item_id == wanted_item_id and current_context:
+                    return current_context
+            for value in current.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        return first_context
+
+    def _extract_ack_item_metadata(
+        self,
+        payload: Any,
+        *,
+        expected_thread_ids: set[str],
+        expected_text: str,
+    ) -> tuple[str, str]:
+        normalized_text = _normalize_message_text(expected_text)
+        parsed, _missing = _extract_api_messages_from_payload(payload, self_user_id=self.user_id)
+        for require_text in (bool(normalized_text), False):
+            for msg in parsed:
+                if str(msg.direction or "").strip().lower() != "outbound":
+                    continue
+                msg_item_id = str(msg.item_id or "").strip()
+                if not msg_item_id:
+                    continue
+                msg_thread_id = str(msg.thread_id or "").strip()
+                if expected_thread_ids and msg_thread_id and msg_thread_id not in expected_thread_ids:
+                    continue
+                if require_text and not _message_text_matches(normalized_text, msg.text):
+                    continue
+                client_context = self._extract_client_context_from_payload(
+                    payload,
+                    target_item_id=msg_item_id,
+                )
+                return msg_item_id, client_context
+
+        for node, _context_thread_id in _iter_payload_nodes(payload):
+            candidate_item_id = _coerce_str(
+                node.get("item_id")
+                or node.get("itemid")
+                or node.get("message_id")
+                or node.get("messageid")
+                or node.get("pk")
+                or node.get("id")
+            )
+            if not candidate_item_id:
+                continue
+            node_thread_id = _extract_thread_id_from_node(node)
+            if expected_thread_ids and node_thread_id and node_thread_id not in expected_thread_ids:
+                continue
+            node_text = _extract_message_text_from_api_node(node)
+            if normalized_text and node_text and not _message_text_matches(normalized_text, node_text):
+                continue
+            client_context = self._extract_client_context_from_payload(
+                payload,
+                target_item_id=candidate_item_id,
+            )
+            return candidate_item_id, client_context
+
+        return "", self._extract_client_context_from_payload(payload, target_item_id="")
+
+    def _payload_contains_item_id(
+        self,
+        payload: Any,
+        *,
+        thread_id: str,
+        item_id: str,
+    ) -> bool:
+        wanted_item_id = str(item_id or "").strip()
+        if not wanted_item_id:
+            return False
+        expected_thread_ids = set(self._expand_thread_ids([str(thread_id or "").strip()]))
+        parsed, _missing = _extract_api_messages_from_payload(payload, self_user_id=self.user_id)
+        for msg in parsed:
+            msg_item_id = str(msg.item_id or "").strip()
+            if msg_item_id != wanted_item_id:
+                continue
+            msg_thread_id = str(msg.thread_id or "").strip()
+            if expected_thread_ids and msg_thread_id and msg_thread_id not in expected_thread_ids:
+                continue
+            return True
+        for node, _context_thread_id in _iter_payload_nodes(payload):
+            node_item_id = _coerce_str(
+                node.get("item_id")
+                or node.get("itemid")
+                or node.get("message_id")
+                or node.get("messageid")
+                or node.get("pk")
+                or node.get("id")
+            )
+            if node_item_id != wanted_item_id:
+                continue
+            node_thread_id = _extract_thread_id_from_node(node)
+            if expected_thread_ids and node_thread_id and node_thread_id not in expected_thread_ids:
+                continue
+            return True
+        return False
+
+    def _fetch_thread_payload_from_endpoint(
+        self,
+        thread_id: str,
+        *,
+        limit: int = 20,
+        request_timeout_ms: int = 3_500,
+        total_timeout_ms: int = 6_000,
+    ) -> Optional[dict[str, Any]]:
+        safe_thread_id = str(thread_id or "").strip()
+        if not safe_thread_id:
+            return None
+        safe_limit = max(1, min(80, int(limit or 20)))
+        safe_request_timeout_ms = max(1_000, min(15_000, int(request_timeout_ms or 3_500)))
+        safe_total_timeout_ms = max(
+            safe_request_timeout_ms,
+            min(20_000, int(total_timeout_ms or 6_000)),
+        )
+        query_variants: list[dict[str, str]] = [
+            {"limit": str(safe_limit)},
+            {
+                "limit": str(safe_limit),
+                "visual_message_return_type": "unseen",
+                "persistentBadging": "true",
+            },
+        ]
+        urls: list[str] = []
+        for params in query_variants:
+            query = urlencode(params, doseq=True)
+            for base in (
+                f"/api/v1/direct_v2/threads/{safe_thread_id}/",
+                f"/api/v1/direct_v2/threads/{safe_thread_id}",
+            ):
+                candidate = f"{base}?{query}" if query else base
+                if candidate not in urls:
+                    urls.append(candidate)
+        if not urls:
+            return None
+        self._ensure_inbox_workspace_fast()
+        page = self._ensure_page()
+        fetch_result = page.evaluate(
+            """async ({ urls, requestTimeoutMs, totalTimeoutMs }) => {
+                const responseSummary = {
+                    ok: false,
+                    status: 0,
+                    url: "",
+                    error: "",
+                    payload: null,
+                };
+                const startedAt = Date.now();
+                const isOverTotalBudget = () => {
+                    return Number(Date.now() - startedAt) >= Number(totalTimeoutMs || 0);
+                };
+                const cookieText = String(document.cookie || "");
+                const csrfMatch = cookieText.match(/(?:^|;\\s*)csrftoken=([^;]+)/i);
+                const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1] || "") : "";
+                const headers = {
+                    "accept": "application/json, text/plain, */*",
+                    "x-requested-with": "XMLHttpRequest",
+                    "x-ig-app-id": "936619743392459",
+                };
+                if (csrfToken) {
+                    headers["x-csrftoken"] = csrfToken;
+                }
+                for (const endpoint of (Array.isArray(urls) ? urls : [])) {
+                    if (isOverTotalBudget()) {
+                        responseSummary.error = responseSummary.error || `timeout_total_${Number(totalTimeoutMs || 0)}ms`;
+                        break;
+                    }
+                    let timeoutHandle = null;
+                    try {
+                        const controller = new AbortController();
+                        timeoutHandle = setTimeout(() => controller.abort(), Number(requestTimeoutMs || 0));
+                        const res = await fetch(endpoint, {
+                            method: "GET",
+                            credentials: "include",
+                            headers,
+                            signal: controller.signal,
+                        });
+                        const status = Number(res.status || 0);
+                        const bodyText = await res.text();
+                        let parsed = null;
+                        try {
+                            parsed = JSON.parse(bodyText);
+                        } catch (_) {
+                            parsed = null;
+                        }
+                        if (parsed && typeof parsed === "object") {
+                            const hasThreadItems =
+                                Array.isArray(parsed?.thread?.items)
+                                || Array.isArray(parsed?.items)
+                                || Array.isArray(parsed?.data?.thread?.items)
+                                || String(bodyText || "").indexOf("item_id") >= 0;
+                            if (res.ok || hasThreadItems) {
+                                return {
+                                    ok: true,
+                                    status,
+                                    url: String(endpoint || ""),
+                                    error: "",
+                                    payload: parsed,
+                                };
+                            }
+                        }
+                        if (!responseSummary.error) {
+                            responseSummary.error = `status=${status}`;
+                        }
+                        responseSummary.status = status;
+                        responseSummary.url = String(endpoint || "");
+                    } catch (err) {
+                        const errName = String((err && err.name) || "");
+                        if (errName.toLowerCase() === "aborterror") {
+                            responseSummary.error = `timeout_fetch_${Number(requestTimeoutMs || 0)}ms`;
+                        } else {
+                            responseSummary.error = String(err || "fetch_error");
+                        }
+                        responseSummary.url = String(endpoint || "");
+                    } finally {
+                        if (timeoutHandle) {
+                            clearTimeout(timeoutHandle);
+                        }
+                    }
+                }
+                return responseSummary;
+            }""",
+            {
+                "urls": urls,
+                "requestTimeoutMs": safe_request_timeout_ms,
+                "totalTimeoutMs": safe_total_timeout_ms,
+            },
+        )
+        if not isinstance(fetch_result, dict):
+            return None
+        if not bool(fetch_result.get("ok")):
+            return None
+        payload = fetch_result.get("payload")
+        if not isinstance(payload, (dict, list)):
+            return None
+        source_url = str(fetch_result.get("url") or "").strip()
+        try:
+            self._ingest_api_payload(payload, source_url=source_url)
+        except Exception:
+            pass
+        return {
+            "payload": payload,
+            "url": source_url,
+            "status": int(fetch_result.get("status") or 0),
+        }
+
+    def ensure_thread_ready_strict(self, thread_id: str) -> tuple[bool, str]:
+        target_thread_id = str(thread_id or "").strip()
+        if not target_thread_id:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="composer_ready",
+                status="failed",
+                account=self.username,
+                reason="invalid_thread_id",
+            )
+            return False, "invalid_thread_id"
+        thread = self._thread_from_id_strict(target_thread_id)
+        if thread is None:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="composer_ready",
+                status="failed",
+                account=self.username,
+                thread_id=target_thread_id,
+                reason="thread_not_resolved",
+            )
+            return False, "thread_not_resolved"
+        from src.inbox.message_sender import _wait_for_visible_locator_async
+
+        thread_href = _normalize_direct_link(str(getattr(thread, "link", "") or ""))
+        if not thread_href:
+            meta = self._thread_cache_meta.get(str(getattr(thread, "id", "") or ""), {})
+            thread_href = _normalize_direct_link(str(meta.get("link") or ""))
+        if not thread_href:
+            thread_href = THREAD_URL_TEMPLATE.format(thread_id=target_thread_id)
+        if not self.open_thread_by_href(thread_href):
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="composer_ready",
+                status="failed",
+                account=self.username,
+                thread_id=target_thread_id,
+                reason="open_thread_failed",
+            )
+            return False, "open_thread_failed"
+        page = self._ensure_page()
+        try:
+            composer = self._runtime.run_async(
+                _wait_for_visible_locator_async(page, _COMPOSER_SELECTORS, timeout_ms=12_000),
+                timeout=15.0,
+            )
+        except Exception as exc:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="composer_ready",
+                status="failed",
+                account=self.username,
+                thread_id=target_thread_id,
+                reason="composer_probe_failed",
+                error=str(exc) or type(exc).__name__,
+            )
+            return False, "composer_probe_failed"
+        if composer is None:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="composer_ready",
+                status="failed",
+                account=self.username,
+                thread_id=target_thread_id,
+                reason="composer_not_found",
+                url=str(getattr(page, "url", "") or ""),
+            )
+            return False, "composer_not_found"
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="composer_ready",
+            status="ok",
+            account=self.username,
+            thread_id=target_thread_id,
+            url=str(getattr(page, "url", "") or ""),
+        )
+        return True, "ok"
+        page = self._ensure_page()
+        current_url = page.url or ""
+        current_thread_id = _extract_thread_id(current_url)
+        expected_ids = set(self._expected_thread_ids(thread, post_thread_id=current_thread_id, click_href=""))
+        already_on_target = bool(current_thread_id and (not expected_ids or current_thread_id in expected_ids))
+        if not already_on_target:
+            thread_href = _normalize_direct_link(str(getattr(thread, "link", "") or ""))
+            if not thread_href:
+                meta = self._thread_cache_meta.get(str(getattr(thread, "id", "") or ""), {})
+                thread_href = _normalize_direct_link(str(meta.get("link") or ""))
+            opened = False
+            if thread_href:
+                try:
+                    opened = bool(self.open_thread_by_href(thread_href))
+                except Exception:
+                    opened = False
+            if not opened:
+                opened = self._open_thread(thread)
+            if not opened:
+                log_browser_stage(
+                    component="playwright_dm_client",
+                    stage="composer_ready",
+                    status="failed",
+                    account=self.username,
+                    thread_id=target_thread_id,
+                    reason="open_thread_failed",
+                )
+                return False, "open_thread_failed"
+            page = self._ensure_page()
+            current_url = page.url or ""
+            current_thread_id = _extract_thread_id(current_url)
+            expected_after = set(
+                self._expected_thread_ids(
+                    thread,
+                    post_thread_id=current_thread_id,
+                    click_href=thread_href,
+                )
+            )
+            if expected_after and (not current_thread_id or current_thread_id not in expected_after):
+                log_browser_stage(
+                    component="playwright_dm_client",
+                    stage="composer_ready",
+                    status="failed",
+                    account=self.username,
+                    thread_id=target_thread_id,
+                    reason="opened_unexpected_thread",
+                )
+                return False, "opened_unexpected_thread"
+        composer = self._find_composer(page)
+        if composer is None:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="composer_ready",
+                status="failed",
+                account=self.username,
+                thread_id=target_thread_id,
+                reason="composer_not_found",
+                url=current_url,
+            )
+            return False, "composer_not_found"
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="composer_ready",
+            status="ok",
+            account=self.username,
+            thread_id=target_thread_id,
+            url=current_url,
+        )
+        return True, "ok"
+
+    def _latest_outbound_record_from_payload(
+        self,
+        payload: Any,
+        *,
+        thread_id: str,
+        expected_text: str = "",
+    ) -> Optional[_APIMessageRecord]:
+        expected_thread_ids = set(self._expand_thread_ids([str(thread_id or "").strip()]))
+        normalized_text = _normalize_message_text(expected_text)
+        parsed, _missing = _extract_api_messages_from_payload(payload, self_user_id=self.user_id)
+        if not parsed:
+            return None
+        candidates: list[_APIMessageRecord] = []
+        for msg in parsed:
+            if str(msg.direction or "").strip().lower() != "outbound":
+                continue
+            msg_item_id = str(msg.item_id or "").strip()
+            if not msg_item_id:
+                continue
+            msg_thread_id = str(msg.thread_id or "").strip()
+            if expected_thread_ids and msg_thread_id and msg_thread_id not in expected_thread_ids:
+                continue
+            if normalized_text and not _message_text_matches(normalized_text, msg.text):
+                continue
+            candidates.append(msg)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (float(item.timestamp or 0.0), str(item.item_id or "")), reverse=True)
+        return candidates[0]
+
+    def _latest_outbound_record_from_cache(
+        self,
+        *,
+        thread_id: str,
+        expected_text: str = "",
+    ) -> Optional[_APIMessageRecord]:
+        expected_thread_ids = set(self._expand_thread_ids([str(thread_id or "").strip()]))
+        normalized_text = _normalize_message_text(expected_text)
+        candidates: list[_APIMessageRecord] = []
+        for key in expected_thread_ids:
+            bucket = self._api_messages_by_thread.get(str(key or "").strip())
+            if not isinstance(bucket, dict):
+                continue
+            for msg in bucket.values():
+                if not isinstance(msg, _APIMessageRecord):
+                    continue
+                if str(msg.direction or "").strip().lower() != "outbound":
+                    continue
+                if normalized_text and not _message_text_matches(normalized_text, msg.text):
+                    continue
+                candidates.append(msg)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (float(item.timestamp or 0.0), str(item.item_id or "")), reverse=True)
+        return candidates[0]
+
+    def get_outbound_baseline(self, thread_id: str, *, expected_text: str = "") -> dict[str, Any]:
+        target_thread_id = str(thread_id or "").strip()
+        if not target_thread_id:
+            return {"ok": False, "item_id": "", "timestamp": None, "reason": "invalid_thread_id"}
+        fetched = self._fetch_thread_payload_from_endpoint(
+            target_thread_id,
+            limit=30,
+            request_timeout_ms=1_800,
+            total_timeout_ms=2_600,
+        )
+        if not fetched:
+            return {"ok": False, "item_id": "", "timestamp": None, "reason": "baseline_fetch_failed"}
+        payload = fetched.get("payload")
+        if not isinstance(payload, (dict, list)):
+            return {"ok": False, "item_id": "", "timestamp": None, "reason": "baseline_payload_invalid"}
+        latest = self._latest_outbound_record_from_payload(
+            payload,
+            thread_id=target_thread_id,
+            expected_text=expected_text,
+        )
+        if latest is None:
+            return {"ok": True, "item_id": "", "timestamp": None, "reason": "baseline_empty"}
+        return {
+            "ok": True,
+            "item_id": str(latest.item_id or "").strip(),
+            "timestamp": float(latest.timestamp or 0.0) or None,
+            "reason": "baseline_ok",
+        }
+
+    def _dom_has_recent_outbound_text(self, text: str) -> bool:
+        target = _normalize_message_text(text)
+        if not target:
+            return False
+        page = self._ensure_page()
+        try:
+            nodes = self._collect_message_nodes(page)
+            total = nodes.count()
+        except Exception:
+            return False
+        if total <= 0:
+            return False
+        start = max(0, total - 14)
+        for idx in range(start, total):
+            try:
+                node = nodes.nth(idx)
+                if not self._is_outbound(node):
+                    continue
+                node_text = _normalize_message_text(_extract_message_text(node))
+                if node_text and _message_text_matches(target, node_text):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def refresh_thread_for_confirmation(self, thread_id: str) -> bool:
+        target_thread_id = str(thread_id or "").strip()
+        if not target_thread_id:
+            return False
+        thread = self._thread_from_id_strict(target_thread_id)
+        if thread is None:
+            return False
+        thread_href = _normalize_direct_link(str(getattr(thread, "link", "") or ""))
+        if not thread_href:
+            meta = self._thread_cache_meta.get(str(getattr(thread, "id", "") or ""), {})
+            thread_href = _normalize_direct_link(str(meta.get("link") or ""))
+        opened = False
+        if thread_href:
+            try:
+                opened = bool(self.open_thread_by_href(thread_href))
+            except Exception:
+                opened = False
+        if not opened:
+            try:
+                opened = bool(self._open_thread(thread))
+            except Exception:
+                opened = False
+        if not opened:
+            return False
+        ready_ok, _ready_reason = self.ensure_thread_ready_strict(target_thread_id)
+        return bool(ready_ok)
+
+    def confirm_new_outbound_after_baseline(
+        self,
+        thread_id: str,
+        *,
+        baseline_item_id: str = "",
+        baseline_timestamp: Optional[float] = None,
+        sent_after_ts: Optional[float] = None,
+        expected_text: str = "",
+        attempts: int = 6,
+        poll_interval_seconds: float = 0.8,
+        allow_dom: bool = True,
+    ) -> dict[str, Any]:
+        target_thread_id = str(thread_id or "").strip()
+        if not target_thread_id:
+            return {"ok": False, "item_id": None, "reason": "invalid_thread_id"}
+        baseline_item = str(baseline_item_id or "").strip()
+        baseline_ts = float(baseline_timestamp) if baseline_timestamp else None
+        sent_anchor_ts = float(sent_after_ts) if sent_after_ts else None
+        max_attempts = max(1, int(attempts or 1))
+        poll_seconds = max(0.12, float(poll_interval_seconds or 0.8))
+        fallback_dom_item_id = f"dom-confirmed-{int(time.time() * 1000)}"
+        fallback_cached_item_id = f"cached-confirmed-{int(time.time() * 1000)}"
+
+        def _record_is_new(candidate: Optional[_APIMessageRecord]) -> tuple[bool, str]:
+            if candidate is None:
+                return False, ""
+            latest_item_id = str(candidate.item_id or "").strip()
+            latest_ts = float(candidate.timestamp or 0.0) if candidate.timestamp else None
+            is_new = False
+            if baseline_item:
+                is_new = bool(latest_item_id and latest_item_id != baseline_item)
+            if not is_new and baseline_ts is not None and latest_ts is not None:
+                is_new = latest_ts > (baseline_ts + 0.001)
+            if not is_new and sent_anchor_ts is not None and latest_ts is not None:
+                is_new = latest_ts >= (sent_anchor_ts - 1.5)
+            if not is_new:
+                return False, ""
+            return True, latest_item_id or ""
+
+        for attempt in range(1, max_attempts + 1):
+            cached_latest = self._latest_outbound_record_from_cache(
+                thread_id=target_thread_id,
+                expected_text=expected_text,
+            )
+            cached_ok, cached_item_id = _record_is_new(cached_latest)
+            if cached_ok:
+                return {
+                    "ok": True,
+                    "item_id": cached_item_id or fallback_cached_item_id,
+                    "reason": "cached_new_outbound",
+                }
+            if allow_dom and self._dom_has_recent_outbound_text(expected_text):
+                return {
+                    "ok": True,
+                    "item_id": fallback_dom_item_id,
+                    "reason": "dom_outbound_visible",
+                }
+            should_fetch_endpoint = (attempt == 1) or (attempt % 2 == 0)
+            if should_fetch_endpoint:
+                fetched = self._fetch_thread_payload_from_endpoint(
+                    target_thread_id,
+                    limit=30,
+                    request_timeout_ms=1_800,
+                    total_timeout_ms=2_600,
+                )
+                if fetched:
+                    payload = fetched.get("payload")
+                    if isinstance(payload, (dict, list)):
+                        latest = self._latest_outbound_record_from_payload(
+                            payload,
+                            thread_id=target_thread_id,
+                            expected_text=expected_text,
+                        )
+                        endpoint_ok, endpoint_item_id = _record_is_new(latest)
+                        if endpoint_ok:
+                            return {
+                                "ok": True,
+                                "item_id": endpoint_item_id or fallback_dom_item_id,
+                                "reason": "endpoint_new_outbound",
+                            }
+            if attempt >= max_attempts:
+                break
+            wait_ms = max(120, int(poll_seconds * 1000.0))
+            try:
+                self._ensure_page().wait_for_timeout(wait_ms)
+            except Exception:
+                time.sleep(min(1.2, max(0.12, float(wait_ms) / 1000.0)))
+        return {"ok": False, "item_id": None, "reason": "not_confirmed"}
+
+    def send_text_with_ack(self, thread_id: str, text: str, timeout: float = 4.0) -> dict[str, Any]:
+        target_thread_id = str(thread_id or "").strip()
+        content = str(text or "")
+        from src.inbox.message_sender import TaskDirectClient
+
+        client = TaskDirectClient(
+            self._runtime,
+            self.account,
+            thread_id=target_thread_id,
+            thread_href=THREAD_URL_TEMPLATE.format(thread_id=target_thread_id) if target_thread_id else "",
+            telemetry_component="playwright_dm_client",
+            emit_spawn=False,
+            emit_session_telemetry=False,
+        )
+        return dict(client.send_text_with_ack(target_thread_id, content, timeout=timeout) or {})
+        if not target_thread_id:
+            return {"ok": False, "item_id": None, "reason": "invalid_thread_id"}
+        if not content.strip():
+            return {"ok": False, "item_id": None, "reason": "empty_text"}
+        can_send, sent_today, limit = can_send_message_for_account(
+            account=self.account,
+            username=self.username,
+            default=None,
+        )
+        if not can_send:
+            return {
+                "ok": False,
+                "item_id": None,
+                "reason": f"account_quota_reached:{sent_today}/{limit}",
+            }
+        ready_ok, ready_reason = self.ensure_thread_ready_strict(target_thread_id)
+        if not ready_ok:
+            return {"ok": False, "item_id": None, "reason": f"thread_not_ready:{ready_reason}"}
+
+        page = self._ensure_page()
+        composer = self._find_composer(page)
+        if composer is None:
+            return {"ok": False, "item_id": None, "reason": "composer_not_found"}
+
+        timeout_ms = max(600, int(max(0.4, float(timeout or 4.0)) * 1000.0))
+        response_obj = None
+        try:
+            with page.expect_response(
+                lambda response: self._is_broadcast_ack_response(response),
+                timeout=timeout_ms,
+            ) as response_info:
+                composer.click()
+                composer.fill(content)
+                composer.press("Enter")
+            response_obj = response_info.value
+        except PlaywrightTimeoutError:
+            return {"ok": False, "item_id": None, "reason": "ack_timeout"}
+        except Exception as exc:
+            return {"ok": False, "item_id": None, "reason": f"ack_wait_error:{exc}"}
+
+        if response_obj is None:
+            return {"ok": False, "item_id": None, "reason": "ack_missing"}
+        try:
+            ack_payload = response_obj.json()
+        except Exception:
+            return {"ok": False, "item_id": None, "reason": "ack_invalid_json"}
+
+        try:
+            ack_url = str(getattr(response_obj, "url", "") or "")
+        except Exception:
+            ack_url = ""
+        try:
+            self._ingest_api_payload(ack_payload, source_url=ack_url)
+        except Exception:
+            pass
+
+        expected_thread_ids = set(self._expand_thread_ids([target_thread_id]))
+        item_id, client_context = self._extract_ack_item_metadata(
+            ack_payload,
+            expected_thread_ids=expected_thread_ids,
+            expected_text=content,
+        )
+        if not item_id:
+            result = {
+                "ok": False,
+                "item_id": None,
+                "reason": "ack_item_id_missing",
+                "client_context": client_context or None,
+            }
+            logger.info(
+                "PlaywrightDM send_text_with_ack_missing_item thread=%s reason=%s",
+                target_thread_id,
+                result["reason"],
+            )
+            return result
+        logger.info(
+            "PlaywrightDM send_text_with_ack_ok thread=%s item_id=%s client_context=%s",
+            target_thread_id,
+            item_id,
+            client_context or "-",
+        )
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "reason": "ok",
+            "client_context": client_context or None,
+        }
+
+    def verify_item_id_in_thread(self, thread_id: str, item_id: str, timeout: float = 10.0) -> bool:
+        target_thread_id = str(thread_id or "").strip()
+        target_item_id = str(item_id or "").strip()
+        if not target_thread_id or not target_item_id:
+            return False
+        timeout_sec = max(0.5, float(timeout or 10.0))
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            fetched = self._fetch_thread_payload_from_endpoint(
+                target_thread_id,
+                limit=30,
+                request_timeout_ms=3_500,
+                total_timeout_ms=6_000,
+            )
+            if fetched:
+                payload = fetched.get("payload")
+                if isinstance(payload, (dict, list)):
+                    if self._payload_contains_item_id(
+                        payload,
+                        thread_id=target_thread_id,
+                        item_id=target_item_id,
+                    ):
+                        logger.info(
+                            "PlaywrightDM verify_item_id_in_thread_ok thread=%s item_id=%s",
+                            target_thread_id,
+                            target_item_id,
+                        )
+                        return True
+            remaining_ms = int(max(0.0, (deadline - time.time()) * 1000.0))
+            if remaining_ms <= 0:
+                break
+            wait_ms = max(120, min(800, remaining_ms))
+            try:
+                self._ensure_page().wait_for_timeout(wait_ms)
+            except Exception:
+                time.sleep(min(0.8, max(0.12, float(wait_ms) / 1000.0)))
+        logger.warning(
+            "PlaywrightDM verify_item_id_in_thread_timeout thread=%s item_id=%s",
+            target_thread_id,
+            target_item_id,
+        )
+        return False
+
     def send_message(self, thread: ThreadLike, text: str) -> Optional[str]:
+        content = str(text or "").strip()
+        thread_id = str(getattr(thread, "id", "") or "")
+        result = self.send_text_with_ack(thread_id, content, timeout=4.0)
+        if bool(result.get("ok")):
+            return str(result.get("item_id") or "").strip() or None
+        return None
+        if not content:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="send_fail",
+                status="failed",
+                account=self.username,
+                thread_id=thread_id,
+                reason="empty_text",
+            )
+            return None
+        can_send, _sent_today, _limit = can_send_message_for_account(
+            account=self.account,
+            username=self.username,
+            default=None,
+        )
+        if not can_send:
+            logger.warning("PlaywrightDM quota_reached @%s", self.username)
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="send_fail",
+                status="failed",
+                account=self.username,
+                thread_id=thread_id,
+                reason="account_quota_reached",
+            )
+            return None
         page = self._ensure_page()
         current_url = page.url or ""
         current_thread_id = _extract_thread_id(current_url)
@@ -2072,35 +3097,162 @@ class PlaywrightDMClient:
                     current_url,
                     sorted(expected_ids),
                 )
+                log_browser_stage(
+                    component="playwright_dm_client",
+                    stage="send_fail",
+                    status="failed",
+                    account=self.username,
+                    thread_id=thread_id,
+                    reason="open_thread_failed",
+                    url=current_url,
+                )
                 return None
             page = self._ensure_page()
 
         composer = self._find_composer(page)
         if composer is None:
-            logger.warning("PlaywrightDM sin composer thread=%s @%s", thread.id, self.username)
+            logger.warning("PlaywrightDM no composer thread=%s @%s", thread.id, self.username)
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="send_fail",
+                status="failed",
+                account=self.username,
+                thread_id=thread_id,
+                reason="composer_not_found",
+                url=page.url or "",
+            )
+            return None
+
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="send_attempt",
+            status="started",
+            account=self.username,
+            thread_id=thread_id,
+            message_length=len(content),
+        )
+        try:
+            composer.click()
+            composer.fill(content)
+            composer.press("Enter")
+        except Exception as exc:
+            logger.warning("PlaywrightDM no pudo completar acciones de envÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o thread=%s @%s", thread.id, self.username)
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="send_fail",
+                status="failed",
+                account=self.username,
+                thread_id=thread_id,
+                reason="send_action_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return None
+
+        message_id = self._verify_sent(thread, content)
+        if not message_id and self._click_send_button(page):
+            message_id = self._verify_sent(thread, content)
+        if message_id:
+            logger.info("PlaywrightDM envio_ok thread=%s msg_id=%s", thread.id, message_id)
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="send_success",
+                status="ok",
+                account=self.username,
+                thread_id=thread_id,
+                item_id=str(message_id),
+            )
+            return message_id
+        logger.warning("PlaywrightDM envio_no_verificado thread=%s @%s", thread.id, self.username)
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="send_fail",
+            status="failed",
+            account=self.username,
+            thread_id=thread_id,
+            reason="send_unconfirmed",
+        )
+        return None
+
+    def send_audio_file(self, thread: ThreadLike, audio_path: str) -> Optional[str]:
+        page = self._ensure_page()
+        current_url = page.url or ""
+        current_thread_id = _extract_thread_id(current_url)
+        expected_ids = set(self._expected_thread_ids(thread, post_thread_id=current_thread_id, click_href=""))
+        already_on_target = bool(current_thread_id and (not expected_ids or current_thread_id in expected_ids))
+        if not already_on_target:
+            opened = self._open_thread(thread)
+            if not opened:
+                logger.warning(
+                    "PlaywrightDM send_audio_open_failed thread=%s @%s url=%s expected=%s",
+                    thread.id,
+                    self.username,
+                    current_url,
+                    sorted(expected_ids),
+                )
+                return None
+            page = self._ensure_page()
+
+        audio_file = Path(str(audio_path or "").strip()).expanduser()
+        if not audio_file.exists():
+            logger.warning("PlaywrightDM audio_file_not_found thread=%s path=%s", thread.id, audio_file)
             return None
 
         try:
-            composer.click()
-            composer.fill(text)
-            composer.press("Enter")
-        except Exception as e:
-            logger.warning("PlaywrightDM no pudo completar acciones de envÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o thread=%s @%s", thread.id, self.username)
-            return None
+            file_input = None
+            for selector in (
+                "input[type='file'][accept*='audio']",
+                "input[type='file'][accept*='m4a']",
+                "input[type='file']",
+            ):
+                locator = page.locator(selector)
+                if locator.count() > 0:
+                    file_input = locator.first
+                    break
+            if file_input is None:
+                logger.warning(
+                    "PlaywrightDM send_audio_no_file_input thread=%s @%s",
+                    thread.id,
+                    self.username,
+                )
+                return None
 
-        message_id = self._verify_sent(thread, text)
-        if not message_id and self._click_send_button(page):
-            message_id = self._verify_sent(thread, text)
-        if message_id:
-            logger.info("PlaywrightDM envio_ok thread=%s msg_id=%s", thread.id, message_id)
-        else:
-            logger.warning("PlaywrightDM envio_no_verificado thread=%s @%s", thread.id, self.username)
-        return message_id
+            before_snapshot = self._latest_outbound_snapshot(page)
+            before_signature = str(before_snapshot.get("signature") or "")
+            file_input.set_input_files(str(audio_file))
+            clicked = self._click_send_button(page)
+            media_id = self._verify_audio_sent(
+                thread,
+                page,
+                previous_signature=before_signature,
+            )
+            if not media_id:
+                logger.warning(
+                    "PlaywrightDM send_audio_not_confirmed thread=%s @%s clicked=%s",
+                    thread.id,
+                    self.username,
+                    clicked,
+                )
+                return None
+            logger.info("PlaywrightDM send_audio_ok thread=%s media_id=%s path=%s", thread.id, media_id, audio_file)
+            return media_id
+        except Exception as exc:
+            logger.warning(
+                "PlaywrightDM send_audio_error thread=%s @%s error=%s",
+                thread.id,
+                self.username,
+                exc,
+            )
+            return None
 
     def _ensure_page(self) -> Page:
         if self._page is not None:
-            self._register_response_listener()
-            return self._page
+            try:
+                if not bool(self._page.is_closed()):
+                    return self._page
+            except Exception:
+                pass
+            self._page = None
 
         if _DM_VERBOSE_PROBES:
             print(style_text(f"[PlaywrightDM] Iniciando navegador para @{self.username}...", color=Fore.WHITE))
@@ -2108,36 +3260,40 @@ class PlaywrightDMClient:
         storage_state = self.storage_state_path(self.username)
         if not storage_state.exists():
             raise RuntimeError(f"No hay sesion Playwright guardada para @{self.username}.")
-
-        self._playwright = sync_playwright().start()
-        launch_kwargs = {
-            "headless": self.headless,
-            "args": list(DEFAULT_ARGS),
-        }
-        if self.slow_mo_ms > 0:
-            launch_kwargs["slow_mo"] = self.slow_mo_ms
-        executable = resolve_playwright_executable(headless=self.headless)
-        if executable:
-            launch_kwargs["executable_path"] = str(executable)
-        self._browser = self._playwright.chromium.launch(**launch_kwargs)
-        proxy_payload = _proxy_from_account(self.account)
-        self._context = self._browser.new_context(
-            storage_state=str(storage_state),
-            proxy=proxy_payload or None,
-            viewport=DEFAULT_VIEWPORT,
-            user_agent=DEFAULT_USER_AGENT,
-            locale=DEFAULT_LOCALE,
-            timezone_id=DEFAULT_TIMEZONE,
-            permissions=[],
-            accept_downloads=False,
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="session_open_start",
+            status="started",
+            account=self.username,
+            headless=self.headless,
         )
-        self._context.set_default_timeout(30_000)
-        self._page = self._context.new_page()
         try:
-            self._page.set_default_navigation_timeout(45_000)
-        except Exception:
-            pass
-        self._register_response_listener()
+            page = self._runtime.open_page(self.account, timeout=90.0)
+            self._page = page
+            self._context = getattr(page, "context", None)
+        except Exception as exc:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="session_open_end",
+                status="failed",
+                account=self.username,
+                error=str(exc) or type(exc).__name__,
+                error_type=type(exc).__name__,
+            )
+            raise
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="session_open_end",
+            status="ok",
+            account=self.username,
+        )
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="browser_open",
+            status="ok",
+            account=self.username,
+            url=str(getattr(self._page, "url", "") or ""),
+        )
         return self._page
 
     def _register_response_listener(self) -> None:
@@ -2203,8 +3359,9 @@ class PlaywrightDMClient:
 
         bucket = self._api_messages_by_thread.setdefault(thread_id, {})
         existing = bucket.get(item_id)
+        seen_at = time.time()
         if existing is not None:
-            # Conservar el mejor contenido si la misma key llega mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltiples veces.
+            # Conservar el mejor contenido si la misma key llega mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltiples veces.
             merged = _APIMessageRecord(
                 thread_id=thread_id,
                 sender_id=message.sender_id or existing.sender_id,
@@ -2214,29 +3371,41 @@ class PlaywrightDMClient:
                 text=message.text or existing.text,
             )
             if merged == existing:
-                self._api_thread_last_seen[thread_id] = time.time()
+                self._api_thread_last_seen[thread_id] = seen_at
                 return False
             bucket[item_id] = merged
-            self._api_thread_last_seen[thread_id] = time.time()
-            self._trim_api_cache()
+            self._api_thread_last_seen[thread_id] = seen_at
+            self._trim_api_cache(thread_id=thread_id)
             return True
 
         bucket[item_id] = message
-        self._api_thread_last_seen[thread_id] = time.time()
-        self._trim_api_cache()
+        self._api_thread_last_seen[thread_id] = seen_at
+        self._trim_api_cache(thread_id=thread_id)
         return True
 
-    def _trim_api_cache(self) -> None:
-        for thread_id, bucket in list(self._api_messages_by_thread.items()):
-            overflow = len(bucket) - _DM_API_CACHE_MAX_PER_THREAD
-            if overflow <= 0:
-                continue
-            ordered = sorted(
-                bucket.values(),
-                key=lambda item: (item.timestamp, item.item_id),
-            )
-            for old in ordered[:overflow]:
-                bucket.pop(old.item_id, None)
+    def _trim_api_cache(self, *, thread_id: Optional[str] = None) -> None:
+        if thread_id is not None:
+            bucket = self._api_messages_by_thread.get(thread_id)
+            if bucket:
+                overflow = len(bucket) - _DM_API_CACHE_MAX_PER_THREAD
+                if overflow > 0:
+                    ordered = sorted(
+                        bucket.values(),
+                        key=lambda item: (item.timestamp, item.item_id),
+                    )
+                    for old in ordered[:overflow]:
+                        bucket.pop(old.item_id, None)
+        else:
+            for current_thread_id, bucket in list(self._api_messages_by_thread.items()):
+                overflow = len(bucket) - _DM_API_CACHE_MAX_PER_THREAD
+                if overflow <= 0:
+                    continue
+                ordered = sorted(
+                    bucket.values(),
+                    key=lambda item: (item.timestamp, item.item_id),
+                )
+                for old in ordered[:overflow]:
+                    bucket.pop(old.item_id, None)
         overflow_threads = len(self._api_messages_by_thread) - _DM_API_CACHE_MAX_THREADS
         if overflow_threads <= 0:
             return
@@ -2521,11 +3690,6 @@ class PlaywrightDMClient:
                 page.wait_for_timeout(80)
             except Exception:
                 break
-        has_any_cached, any_cached_thread_id = self._thread_has_cached_api_messages(
-            list(baseline_counts.keys())
-        )
-        if has_any_cached:
-            return True, any_cached_thread_id
         return False, matched_thread_id
 
     def _get_api_messages_for_thread(
@@ -2569,11 +3733,36 @@ class PlaywrightDMClient:
         return ordered
 
     def _ensure_inbox_workspace_fast(self) -> None:
-        """
-        Prepara contexto mínimo para fetch por endpoint sin esperar filas del inbox.
-        Evita bloqueos largos del flujo memory-first.
-        """
         page = self._ensure_page()
+        from src.inbox.conversation_sync import ensure_inbox_page
+
+        try:
+            self._runtime.run_async(ensure_inbox_page(page, timeout_ms=_DM_INBOX_FAST_GOTO_TIMEOUT_MS), timeout=30.0)
+        except Exception as exc:
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="inbox_ready",
+                status="failed",
+                account=self.username,
+                reason="inbox_not_ready",
+                error=str(exc) or type(exc).__name__,
+            )
+            raise
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="inbox_ready",
+            status="ok",
+            account=self.username,
+            url=str(getattr(page, "url", "") or ""),
+        )
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="workspace_ready",
+            status="ok",
+            account=self.username,
+            url=str(getattr(page, "url", "") or ""),
+        )
+        return
         current_url = str(page.url or "")
         is_direct_workspace = ("/direct/inbox/" in current_url) or ("/direct/t/" in current_url)
         if not is_direct_workspace:
@@ -2602,7 +3791,7 @@ class PlaywrightDMClient:
                 health_store.update_from_playwright_status(self.username, status, reason=status)
             except Exception:
                 pass
-            if status != "alive":
+            if status != "VIVA":
                 logger.warning(
                     "PlaywrightDM account_status_stop account=@%s status=%s url=%s",
                     self.username,
@@ -2616,6 +3805,9 @@ class PlaywrightDMClient:
         self._assert_logged_in(page)
 
     def _open_inbox(self, force_reload: bool = False) -> None:
+        del force_reload
+        self._ensure_inbox_workspace_fast()
+        return
         page = self._ensure_page()
         if not force_reload and INBOX_URL in (page.url or ""):
             # Ya estamos en el inbox, no recargar
@@ -2636,7 +3828,7 @@ class PlaywrightDMClient:
                 health_store.update_from_playwright_status(self.username, status, reason=status)
             except Exception:
                 pass
-            if status != "alive":
+            if status != "VIVA":
                 logger.warning(
                     "PlaywrightDM account_status_stop account=@%s status=%s url=%s",
                     self.username,
@@ -2682,7 +3874,7 @@ class PlaywrightDMClient:
                 continue
 
         if not found_container and not rows_ready:
-            # Si ninguno es visible de inmediato, esperar brevemente al mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡s probable
+            # Si ninguno es visible de inmediato, esperar brevemente al mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡s probable
             try:
                 page.wait_for_selector("div[role='main'], main, div[role='navigation']", timeout=10_000)
                 # Re-chequear
@@ -2726,7 +3918,23 @@ class PlaywrightDMClient:
                 except Exception:
                     count = 0
                 logger.info("PlaywrightDM row_selector_count selector=%s count=%s", selector, count)
+            log_browser_stage(
+                component="playwright_dm_client",
+                stage="inbox_ready",
+                status="failed",
+                account=self.username,
+                reason="rows_not_ready",
+                url=page.url,
+            )
+            raise RuntimeError(f"Inbox not ready for @{self.username}.")
         logger.info("PlaywrightDM inbox_abierto account=@%s", self.username)
+        log_browser_stage(
+            component="playwright_dm_client",
+            stage="inbox_ready",
+            status="ok",
+            account=self.username,
+            url=page.url,
+        )
         time.sleep(1)
 
     def _dismiss_overlays(self, page: Page) -> None:
@@ -2746,7 +3954,7 @@ class PlaywrightDMClient:
                 for idx in range(dialog_count):
                     try:
                         dialog = dialogs.nth(idx)
-                        # Buscar botÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de cierre dentro del dialog
+                        # Buscar botÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de cierre dentro del dialog
                         close_selectors = [
                             "button[aria-label='Cerrar']",
                             "button[aria-label='Close']",
@@ -2818,14 +4026,14 @@ class PlaywrightDMClient:
             except Exception:
                 continue
         
-        # CRÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂTICO: Siempre re-chequear login inputs al final (no depender del chequeo inicial)
-        # porque pueden aparecer despuÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©s de cerrar otros overlays
+        # CRÃTICO: Siempre re-chequear login inputs al final (no depender del chequeo inicial)
+        # porque pueden aparecer despuÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©s de cerrar otros overlays
         try:
             has_login_after_close = page.locator("input[name='username'], input[name='password']").count() > 0
             if has_login_after_close:
                 raise RuntimeError(
                     f"Overlay de login detectado y no se pudo cerrar para @{self.username}. "
-                    "SesiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n posiblemente invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lida."
+                    "SesiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n posiblemente invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lida."
                 )
         except RuntimeError:
             raise
@@ -2834,7 +4042,7 @@ class PlaywrightDMClient:
 
     def return_to_inbox(self) -> None:
         """
-        Vuelve a la vista del inbox sin recargar la pÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡gina si es posible.
+        Vuelve a la vista del inbox sin recargar la pÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡gina si es posible.
         """
         page = self._ensure_page()
         current_url = page.url or ""
@@ -2861,23 +4069,68 @@ class PlaywrightDMClient:
         except Exception:
             self._open_inbox()
 
-    def _open_thread(self, thread: ThreadLike) -> bool:
+    def _open_thread(
+        self,
+        thread: ThreadLike,
+        *,
+        visual_timeout_ms: Optional[int] = None,
+        network_timeout_ms: Optional[int] = None,
+        force_workspace: bool = False,
+        prefer_cache: bool = False,
+    ) -> bool:
         """
         [CLICK-FIRST] Intenta abrir un thread y valida post-click.
         Retorna True si el thread es un DM real (/direct/t/ + composer visible).
         """
+        del network_timeout_ms, force_workspace, prefer_cache
+        return self.open_thread_by_href(
+            str(getattr(thread, "link", "") or "") or THREAD_URL_TEMPLATE.format(thread_id=str(getattr(thread, "id", "") or "").strip()),
+            visual_timeout_ms=visual_timeout_ms,
+        )
         page = self._ensure_page()
+        visual_timeout_value = (
+            _DM_THREAD_VISUAL_SYNC_TIMEOUT_MS
+            if visual_timeout_ms is None
+            else max(1_000, int(visual_timeout_ms))
+        )
+        network_timeout_value = (
+            _DM_THREAD_NETWORK_SYNC_TIMEOUT_MS
+            if network_timeout_ms is None
+            else max(1_000, int(network_timeout_ms))
+        )
+        current_url = page.url or ""
+        row_stale_detected = False
+        self._set_last_open_thread_diag(
+            pre_url=current_url,
+            post_url=current_url,
+            was_in_thread=bool("/direct/t/" in current_url),
+            visual_wait_ms=0,
+            network_wait_ms=0,
+            failed_condition="not_started",
+            row_stale=False,
+            visual_timeout_ms=visual_timeout_value,
+            network_timeout_ms=network_timeout_value,
+        )
 
         # 1. Asegurar workspace Direct sin forzar "back" en cada thread.
-        current_url = page.url or ""
-        if not self._is_in_direct_workspace(page):
-            self._open_inbox()
-        elif "/direct/t/" in current_url:
-            self.return_to_inbox()
+        if force_workspace:
+            try:
+                self._ensure_inbox_workspace_fast()
+            except Exception:
+                pass
+            try:
+                self._open_inbox(force_reload=False)
+            except Exception:
+                pass
+        else:
+            if not self._is_in_direct_workspace(page):
+                self._open_inbox()
+            elif "/direct/t/" in current_url:
+                self.return_to_inbox()
 
         # 2. Intentar clickear por indice usando el selector cacheado del scan
         # source_index path
-        if thread.source_index != -1:
+        if not prefer_cache and thread.source_index != -1:
             meta = self._thread_cache_meta.get(thread.id, {})
             row_selector = meta.get("selector") or THREAD_ROW_SELECTOR
             thread_link_id = _extract_thread_id(str(getattr(thread, "link", "") or ""))
@@ -2958,6 +4211,7 @@ class PlaywrightDMClient:
                                 expected_ids.intersection(row_ids)
                             )
                             if not title_matches or not id_matches:
+                                row_stale_detected = True
                                 logger.info(
                                     "PlaywrightDM open_thread_skip_stale_index account=@%s thread_id=%s selector=%s idx=%s expected_ids=%s row_ids=%s expected_title=%s row_title=%s row=%s",
                                     self.username,
@@ -2988,11 +4242,18 @@ class PlaywrightDMClient:
                                     row_preview=row_preview,
                                     click_href=click_href,
                                     baseline_counts=baseline_counts,
+                                    visual_timeout_ms=visual_timeout_value,
+                                    network_timeout_ms=network_timeout_value,
+                                    row_stale=row_stale_detected,
                                 ):
                                     return True
                                 if not self._is_in_direct_workspace(page):
                                     self.return_to_inbox()
                     else:
+                        self._set_last_open_thread_diag(
+                            failed_condition="missing_row",
+                            row_stale=row_stale_detected,
+                        )
                         logger.error(
                             "PlaywrightDM open_thread_missing_row account=@%s thread_id=%s selector=%s idx=%s row_count=%s",
                             self.username,
@@ -3002,6 +4263,10 @@ class PlaywrightDMClient:
                             row_count,
                         )
                 except Exception as exc:
+                    self._set_last_open_thread_diag(
+                        failed_condition="click_error",
+                        row_stale=row_stale_detected,
+                    )
                     logger.error(
                         "PlaywrightDM open_thread_click_error account=@%s thread_id=%s selector=%s idx=%s error=%s",
                         self.username,
@@ -3011,9 +4276,24 @@ class PlaywrightDMClient:
                         exc,
                     )
             
-        if self._open_thread_by_cache(thread):
+        if self._open_thread_by_cache(
+            thread,
+            visual_timeout_ms=visual_timeout_value,
+            network_timeout_ms=network_timeout_value,
+            row_stale=row_stale_detected,
+        ):
             return True
 
+        final_url = ""
+        try:
+            final_url = str(self._ensure_page().url or "")
+        except Exception:
+            final_url = ""
+        self._set_last_open_thread_diag(
+            post_url=final_url,
+            failed_condition="open_thread_failed",
+            row_stale=row_stale_detected,
+        )
         logger.error(
             "PlaywrightDM open_thread_failed account=@%s thread_id=%s title=%s",
             self.username,
@@ -3122,6 +4402,20 @@ class PlaywrightDMClient:
                 continue
         return False
 
+    def _set_last_open_thread_diag(self, **payload: object) -> None:
+        previous = (
+            dict(self._last_open_thread_diag)
+            if isinstance(self._last_open_thread_diag, dict)
+            else {}
+        )
+        previous.update(payload)
+        self._last_open_thread_diag = previous
+
+    def _get_last_open_thread_diag(self) -> dict[str, object]:
+        if isinstance(self._last_open_thread_diag, dict):
+            return dict(self._last_open_thread_diag)
+        return {}
+
     def _validate_open_state(
         self,
         thread: ThreadLike,
@@ -3132,14 +4426,29 @@ class PlaywrightDMClient:
         row_preview: str,
         click_href: str,
         baseline_counts: Optional[dict[str, int]] = None,
+        visual_timeout_ms: Optional[int] = None,
+        network_timeout_ms: Optional[int] = None,
+        row_stale: bool = False,
     ) -> bool:
         page = self._ensure_page()
         pre_thread_id = _extract_thread_id(pre_url)
+        visual_timeout_value = (
+            _DM_THREAD_VISUAL_SYNC_TIMEOUT_MS
+            if visual_timeout_ms is None
+            else max(1_000, int(visual_timeout_ms))
+        )
+        network_timeout_value = (
+            _DM_THREAD_NETWORK_SYNC_TIMEOUT_MS
+            if network_timeout_ms is None
+            else max(1_000, int(network_timeout_ms))
+        )
 
+        visual_started = time.perf_counter()
         visual_ok, visual_state = self._wait_for_visual_thread_sync(
             page,
-            timeout_ms=_DM_THREAD_VISUAL_SYNC_TIMEOUT_MS,
+            timeout_ms=visual_timeout_value,
         )
+        visual_wait_ms = int((time.perf_counter() - visual_started) * 1000.0)
         post_url = str(visual_state.get("post_url") or (page.url or ""))
         post_thread_id = str(visual_state.get("post_thread_id") or _extract_thread_id(post_url))
         composer_visible = bool(visual_state.get("composer_visible"))
@@ -3164,6 +4473,17 @@ class PlaywrightDMClient:
                 message_panel_visible,
             )
             self._dismiss_transient_overlay(page)
+            self._set_last_open_thread_diag(
+                pre_url=pre_url,
+                post_url=post_url,
+                was_in_thread=bool("/direct/t/" in str(pre_url or "")),
+                visual_wait_ms=visual_wait_ms,
+                network_wait_ms=0,
+                failed_condition="visual_sync",
+                row_stale=bool(row_stale),
+                visual_timeout_ms=visual_timeout_value,
+                network_timeout_ms=network_timeout_value,
+            )
             return False
 
         expected_thread_ids = self._expected_thread_ids(
@@ -3174,12 +4494,40 @@ class PlaywrightDMClient:
         baseline = dict(baseline_counts or {})
         for thread_id in expected_thread_ids:
             baseline.setdefault(str(thread_id), 0)
+        network_started = time.perf_counter()
         network_ok, network_thread_id = self._wait_for_thread_network_sync(
             page,
             expected_thread_ids=expected_thread_ids,
             baseline_counts=baseline,
-            timeout_ms=_DM_THREAD_NETWORK_SYNC_TIMEOUT_MS,
+            timeout_ms=network_timeout_value,
         )
+        network_wait_ms = int((time.perf_counter() - network_started) * 1000.0)
+        if not network_ok and visual_ok:
+            quick_started = time.perf_counter()
+            quick_timeout_ms = max(250, min(1_200, int(network_timeout_value * 0.35)))
+            try:
+                self._get_api_messages_for_thread(
+                    thread,
+                    page,
+                    timeout_ms=quick_timeout_ms,
+                )
+            except Exception:
+                pass
+            quick_ok, quick_thread_id = self._thread_has_new_api_messages(
+                expected_thread_ids,
+                baseline_counts=baseline,
+            )
+            if not quick_ok:
+                cached_ok, cached_thread_id = self._thread_has_cached_api_messages(
+                    expected_thread_ids,
+                )
+                if cached_ok:
+                    quick_ok = True
+                    quick_thread_id = cached_thread_id
+            network_wait_ms += int((time.perf_counter() - quick_started) * 1000.0)
+            if quick_ok:
+                network_ok = True
+                network_thread_id = quick_thread_id
         if not network_ok:
             logger.error(
                 "PlaywrightDM open_thread_network_sync_error account=@%s target_thread=%s selector=%s idx=%s row=%s expected_thread_ids=%s pre_url=%s post_url=%s click_href=%s",
@@ -3192,6 +4540,17 @@ class PlaywrightDMClient:
                 pre_url,
                 post_url,
                 click_href,
+            )
+            self._set_last_open_thread_diag(
+                pre_url=pre_url,
+                post_url=post_url,
+                was_in_thread=bool("/direct/t/" in str(pre_url or "")),
+                visual_wait_ms=visual_wait_ms,
+                network_wait_ms=network_wait_ms,
+                failed_condition="network_sync",
+                row_stale=bool(row_stale),
+                visual_timeout_ms=visual_timeout_value,
+                network_timeout_ms=network_timeout_value,
             )
             return False
 
@@ -3218,6 +4577,17 @@ class PlaywrightDMClient:
             idx,
             row_preview,
             post_url,
+        )
+        self._set_last_open_thread_diag(
+            pre_url=pre_url,
+            post_url=post_url,
+            was_in_thread=bool("/direct/t/" in str(pre_url or "")),
+            visual_wait_ms=visual_wait_ms,
+            network_wait_ms=network_wait_ms,
+            failed_condition="ok",
+            row_stale=bool(row_stale),
+            visual_timeout_ms=visual_timeout_value,
+            network_timeout_ms=network_timeout_value,
         )
         return True
 
@@ -3259,7 +4629,7 @@ class PlaywrightDMClient:
                 continue
         return container.locator(_MESSAGE_NODE_SELECTORS[0])
 
-    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (usaba _THREAD_ANCHOR_SELECTORS eliminadas)
+    # LEGACY: FunciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n deshabilitada - ya no se usa (usaba _THREAD_ANCHOR_SELECTORS eliminadas)
     # def _select_thread_anchor(...)
 
     def _locator_first_attribute(self, locator, attr_name: str, *, timeout_ms: int = 300) -> str:
@@ -3312,7 +4682,7 @@ class PlaywrightDMClient:
 
     def _log_navigation_state(self, label: str) -> None:
         """
-        Probe de diagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico para saber exactamente donde estamos y quÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© vemos.
+        Probe de diagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico para saber exactamente donde estamos y quÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© vemos.
         """
         try:
             if self._page is None:
@@ -3369,7 +4739,14 @@ class PlaywrightDMClient:
 
         return bool(visual_ok and is_in_thread and found_composer and message_panel_visible)
 
-    def _open_thread_by_cache(self, thread: ThreadLike) -> bool:
+    def _open_thread_by_cache(
+        self,
+        thread: ThreadLike,
+        *,
+        visual_timeout_ms: Optional[int] = None,
+        network_timeout_ms: Optional[int] = None,
+        row_stale: bool = False,
+    ) -> bool:
         page = self._ensure_page()
         meta = self._thread_cache_meta.get(thread.id)
         if not meta:
@@ -3525,6 +4902,9 @@ class PlaywrightDMClient:
                     row_preview=row_preview,
                     click_href=click_href,
                     baseline_counts=baseline_counts,
+                    visual_timeout_ms=visual_timeout_ms,
+                    network_timeout_ms=network_timeout_ms,
+                    row_stale=row_stale,
                 ):
                     return True
                 if not self._is_in_direct_workspace(page):
@@ -3554,25 +4934,60 @@ class PlaywrightDMClient:
         for selector in _COMPOSER_SELECTORS:
             try:
                 loc = page.locator(selector)
-                if loc.count():
-                    return loc.first
+                total = loc.count()
             except Exception:
                 continue
+            if total <= 0:
+                continue
+            for idx in range(min(total, 5)):
+                candidate = loc.nth(idx)
+                try:
+                    if not candidate.is_visible():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    is_editable = bool(
+                        candidate.evaluate(
+                            "el => !!el && ("
+                            "String((el && el.tagName) || '').toLowerCase() === 'textarea' || "
+                            "!!el.isContentEditable || "
+                            "String((el.getAttribute && el.getAttribute('contenteditable')) || '').toLowerCase() === 'true'"
+                            ")"
+                        )
+                    )
+                except Exception:
+                    is_editable = True
+                if not is_editable:
+                    continue
+                return candidate
         return None
 
     def _click_send_button(self, page: Page) -> bool:
         for selector in _SEND_BUTTON_SELECTORS:
             try:
                 loc = page.locator(selector)
-                if loc.count() <= 0:
+                total = loc.count()
+                if total <= 0:
                     continue
-                btn = loc.first
-                try:
-                    btn.click(timeout=1_500)
-                    return True
-                except Exception:
-                    btn.click(timeout=1_500, force=True)
-                    return True
+                for idx in range(min(total, 3)):
+                    btn = loc.nth(idx)
+                    try:
+                        if not btn.is_visible():
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        if btn.is_disabled():
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        btn.click(timeout=1_500)
+                        return True
+                    except Exception:
+                        btn.click(timeout=1_500, force=True)
+                        return True
             except Exception:
                 continue
         return False
@@ -3615,6 +5030,138 @@ class PlaywrightDMClient:
         except Exception:
             pass
         return False
+
+    def _node_has_audio_payload(self, node) -> bool:
+        for selector in (
+            "audio",
+            "source[type*='audio']",
+            "[data-testid*='audio']",
+            "[aria-label*='audio']",
+            "[aria-label*='Audio']",
+            "a[href*='.mp3']",
+            "a[href*='.m4a']",
+            "a[href*='.wav']",
+            "a[href*='.ogg']",
+        ):
+            try:
+                if node.locator(selector).count() > 0:
+                    return True
+            except Exception:
+                continue
+        text_value = ""
+        try:
+            text_value = (node.inner_text() or "").strip().lower()
+        except Exception:
+            text_value = ""
+        if not text_value:
+            return False
+        return any(
+            token in text_value
+            for token in (
+                "mensaje de voz",
+                "nota de voz",
+                "voice message",
+                "audio message",
+            )
+        )
+
+    def _node_has_upload_in_progress(self, node) -> bool:
+        for selector in (
+            "[role='progressbar']",
+            "progress",
+            "[aria-busy='true']",
+            "[data-testid*='progress']",
+            "[data-testid*='upload']",
+            "[aria-label*='Uploading']",
+            "[aria-label*='Subiendo']",
+            "[aria-label*='Procesando']",
+            "[aria-label*='Sending']",
+        ):
+            try:
+                if node.locator(selector).count() > 0:
+                    return True
+            except Exception:
+                continue
+        text_value = ""
+        try:
+            text_value = (node.inner_text() or "").strip().lower()
+        except Exception:
+            text_value = ""
+        if not text_value:
+            return False
+        return any(
+            token in text_value
+            for token in (
+                "upload",
+                "subiendo",
+                "enviando",
+                "processing",
+                "procesando",
+            )
+        )
+
+    def _latest_outbound_snapshot(self, page: Page) -> dict[str, object]:
+        snapshot: dict[str, object] = {
+            "found": False,
+            "signature": "",
+            "message_id": "",
+            "is_audio": False,
+            "uploading": False,
+        }
+        try:
+            nodes = self._collect_message_nodes(page)
+            total_nodes = nodes.count()
+        except Exception:
+            return snapshot
+        if total_nodes <= 0:
+            return snapshot
+        for idx in range(total_nodes - 1, -1, -1):
+            node = nodes.nth(idx)
+            try:
+                if not self._is_outbound(node):
+                    continue
+            except Exception:
+                continue
+            message_id = _extract_message_id(node)
+            text_value = _normalize_message_text(_extract_message_text(node))
+            is_audio = self._node_has_audio_payload(node)
+            uploading = self._node_has_upload_in_progress(node)
+            signature = f"{idx}|{message_id}|{text_value[:80]}|audio={int(is_audio)}|up={int(uploading)}"
+            snapshot = {
+                "found": True,
+                "signature": signature,
+                "message_id": message_id,
+                "is_audio": is_audio,
+                "uploading": uploading,
+            }
+            return snapshot
+        return snapshot
+
+    def _verify_audio_sent(
+        self,
+        thread: ThreadLike,
+        page: Page,
+        *,
+        previous_signature: str,
+    ) -> Optional[str]:
+        timeout_seconds = max(0.1, float(_DM_AUDIO_VERIFY_TIMEOUT_MS) / 1000.0)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            snapshot = self._latest_outbound_snapshot(page)
+            if bool(snapshot.get("found", False)):
+                signature = str(snapshot.get("signature") or "")
+                is_new_outbound = bool(signature) and signature != previous_signature
+                if (is_new_outbound or not previous_signature) and bool(snapshot.get("is_audio", False)):
+                    if not bool(snapshot.get("uploading", False)):
+                        message_id = str(snapshot.get("message_id") or "").strip()
+                        if message_id:
+                            return message_id
+                        return _hash_message_id(thread.id, self.user_id, "__audio__", time.time())
+            try:
+                page.wait_for_timeout(_DM_AUDIO_VERIFY_POLL_MS)
+            except Exception:
+                break
+        return None
 
     def _verify_sent(self, thread: ThreadLike, text: str) -> Optional[str]:
         deadline = time.time() + VERIFY_TIMEOUT_S
@@ -3675,14 +5222,14 @@ class PlaywrightDMClient:
     def debug_dump_inbox(self, reason: str) -> str:
         page = self._ensure_page()
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        log_dir = Path("storage") / "logs"
+        log_dir = logs_root(Path(__file__).resolve().parents[1])
         log_dir.mkdir(parents=True, exist_ok=True)
         base = log_dir / f"{DM_DEBUG_DIRNAME}_{self.username}_{timestamp}"
         try:
             logger.info("PlaywrightDM debug_dump reason=%s url=%s", reason, page.url)
         except Exception:
             pass
-        # Selectores mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nimos para debugging
+        # Selectores mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nimos para debugging
         debug_selectors = (
             "div[role='main'] div[role='listitem']",
             "div[role='main'] div[role='row']",
@@ -3700,12 +5247,12 @@ class PlaywrightDMClient:
             pass
         try:
             html = page.content()
-            Path(str(base) + ".html").write_text(html, encoding="utf-8", errors="ignore")
+            atomic_write_text(Path(str(base) + ".html"), html)
         except Exception:
             pass
         try:
             main_text = page.locator("div[role='main']").inner_text()
-            Path(str(base) + ".txt").write_text(main_text, encoding="utf-8", errors="ignore")
+            atomic_write_text(Path(str(base) + ".txt"), main_text)
         except Exception:
             pass
         return str(base)
@@ -4145,6 +5692,48 @@ def _extract_api_messages_from_payload(
     messages: list[_APIMessageRecord] = []
     missing_timestamp: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+
+    if isinstance(payload, dict):
+        direct_thread_id = _extract_thread_id_from_node(payload)
+        direct_items = payload.get("items")
+        if direct_thread_id and isinstance(direct_items, list):
+            self_user_ids = {str(self_user_id or "").strip()}
+            viewer = payload.get("viewer")
+            if isinstance(viewer, dict):
+                for key in (
+                    "interop_messaging_user_fbid",
+                    "id",
+                    "pk",
+                    "user_id",
+                    "viewer_id",
+                ):
+                    value = _coerce_str(viewer.get(key))
+                    if value:
+                        self_user_ids.add(value)
+            for key in ("viewer_id", "viewer_fbid", "viewer_pk", "viewer_user_id"):
+                value = _coerce_str(payload.get(key))
+                if value:
+                    self_user_ids.add(value)
+            self_user_ids.discard("")
+            for item in direct_items:
+                if not isinstance(item, dict):
+                    continue
+                parsed, missing = _extract_api_message_from_node(
+                    item,
+                    context_thread_id=direct_thread_id,
+                    self_user_id=self_user_id,
+                    self_user_ids=self_user_ids,
+                )
+                if parsed is not None:
+                    dedup_key = (parsed.thread_id, parsed.item_id)
+                    if dedup_key in seen:
+                        continue
+                    seen.add(dedup_key)
+                    messages.append(parsed)
+                elif missing is not None:
+                    missing_timestamp.append(missing)
+            return messages, missing_timestamp
+
     self_user_ids = {str(self_user_id or "").strip()}
     self_user_ids.update(_extract_payload_self_user_ids(payload))
     self_user_ids.discard("")
@@ -4626,7 +6215,7 @@ def _thread_unread_count(node) -> int:
     if any(token in aria for token in _UNREAD_HINTS):
         return 1
 
-    # BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºsqueda de badge por aria-label
+    # BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºsqueda de badge por aria-label
     try:
         badge = node.locator("span[aria-label*='unread'], span[aria-label*='sin leer'], span[aria-label*='no leido']")
         if badge.count():
@@ -4634,8 +6223,8 @@ def _thread_unread_count(node) -> int:
     except Exception:
         pass
 
-    # BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºsqueda por "punto azul" (visual) - Instagram suele usar un div/span con fondo azul
-    # El color rgb(0, 149, 246) es el azul caracterÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­stico de Instagram
+    # BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºsqueda por "punto azul" (visual) - Instagram suele usar un div/span con fondo azul
+    # El color rgb(0, 149, 246) es el azul caracterÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­stico de Instagram
     try:
         blue_dot = node.locator("div[style*='background-color: rgb(0, 149, 246)'], span[style*='background-color: rgb(0, 149, 246)']")
         if blue_dot.count() > 0:

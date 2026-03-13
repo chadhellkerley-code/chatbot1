@@ -1,0 +1,94 @@
+{
+  "generated_on": "2026-03-06",
+  "system_integrity_score": 61,
+  "backend_readability_score": 57,
+  "gui_architecture_score": 55,
+  "storage_health_score": 79,
+  "runtime_integrity_score": 52,
+  "critical_failures": [
+    "PlaywrightService browser-start smoke failed with PW-BROWSER-LAYER-FAILED.",
+    "Default pytest collection is broken by interactive root test_*.py scripts."
+  ],
+  "warnings": [
+    "src/playwright_service.py is pinned to Chromium revision 1200 while ms-playwright currently contains 1155.",
+    "17 root compatibility wrappers still duplicate the new package layout.",
+    "gui/main_window.py and core/responder.py remain monoliths.",
+    "Storage writes are not fully unified onto core/storage_atomic.py.",
+    "docs/ still describe older layouts.",
+    "optin_browser/ and src/opt_in/ overlap."
+  ],
+  "cleanup_candidates": [
+    "accounts.py",
+    "ig.py",
+    "leads.py",
+    "responder.py",
+    "session_store.py",
+    "storage.py",
+    "whatsapp.py",
+    "gui_app.py",
+    "io_adapter.py",
+    "main_window.py",
+    "client_launcher.py",
+    "owner_gui_launcher.py",
+    "runtime_parity.py",
+    "actions/",
+    "cd",
+    "git",
+    "python",
+    "license_backend_menu.py",
+    "test_headless_send.py",
+    "test_login_improved.py",
+    "test_playwright_login.py",
+    "tools/test_integration_send.py",
+    "Station ID/"
+  ],
+  "workflow_validation": {
+    "account_management": {
+      "add_account": "passed",
+      "login": "partial",
+      "load_session": "passed",
+      "delete_account": "passed"
+    },
+    "proxy_system": {
+      "assign_proxy": "passed",
+      "launch_browser_with_proxy": "not_certified"
+    },
+    "instagram_interaction": {
+      "open_inbox": "partial",
+      "open_thread": "partial",
+      "navigate_reels": "not_executed_live",
+      "perform_like": "not_executed_live"
+    },
+    "lead_system": {
+      "import_leads": "passed",
+      "filter_leads": "passed",
+      "save_filtered_list": "passed",
+      "delete_lead_database": "passed"
+    },
+    "messaging": {
+      "send_message": "partial",
+      "confirm_delivery_in_thread": "partial",
+      "confirm_sent_log_entry": "partial"
+    },
+    "responder": {
+      "detect_message": "passed_at_test_level",
+      "generate_response": "passed_at_test_level",
+      "send_response": "partial",
+      "schedule_followup": "passed_at_test_level"
+    },
+    "campaign": {
+      "start_campaign": "passed_with_safe_early_return",
+      "process_leads": "partial",
+      "stop_campaign_safely": "partial"
+    }
+  },
+  "validation_summary": {
+    "py_compile": "passed",
+    "strict_import_app": "passed",
+    "strict_import_mainwindow_offscreen": "passed",
+    "pytest_tests_and_tests_optin": "passed_107",
+    "playwright_runtime_start_without_browser": "passed_with_cleanup_warning",
+    "playwright_browser_launch_smoke": "failed",
+    "default_pytest_collect_only": "failed"
+  }
+}

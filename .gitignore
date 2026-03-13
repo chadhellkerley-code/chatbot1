@@ -29,9 +29,21 @@ profiles/
 ms-playwright/
 browsers/
 
+# Runtime generated folders
+runtime/artifacts/
+runtime/browsers/
+runtime/browser_profiles/
+runtime/logs/
+runtime/models/
+runtime/playwright/
+runtime/screenshots/
+runtime/sessions/
+runtime/traces/
+
 # Logs
 *.log
 celery.log
+logs/
 
 # Storage and data
 storage/
@@ -55,10 +67,20 @@ Thumbs.db
 *.bak_*
 pagina.txt
 
+# Codex artifacts
+.codex_*
+
 # Build files
 build/
+!build/
+build/*
+!build/__init__.py
+!build/helpers.py
+!build/build_client.py
+!build/build_owner.py
 dist/
 *.egg-info/
+tools/build_artifacts/
 
 # Specific files
 bool`

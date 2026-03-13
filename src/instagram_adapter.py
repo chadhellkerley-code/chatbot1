@@ -5,9 +5,10 @@ import base64
 import logging
 import os
 import random
+import re
 import time
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 from playwright.async_api import BrowserContext, Page
 from dotenv import load_dotenv
@@ -34,6 +35,15 @@ TOTP_INPUT_SELECTORS = (
     "input[placeholder*='codigo de seguridad']",
     "input[placeholder*='seguridad']",
     "input[type='text'][autocomplete='one-time-code']",
+)
+TOTP_SUBMIT_SELECTORS = (
+    "button:has-text('Confirmar')",
+    "button:has-text('Confirm')",
+    "button:has-text('Continuar')",
+    "button:has-text('Continue')",
+    "button[type='submit']",
+    "div[role='button']:has-text('Confirmar')",
+    "div[role='button']:has-text('Confirm')",
 )
 USERNAME_INPUT_SELECTORS = (
     "input[name='username']",
@@ -101,6 +111,14 @@ TraceFn = Callable[[str], None]
 
 LOGIN_FAILED_DIR = Path(BASE_PROFILES) / "login_failed_screenshots"
 
+INBOX_READY_CHECK_SELECTORS = (
+    "div[role='navigation'][aria-label='Lista de conversaciones']",
+    "div[role='navigation'][aria-label='Conversation list']",
+    "div[role='navigation'][aria-label='List of conversations']",
+    "div[role='navigation'] input[name='searchInput']",
+    "div[role='navigation'] [aria-label='New message']",
+    "div[role='navigation'] [aria-label='Nuevo mensaje']",
+)
 ACCOUNT_DISABLED_TEXT_PATTERNS = (
     r"tu\s+cuenta\s+ha\s+sido\s+desactivad",
     r"tu\s+cuenta\s+ha\s+sido\s+suspendid",
@@ -137,6 +155,47 @@ def _trace(trace: Optional[TraceFn], message: str) -> None:
             trace(message)
         except Exception:
             pass
+
+
+def _is_transient_nav_error(exc: Exception) -> bool:
+    text = str(exc or "")
+    transient_markers = (
+        "ERR_HTTP_RESPONSE_CODE_FAILURE",
+        "ERR_TUNNEL_CONNECTION_FAILED",
+        "ERR_CONNECTION_CLOSED",
+        "ERR_CONNECTION_RESET",
+        "ERR_CONNECTION_TIMED_OUT",
+        "ERR_TIMED_OUT",
+        "Timeout",
+    )
+    return any(marker in text for marker in transient_markers)
+
+
+async def _safe_goto(
+    page: Page,
+    urls: Sequence[str],
+    *,
+    timeout_ms: int = 45_000,
+    trace: Optional[TraceFn] = None,
+) -> tuple[bool, str]:
+    candidates = [str(url or "").strip() for url in urls if str(url or "").strip()]
+    if not candidates:
+        return False, "no_url_candidates"
+    last_error = ""
+    wait_modes = ("domcontentloaded", "commit")
+    for url in candidates:
+        for wait_mode in wait_modes:
+            try:
+                _trace(trace, f"Navegar -> {url} ({wait_mode})")
+                await page.goto(url, wait_until=wait_mode, timeout=max(8_000, int(timeout_ms)))
+                return True, ""
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if _is_transient_nav_error(exc):
+                    await _human_wait(0.15, 0.45)
+                    continue
+                break
+    return False, last_error or "navigation_failed"
 
 
 def _resolve_locator(target, selector: Optional[str]):
@@ -293,8 +352,15 @@ async def _submit_login_form(
         await password_input.wait_for(state="visible", timeout=20_000)
     except Exception:
         # Reintentar navegando al login explícito
+        nav_ok, _nav_error = await _safe_goto(
+            page,
+            (LOGIN_URL, INSTAGRAM_URL),
+            timeout_ms=35_000,
+            trace=trace,
+        )
+        if not nav_ok:
+            return
         try:
-            await page.goto(LOGIN_URL, wait_until="domcontentloaded")
             username_input = page.locator(", ".join(USERNAME_INPUT_SELECTORS)).first
             password_input = page.locator(", ".join(PASSWORD_INPUT_SELECTORS)).first
             await username_input.wait_for(state="visible", timeout=10_000)
@@ -491,6 +557,14 @@ def _resolve_totp_code(
     return None
 
 
+def _normalize_totp_code(raw: Optional[str]) -> str:
+    code = re.sub(r"\D+", "", str(raw or ""))
+    if len(code) < 6:
+        return ""
+    # IG espera normalmente 6 dígitos. Si llega más largo, usar el tramo final.
+    return code[-6:]
+
+
 async def _wait_post_submit(page: Page) -> None:
     try:
         await page.wait_for_load_state("networkidle")
@@ -601,26 +675,60 @@ async def _handle_totp_prompt(
         if not visible:
             return False
 
-        code = _resolve_totp_code(username, totp_secret, totp_provider)
+        code = _normalize_totp_code(_resolve_totp_code(username, totp_secret, totp_provider))
         if not code:
             raise RuntimeError(
                 "2FA required but no TOTP provided"
             )
         _trace(trace, "Fill 2FA TOTP code")
-        await _human_type(totp_input, code)
+        try:
+            await totp_input.fill("")
+            await totp_input.fill(code)
+        except Exception:
+            await _human_type(totp_input, code)
+        try:
+            typed_value = await totp_input.input_value()
+        except Exception:
+            typed_value = ""
+        if _normalize_totp_code(typed_value) != code:
+            await _human_type(totp_input, code)
         try:
             await totp_input.press("Enter")
         except Exception:
             pass
         _trace(trace, "Submit 2FA code")
-        await _click_if_present(
-            page,
-            (
-                "button[type='submit']",
-                "button:has-text('Confirm')",
-                "button:has-text('Confirmar')",
-            ),
-        )
+        await _human_wait(0.2, 0.45)
+        # Si Enter ya disparó la transición, evitamos click prolongado sobre un
+        # botón de confirmación deshabilitado/interceptado.
+        if not await is_logged_in(page) and await _is_two_factor_prompt(page):
+            await _click_if_enabled_fast(
+                page,
+                TOTP_SUBMIT_SELECTORS,
+                timeout_ms=1_000,
+            )
+        # Último recurso: submit de formulario por JS para layouts que bloquean click.
+        if await _is_two_factor_prompt(page):
+            try:
+                await page.evaluate(
+                    """(inputSelectors) => {
+                        const query = inputSelectors.join(",");
+                        const input = document.querySelector(query) || document.querySelector("input[type='text'],input[type='tel']");
+                        if (!input) return false;
+                        const form = input.closest("form");
+                        if (form && typeof form.requestSubmit === "function") {
+                            form.requestSubmit();
+                            return true;
+                        }
+                        if (form) {
+                            form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+                            return true;
+                        }
+                        return false;
+                    }""",
+                    list(TOTP_INPUT_SELECTORS),
+                )
+            except Exception:
+                pass
         await _wait_post_submit(page)
         return True
     except RuntimeError:
@@ -842,6 +950,29 @@ async def _click_if_present(page: Page, selectors: Sequence[str]) -> bool:
     return False
 
 
+async def _click_if_enabled_fast(
+    page: Page,
+    selectors: Sequence[str],
+    *,
+    timeout_ms: int = 1_000,
+) -> bool:
+    per_selector_timeout = max(200, int(timeout_ms))
+    for sel in selectors:
+        try:
+            locator = page.locator(sel).first
+            await locator.wait_for(state="attached", timeout=per_selector_timeout)
+            if not await locator.is_visible():
+                continue
+            if not await locator.is_enabled():
+                continue
+            await locator.click(timeout=per_selector_timeout)
+            await _human_wait(0.05, 0.2)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 async def get_login_errors(page: Page) -> List[str]:
     selectors: Sequence[str] = (
         "[role='alert']",
@@ -867,14 +998,63 @@ async def get_login_errors(page: Page) -> List[str]:
 
 async def check_logged_in(page: Page) -> tuple[bool, str]:
     url = page.url or ""
-    if "accounts/login" in url or "/challenge/" in url:
+    normalized_url = url.lower()
+    if "accounts/login" in normalized_url or "/challenge/" in normalized_url:
         return False, "url_login_or_challenge"
 
+    if "instagram.com" not in normalized_url:
+        return False, "url_not_instagram"
+
+    # Transitional post-login surfaces. These are reached after valid auth and
+    # before final app landing; treat them as authenticated state.
+    if "/accounts/onetap/" in normalized_url:
+        return True, "onetap_url"
+    if "accountscenter.instagram.com/" in normalized_url and "/login" not in normalized_url:
+        return True, "accountscenter_url"
+
+    cookies_ok = False
     try:
-        if await _has_auth_cookies(page.context):
-            return True, "auth_cookies"
+        cookies_ok = await _has_auth_cookies(page.context)
     except Exception:
-        pass
+        cookies_ok = False
+
+    # IG can land on post-login transitional surfaces before rendering inbox/home.
+    # If auth cookies are present here, session is valid.
+    if cookies_ok:
+        if "/accounts/onetap/" in normalized_url:
+            return True, "auth_cookies+onetap"
+        if "accountscenter.instagram.com/" in normalized_url:
+            return True, "auth_cookies+accountscenter"
+
+    async def _first_visible_selector(selectors: Sequence[str], timeout_ms: int = 0) -> Optional[str]:
+        deadline = time.monotonic() + (max(0, timeout_ms) / 1000.0)
+        while True:
+            for sel in selectors:
+                try:
+                    locator = page.locator(sel)
+                    count = await locator.count()
+                except Exception:
+                    continue
+                for idx in range(min(count, 3)):
+                    candidate = locator.nth(idx)
+                    try:
+                        if await candidate.is_visible():
+                            return sel
+                    except Exception:
+                        continue
+            if timeout_ms <= 0 or time.monotonic() >= deadline:
+                return None
+            try:
+                await page.wait_for_timeout(140)
+            except Exception:
+                return None
+
+    # Requiere señales visuales del inbox para considerar la sesión realmente usable.
+    if "/direct/" in normalized_url:
+        inbox_selector = await _first_visible_selector(INBOX_READY_CHECK_SELECTORS, timeout_ms=2_400)
+        if inbox_selector:
+            prefix = "auth_cookies+" if cookies_ok else ""
+            return True, f"{prefix}direct_inbox:{inbox_selector}"
 
     selectors: Sequence[tuple[str, str]] = (
         ("inbox_link", "a[href='/direct/inbox/']"),
@@ -882,27 +1062,28 @@ async def check_logged_in(page: Page) -> tuple[bool, str]:
         ("home_icon", "svg[aria-label='Home']"),
         ("inicio_icon", "svg[aria-label='Inicio']"),
     )
-    for name, sel in selectors:
-        try:
-            locator = page.locator(sel)
-            if await locator.count():
-                try:
-                    await locator.first.wait_for(state="visible", timeout=2_000)
-                except Exception:
-                    pass
-                try:
-                    if await locator.first.is_visible():
-                        return True, f"selector:{name}"
-                except Exception:
-                    return True, f"selector:{name}"
-        except Exception:
-            continue
+    selector_strings = [sel for _, sel in selectors]
+    visible_selector = await _first_visible_selector(
+        selector_strings,
+        timeout_ms=2_200 if cookies_ok else 1_600,
+    )
+    if visible_selector:
+        name = next((key for key, sel in selectors if sel == visible_selector), "ui")
+        prefix = "auth_cookies+" if cookies_ok else ""
+        return True, f"{prefix}selector:{name}"
 
-    if "instagram.com" not in url:
-        return False, "url_not_instagram"
+    if cookies_ok:
+        # Evitar falso positivo cuando todavía estamos en el formulario de login.
+        try:
+            username_visible = await page.locator(", ".join(USERNAME_INPUT_SELECTORS)).first.is_visible()
+            password_visible = await page.locator(", ".join(PASSWORD_INPUT_SELECTORS)).first.is_visible()
+            if username_visible and password_visible:
+                return False, "auth_cookies+login_form_visible"
+        except Exception:
+            pass
+        return True, "auth_cookies_fallback"
 
     return False, "selectors_miss=inbox_link|nav|home_icon|inicio_icon"
-
 
 async def is_logged_in(page: Page) -> bool:
     ok, _reason = await check_logged_in(page)
@@ -921,12 +1102,22 @@ async def human_login(
     retry_on_still_login: bool = True,
 ) -> bool:
     logger.info("Iniciando login humano para @%s", username)
-
-    try:
-        _trace(trace, "Open https://www.instagram.com/")
-        await page.goto(INSTAGRAM_URL, wait_until="domcontentloaded")
-    except Exception:
-        await page.goto(INSTAGRAM_URL)
+    current_url = (page.url or "").lower()
+    already_on_login_surface = False
+    if "instagram.com" in current_url:
+        if "/accounts/login" in current_url or await _is_two_factor_prompt(page):
+            already_on_login_surface = True
+        elif await _has_login_form(page):
+            already_on_login_surface = True
+    if not already_on_login_surface:
+        nav_ok, nav_error = await _safe_goto(
+            page,
+            (INSTAGRAM_URL, LOGIN_URL),
+            timeout_ms=45_000,
+            trace=trace,
+        )
+        if not nav_ok:
+            raise RuntimeError(f"no_se_pudo_abrir_instagram:{nav_error}")
 
     await _human_wait(0.3, 0.6)
     await _accept_cookies_variants(page)
@@ -934,11 +1125,14 @@ async def human_login(
     await _dismiss_cookies(page)
 
     if not await _has_login_form(page):
-        try:
-            _trace(trace, "Open https://www.instagram.com/accounts/login/")
-            await page.goto(LOGIN_URL, wait_until="domcontentloaded")
-        except Exception:
-            await page.goto(LOGIN_URL)
+        nav_login_ok, nav_login_error = await _safe_goto(
+            page,
+            (LOGIN_URL, INSTAGRAM_URL),
+            timeout_ms=35_000,
+            trace=trace,
+        )
+        if not nav_login_ok:
+            raise RuntimeError(f"no_se_pudo_abrir_login:{nav_login_error}")
         await _human_wait(0.2, 0.4)
         await _accept_cookies_variants(page)
         await _ensure_login_view(page)
@@ -986,15 +1180,19 @@ async def human_login(
         # FUERZA BRUTA: Navegación forzada al Inbox solo si ya parece logueado
         if await is_logged_in(page) or "/accounts/onetap/" in (page.url or ""):
             _trace(trace, "Open https://www.instagram.com/direct/inbox/?next=%2F")
-            try:
-                await page.goto(
+            nav_inbox_ok, _nav_inbox_error = await _safe_goto(
+                page,
+                (
                     "https://www.instagram.com/direct/inbox/?next=%2F",
-                    wait_until="domcontentloaded",
-                    timeout=60000,
-                )
+                    "https://www.instagram.com/direct/inbox/",
+                ),
+                timeout_ms=45_000,
+                trace=trace,
+            )
+            if nav_inbox_ok:
                 await _human_wait(3, 5)
-            except Exception as e:
-                logger.warning(f"Error en navegación forzada (pero continuamos): {e}")
+            else:
+                logger.warning("No se pudo forzar navegación al inbox, se continúa con verificación.")
         # Si tras la navegación seguimos en prompt de TOTP, reintenta rellenarlo
         await _resolve_two_factor_flow(
             page,
@@ -1052,20 +1250,26 @@ async def human_login(
     # SALIDA DE EMERGENCIA: Si quedamos en onetap, estamos logueados.
     if "/accounts/onetap/" in (page.url or ""):
         logger.info("Atrapado en /onetap/. Forzando salto a Inbox...")
-        try:
-            await page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded")
+        nav_onetap_ok, _nav_onetap_error = await _safe_goto(
+            page,
+            ("https://www.instagram.com/direct/inbox/",),
+            timeout_ms=35_000,
+            trace=trace,
+        )
+        if nav_onetap_ok:
             await _human_wait(1, 1.5)
-        except Exception:
-            pass
         outcome = "ok"
 
     if outcome == "still_login" and retry_on_still_login:
         # Doble chequeo por si la URL cambio justo despues
         if "/accounts/onetap/" in (page.url or ""):
              logger.info("Detectado /onetap/ tras intento fallido. Asumiendo éxito.")
-             try: 
-                 await page.goto("https://www.instagram.com/direct/inbox/") 
-             except: pass
+             await _safe_goto(
+                 page,
+                 ("https://www.instagram.com/direct/inbox/",),
+                 timeout_ms=35_000,
+                 trace=trace,
+             )
              outcome = "ok"
         else:
             try:
@@ -1079,8 +1283,12 @@ async def human_login(
     # Triple chequeo final
     if outcome == "still_login" and "/accounts/onetap/" in (page.url or ""):
         outcome = "ok"
-        try: await page.goto("https://www.instagram.com/direct/inbox/") 
-        except: pass
+        await _safe_goto(
+            page,
+            ("https://www.instagram.com/direct/inbox/",),
+            timeout_ms=35_000,
+            trace=trace,
+        )
 
     if outcome == "challenge":
         _trace(trace, "FAIL reason=challenge_required")
@@ -1116,6 +1324,55 @@ async def human_login(
     logger.info("Login humano para @%s %s", username, "OK" if success else "FALLO")
     return success
 
+
+class InstagramClientAdapter:
+    """
+    Capa de compatibilidad para tests y llamadas legacy.
+    Mantiene la interfaz do_login/finish_2fa sobre un cliente inyectable.
+    """
+
+    def __init__(
+        self,
+        *,
+        client_factory: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        self._client_factory = client_factory
+        self._client: Optional[Any] = None
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            if not callable(self._client_factory):
+                raise RuntimeError("client_factory no configurado")
+            self._client = self._client_factory()
+        return self._client
+
+    def do_login(self, username: str, password: str) -> bool:
+        normalized_username = str(username or "").strip().lstrip("@")
+        if not normalized_username:
+            raise ValueError("username requerido")
+        if not str(password or ""):
+            raise ValueError("password requerido")
+        client = self._get_client()
+        return bool(
+            client.login(
+                normalized_username,
+                str(password),
+                verification_code=None,
+            )
+        )
+
+    def finish_2fa(self, code: str) -> Any:
+        normalized_code = re.sub(r"\D", "", str(code or ""))
+        if len(normalized_code) < 4:
+            raise ValueError("codigo_2fa_invalido")
+        client = self._get_client()
+        if hasattr(client, "finish_2fa"):
+            return client.finish_2fa(normalized_code)
+        if hasattr(client, "submit_two_factor_code"):
+            return client.submit_two_factor_code(normalized_code)
+        return {"code": normalized_code, "status": "submitted"}
+
+
 async def ensure_logged_in_async(account: dict):
     """
     Compatibilidad async: delega en auth.persistent_login.ensure_logged_in_async.
@@ -1132,3 +1389,4 @@ def ensure_logged_in(account: dict):
     from src.auth.persistent_login import ensure_logged_in as ensure_persistent_login
 
     return ensure_persistent_login(account)
+

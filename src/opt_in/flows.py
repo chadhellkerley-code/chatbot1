@@ -9,9 +9,12 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Page
 
+from paths import campaigns_root
+
 from . import audit, browser_manager, human_engine, login_playwright, session_store
 
-FLOW_DIR = Path("data/flows")
+_BASE_ROOT = Path(__file__).resolve().parents[2]
+FLOW_DIR = campaigns_root(_BASE_ROOT) / "opt_in_flows"
 
 
 class FlowError(Exception):

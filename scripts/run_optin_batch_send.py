@@ -6,9 +6,13 @@ import argparse
 import asyncio
 import csv
 import os
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from src.opt_in import account_loader, audit, browser_manager, messenger_playwright, runner_pool
 

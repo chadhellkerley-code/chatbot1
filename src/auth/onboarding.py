@@ -12,15 +12,18 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from paths import accounts_root
 from src.auth.persistent_login import ChallengeRequired, ensure_logged_in_async
-from src.instagram_adapter import INBOX_URL, check_logged_in, get_login_errors, is_logged_in
+from src.browser_profile_paths import browser_storage_state_path
+from src.instagram_adapter import BASE_URL, INBOX_URL, get_login_errors, is_logged_in
 from src.playwright_service import BASE_PROFILES, PlaywrightService, shutdown
 from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
+from src.runtime.playwright_runtime import run_coroutine_sync
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PROFILE_ROOT = Path(BASE_PROFILES)
-RESULTS_PATH = Path("data") / "onboarding_results.csv"
+RESULTS_PATH = accounts_root(Path(__file__).resolve().parents[2]) / "onboarding_results.csv"
 
 ProxyPayload = Optional[Dict[str, str]]
 AccountPayload = Dict[str, Any]
@@ -55,8 +58,8 @@ def _run_async(coro):
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
-    raise RuntimeError("login_and_persist requiere contexto sync; usa login_and_persist_async.")
+        return run_coroutine_sync(coro, ignore_stop=True)
+    raise RuntimeError("login_account_playwright requiere contexto sync; no usar dentro de un loop activo.")
 
 
 def smart_open_csv(csv_path: Union[str, Path]) -> str:
@@ -313,8 +316,7 @@ def code_provider_prompt(label: str = "Ingresa el cÃ³digo recibido (WhatsApp/S
 
 
 def _profile_path_for(username: str, profile_root: Union[str, Path]) -> Path:
-    root = Path(profile_root or _DEFAULT_PROFILE_ROOT)
-    return root / username / "storage_state.json"
+    return browser_storage_state_path(username, profiles_root=profile_root or _DEFAULT_PROFILE_ROOT)
 
 
 async def login_and_persist_async(
@@ -509,46 +511,88 @@ def _proxy_label(proxy_payload: Optional[Dict[str, str]]) -> str:
     return f"Proxy enabled {hostport}"
 
 
+_INBOX_READY_SELECTORS = (
+    "a[href='/direct/inbox/']",
+    "a[href*='/direct/inbox/']",
+    "a[href*='/direct/t/']",
+    "div[role='navigation'] a[href*='/direct/']",
+    "input[placeholder='Search']",
+    "input[placeholder='Buscar']",
+    "input[name='queryBox']",
+    "svg[aria-label='Direct']",
+    "svg[aria-label='Mensajes']",
+)
+_FEED_READY_SELECTORS = (
+    "svg[aria-label='Home']",
+    "svg[aria-label='Inicio']",
+    "a[href='/']",
+    "nav[role='navigation']",
+    "a[href='/direct/inbox/']",
+)
+_LOGIN_FORM_SELECTORS = (
+    "input[name='username']",
+    "input[name='email']",
+    "input[autocomplete='username']",
+    "input[name='password']",
+    "input[type='password']",
+    "form[action*='login']",
+)
+
+
+async def _first_visible_selector(page, selectors: tuple[str, ...]) -> Optional[str]:
+    for selector in selectors:
+        try:
+            if await page.locator(selector).count():
+                return selector
+        except Exception:
+            continue
+    return None
+
+
+async def confirm_feed_logged_in(page, trace=None) -> tuple[bool, str]:
+    if callable(trace):
+        trace("Wait for feed confirmation")
+        trace(f"Open {BASE_URL}")
+    try:
+        await page.goto(BASE_URL, wait_until="domcontentloaded")
+    except Exception as exc:
+        raise RuntimeError(f"feed_navigation_failed:{exc}") from exc
+
+    url = (page.url or "").lower()
+    login_selector = await _first_visible_selector(page, _LOGIN_FORM_SELECTORS)
+    if "/accounts/login" in url or "/accounts/onetap" in url or login_selector:
+        return False, login_selector or "login_required"
+    if "/challenge/" in url:
+        return False, "challenge_required"
+
+    feed_selector = await _first_visible_selector(page, _FEED_READY_SELECTORS)
+    normalized_base = BASE_URL.rstrip("/").lower()
+    normalized_url = url.rstrip("/")
+    if normalized_url == normalized_base or feed_selector:
+        return True, feed_selector or "feed_url"
+    return False, "feed_not_ready"
+
+
 async def confirm_inbox_logged_in(page, trace=None) -> tuple[bool, str]:
     if callable(trace):
         trace("Wait for inbox confirmation")
         trace(f"Open {INBOX_URL}")
     try:
         await page.goto(INBOX_URL, wait_until="domcontentloaded")
-    except Exception:
-        try:
-            await page.goto(INBOX_URL)
-        except Exception:
-            pass
-    try:
-        await page.wait_for_timeout(2000)
-    except Exception:
-        pass
+    except Exception as exc:
+        raise RuntimeError(f"inbox_navigation_failed:{exc}") from exc
 
-    url = page.url or ""
-    if "/accounts/login" in url:
-        return False, "redirected_to_login"
+    url = (page.url or "").lower()
+    inbox_selector = await _first_visible_selector(page, _INBOX_READY_SELECTORS)
+    if "/direct/inbox" in url or inbox_selector:
+        return True, inbox_selector or "inbox_url"
+
+    login_selector = await _first_visible_selector(page, _LOGIN_FORM_SELECTORS)
+    if "/accounts/login" in url or "/accounts/onetap" in url or login_selector:
+        return False, login_selector or "login_required"
     if "/challenge/" in url:
         return False, "challenge_required"
-    if "/direct/inbox" in url:
-        return True, "inbox_url"
-
-    inbox_selectors = (
-        "a[href='/direct/inbox/']",
-        "div[role='main'] a[href='/direct/inbox/']",
-        "nav[role='navigation'] a[href='/direct/inbox/']",
-    )
-    for sel in inbox_selectors:
-        try:
-            if await page.locator(sel).count():
-                return True, f"inbox_dom:{sel}"
-        except Exception:
-            continue
-
-    ok, reason = await check_logged_in(page)
-    if ok:
-        return False, f"logged_in_but_not_inbox:{reason}"
-    return False, f"not_logged_in:{reason}"
+    raise RuntimeError("inbox_surface_unknown: no inbox DOM y no login form")
 
 
 async def login_account_playwright_async(
@@ -584,102 +628,112 @@ async def login_account_playwright_async(
 
     account["alias"] = alias
     account["trace"] = trace
-    account["strict_login"] = True
+    account.setdefault("strict_login", False)
+    account.setdefault("force_login", False)
+    account.setdefault("disable_safe_browser_recovery", True)
 
     headless = not headful
-    attempts = 0
-    last_error: Optional[str] = None
+    svc = None
+    ctx = None
+    progress_callback = account.get("login_progress_callback")
 
-    while attempts < 2:
-        attempts += 1
-        svc = None
-        ctx = None
+    def _progress(state: str, message: str) -> None:
+        if not callable(progress_callback):
+            return
         try:
-            svc, ctx, page = await ensure_logged_in_async(
-                account,
-                headless=headless,
-                profile_root=_DEFAULT_PROFILE_ROOT,
-                proxy=proxy_payload,
-            )
+            progress_callback(state, message)
+        except Exception:
+            return
 
-            ok_inbox, reason = await confirm_inbox_logged_in(page, trace=trace)
-            if ok_inbox:
-                profile_path = str(_profile_path_for(username, _DEFAULT_PROFILE_ROOT))
-                try:
-                    await svc.save_storage_state(ctx, profile_path)
-                except Exception:
-                    pass
-                trace("SUCCESS login confirmed by inbox")
-                return {
-                    "username": username,
-                    "status": "ok",
-                    "message": reason,
-                    "profile_path": profile_path,
-                    "row_number": account.get("row_number"),
-                }
+    try:
+        _progress("running_login", "Resolviendo sesion")
+        svc, ctx, page = await ensure_logged_in_async(
+            account,
+            headless=headless,
+            profile_root=_DEFAULT_PROFILE_ROOT,
+            proxy=proxy_payload,
+        )
 
-            errors = []
+        _progress("confirming_feed", "Confirmando feed")
+        ok_feed, feed_reason = await confirm_feed_logged_in(page, trace=trace)
+        if not ok_feed:
+            trace(f"FAIL reason={feed_reason}")
+            return {
+                "username": username,
+                "status": "failed",
+                "message": feed_reason,
+                "profile_path": "",
+                "row_number": account.get("row_number"),
+            }
+
+        _progress("confirming_inbox", "Confirmando inbox")
+        ok_inbox, reason = await confirm_inbox_logged_in(page, trace=trace)
+        if ok_inbox:
+            profile_path = str(_profile_path_for(username, _DEFAULT_PROFILE_ROOT))
             try:
-                errors = await get_login_errors(page)
+                await svc.save_storage_state(ctx, profile_path)
             except Exception:
-                errors = []
-            detail = reason
-            if errors:
-                detail = f"{detail} errors={'; '.join(errors)}"
-            trace(f"FAIL reason={detail}")
+                pass
+            trace("SUCCESS login confirmed by inbox")
             return {
                 "username": username,
-                "status": "failed",
-                "message": detail,
-                "profile_path": "",
+                "status": "ok",
+                "message": f"{feed_reason} -> {reason}",
+                "profile_path": profile_path,
                 "row_number": account.get("row_number"),
             }
-        except ChallengeRequired:
-            trace("FAIL reason=challenge_required")
-            return {
-                "username": username,
-                "status": "failed",
-                "message": "challenge_required",
-                "profile_path": "",
-                "row_number": account.get("row_number"),
-            }
-        except PlaywrightTimeoutError as exc:
-            last_error = f"timeout:{exc}"
-            trace(f"FAIL reason={last_error}")
-            if attempts < 2:
-                trace("Retrying once due to timeout")
-                continue
-            return {
-                "username": username,
-                "status": "failed",
-                "message": last_error,
-                "profile_path": "",
-                "row_number": account.get("row_number"),
-            }
-        except Exception as exc:
-            last_error = str(exc)
-            trace(f"FAIL reason={last_error}")
-            return {
-                "username": username,
-                "status": "failed",
-                "message": last_error,
-                "profile_path": "",
-                "row_number": account.get("row_number"),
-            }
-        finally:
-            if svc:
-                try:
-                    await shutdown(svc, ctx)
-                except Exception:
-                    pass
 
-    return {
-        "username": username,
-        "status": "failed",
-        "message": last_error or "failed",
-        "profile_path": "",
-        "row_number": account.get("row_number"),
-    }
+        errors = []
+        try:
+            errors = await get_login_errors(page)
+        except Exception:
+            errors = []
+        detail = reason
+        if errors:
+            detail = f"{detail} errors={'; '.join(errors)}"
+        trace(f"FAIL reason={detail}")
+        return {
+            "username": username,
+            "status": "failed",
+            "message": detail,
+            "profile_path": "",
+            "row_number": account.get("row_number"),
+        }
+    except ChallengeRequired:
+        trace("FAIL reason=challenge_required")
+        return {
+            "username": username,
+            "status": "failed",
+            "message": "challenge_required",
+            "profile_path": "",
+            "row_number": account.get("row_number"),
+        }
+    except PlaywrightTimeoutError as exc:
+        detail = f"timeout:{exc}"
+        trace(f"FAIL reason={detail}")
+        return {
+            "username": username,
+            "status": "failed",
+            "message": detail,
+            "profile_path": "",
+            "row_number": account.get("row_number"),
+        }
+    except Exception as exc:
+        detail = str(exc)
+        trace(f"FAIL reason={detail}")
+        return {
+            "username": username,
+            "status": "failed",
+            "message": detail,
+            "profile_path": "",
+            "row_number": account.get("row_number"),
+        }
+    finally:
+        if svc:
+            try:
+                await shutdown(svc, ctx)
+            except Exception:
+                pass
 
 
 def login_account_playwright(
@@ -701,7 +755,7 @@ def onboard_accounts_from_csv(
 ) -> List[OnboardingResult]:
     """
     Procesa un CSV de cuentas (username,password,totp_secret,proxy_...) y
-    ejecuta login headless por fila. Guarda los resultados en data/onboarding_results.csv.
+    ejecuta login headless por fila. Guarda los resultados en storage/accounts/onboarding_results.csv.
     """
     headers, raw_rows = smart_read_csv(csv_path)
     if not headers:

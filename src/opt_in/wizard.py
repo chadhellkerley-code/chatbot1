@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
+from paths import campaigns_root
+
 from . import audit
 
 FLOW_TEMPLATES = {
@@ -22,7 +24,7 @@ class WizardSummary:
 
 
 def _flows_dir() -> Path:
-    path = Path("data/flows")
+    path = campaigns_root(Path(__file__).resolve().parents[2]) / "opt_in_flows"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -211,7 +211,7 @@ chat/
 ├── 📂 adapters/
 ├── 📂 optin_browser/
 ├── 📂 tests/
-├── 📂 integraciones/
+├── 📂 adapters/integrations/
 ├── 📂 actions/
 ├── 📂 data/
 ├── 📂 storage/

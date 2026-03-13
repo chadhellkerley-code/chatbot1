@@ -14,13 +14,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
 from config import SETTINGS, read_env_local, refresh_settings, update_env_local
+from core.storage_atomic import atomic_write_json, atomic_write_text, load_json_file
 from supabase_migrations import ensure_licenses_table as run_ensure_licenses_table
 from ui import Fore, banner, full_line, style_text
 from utils import ask, ask_int, ok, press_enter, warn
@@ -53,7 +53,7 @@ def _load_local_licenses() -> List[Dict[str, Any]]:
     if not _LICENSES_FILE.exists():
         return []
     try:
-        data = json.loads(_LICENSES_FILE.read_text(encoding="utf-8"))
+        data = load_json_file(_LICENSES_FILE, [], label="licensekit.local_licenses")
     except Exception:
         return []
     if not isinstance(data, list):
@@ -68,9 +68,7 @@ def _load_local_licenses() -> List[Dict[str, Any]]:
 def _save_local_licenses(records: List[Dict[str, Any]]) -> None:
     _LICENSES_FILE.parent.mkdir(parents=True, exist_ok=True)
     serialized = [dict(_normalize_record(dict(rec))) for rec in records]
-    _LICENSES_FILE.write_text(
-        json.dumps(serialized, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    atomic_write_json(_LICENSES_FILE, serialized)
 
 
 def _find_local_license(license_key: str) -> Optional[Dict[str, Any]]:
@@ -132,7 +130,8 @@ def _load_local_payload() -> Dict[str, Any]:
     if not _PAYLOAD_PATH.exists():
         return {}
     try:
-        return json.loads(_PAYLOAD_PATH.read_text(encoding="utf-8"))
+        payload = load_json_file(_PAYLOAD_PATH, {}, label="licensekit.local_payload")
+        return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
 
@@ -339,6 +338,10 @@ def _safe_client_folder(name: str) -> str:
     return result or "Cliente"
 
 
+def _client_delivery_folder(client_name: str) -> Path:
+    return _desktop_root() / "Clientes" / _safe_client_folder(client_name)
+
+
 def _desktop_root() -> Path:
     env_override = os.environ.get("DELIVERY_ROOT") or os.environ.get("DESKTOP_DIR")
     if env_override:
@@ -473,92 +476,45 @@ def _copy_tree_robust(source: Path, destination: Path, *, verify: bool = True) -
         )
 
 
-def _build_delivery_zip(
-    artifact_path: Path,
-    destination_name: str,
-    instructions_path: Path,
-    command_path: Path,
-    zip_path: Path,
-) -> None:
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        if artifact_path.is_dir():
-            for root, _, files in os.walk(artifact_path):
-                for filename in files:
-                    file_path = Path(root) / filename
-                    rel_path = Path(destination_name) / file_path.relative_to(artifact_path)
-                    bundle.write(file_path, rel_path.as_posix())
-        else:
-            bundle.write(artifact_path, destination_name)
-        bundle.write(instructions_path, instructions_path.name)
-        bundle.write(command_path, command_path.name)
+def _copy_directory_contents(source: Path, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        target = destination / item.name
+        if item.is_dir():
+            _copy_tree_robust(item, target)
+            continue
+        shutil.copy2(item, target)
 
 
 
 def _prepare_delivery_bundle(record: Dict[str, Any], artifact_path: Path) -> Path:
-    client_name = record.get("client_name", "Cliente")
-    folder_name = _safe_client_folder(client_name)
-    desktop_root = _desktop_root()
-    desktop = desktop_root / "Clientes" / folder_name
-    desktop.mkdir(parents=True, exist_ok=True)
+    return _export_client_distribution(record, artifact_path)
 
-    destination = desktop / artifact_path.name
 
-    command_path = desktop / "Cliente-HerramientaIG.command"
-    script = "\n".join(
-        [
-            "#!/bin/bash",
-            "DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"",
-            f"\"$DIR/{destination.name}\" \"$@\"",
-        ]
-    )
-    command_path.write_text(script, encoding="utf-8")
-    os.chmod(command_path, 0o755)
-
-    expires = _format_date(record.get("expires_at")) or "-"
-    license_key = record.get("license_key", "")
-    instructions = textwrap.dedent(
-        f"""
-        Cliente: {client_name}
-        Licencia: {license_key}
-        Expira: {expires}
-
-        Cómo ejecutar:
-        1) Doble clic en Cliente-HerramientaIG.command (o clic derecho → Abrir)
-        2) Ingresar la licencia cuando la aplicación lo solicite
-        3) Configurar tus propias cuentas, leads y claves en el menú
-        """
-    ).strip()
-    instructions_path = desktop / "INSTRUCCIONES.txt"
-    instructions_path.write_text(instructions + "\n", encoding="utf-8")
-
-    zip_name = f"{_safe_client_folder(client_name)}-HerramientaIG.zip"
-    zip_path = desktop / zip_name
-    if zip_path.exists():
-        zip_path.unlink()
-
-    _build_delivery_zip(
-        artifact_path,
-        destination.name,
-        instructions_path,
-        command_path,
-        zip_path,
-    )
+def _export_client_distribution(record: Dict[str, Any], artifact_path: Path) -> Path:
+    client_name = str(record.get("client_name") or "Cliente")
+    delivery_dir = _client_delivery_folder(client_name)
+    legacy_zip = delivery_dir / f"{_safe_client_folder(client_name)}-HerramientaIG.zip"
 
     try:
         if artifact_path.is_dir():
-            if destination.exists():
-                shutil.rmtree(destination)
-            _copy_tree_robust(artifact_path, destination)
+            _copy_directory_contents(artifact_path, delivery_dir)
         else:
-            shutil.copy2(artifact_path, destination)
+            if delivery_dir.exists():
+                shutil.rmtree(delivery_dir, ignore_errors=True)
+            delivery_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(artifact_path, delivery_dir / artifact_path.name)
+        _write_license_export(record, folder=delivery_dir)
+        if legacy_zip.exists():
+            legacy_zip.unlink()
     except Exception as exc:
-        if destination.exists():
-            shutil.rmtree(destination, ignore_errors=True)
-        warn(f"No se pudo copiar la carpeta al escritorio: {exc}")
-        return zip_path
+        if delivery_dir.exists():
+            shutil.rmtree(delivery_dir, ignore_errors=True)
+        raise RuntimeError(f"Could not export the client folder: {exc}") from exc
 
-
-    return zip_path
+    return delivery_dir
 
 
 def _render_table(records: Iterable[Dict[str, Any]]) -> None:
@@ -820,43 +776,116 @@ def _fetch_single(license_key: str) -> Optional[Dict[str, Any]]:
 
 
 def _generate_key() -> str:
-    return "".join(secrets.choice(string.digits) for _ in range(15))
+    try:
+        from src.licensing import generate_license_key
+
+        return generate_license_key()
+    except Exception:
+        return "".join(secrets.choice(string.digits) for _ in range(15))
+
+
+def _license_admin_client():
+    from src.licensing import SupabaseLicenseClient
+
+    return SupabaseLicenseClient(admin=True)
+
+
+def _create_managed_license_record(
+    client_name: str,
+    *,
+    days: int,
+    email: str | None = None,
+) -> Dict[str, Any]:
+    clean_name = str(client_name or "").strip()
+    if not clean_name:
+        raise ValueError("Client name is required.")
+
+    expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=max(30, int(days or 30)))
+    notes = ""
+    clean_email = str(email or "").strip()
+    if clean_email:
+        notes = f"Contact email: {clean_email}"
+
+    record = _license_admin_client().create_license(
+        client_name=clean_name,
+        plan_name="standard",
+        max_devices=2,
+        expires_at=expires_at.isoformat(),
+        notes=notes,
+    )
+    return _upsert_local_license(record)
+
+
+def _write_license_export(record: Dict[str, Any], *, folder: Path) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    license_key = str(record.get("license_key") or "").strip()
+    if not license_key:
+        raise ValueError("License key is required for export.")
+
+    atomic_write_text(folder / "license.key", license_key + "\n")
+
+    client_name = str(record.get("client_name") or "Client").strip() or "Client"
+    expires_at = _format_date(record.get("expires_at")) or "-"
+    executable_name = "InstaCRM.exe" if sys.platform.startswith("win") else "InstaCRM"
+    instructions = textwrap.dedent(
+        f"""
+        Client: {client_name}
+        License Key: {license_key}
+        Expires: {expires_at}
+
+        How to use:
+        1) If this folder already contains {executable_name}, run it directly.
+        2) Otherwise copy license.key next to the client executable.
+        3) Launch the client and allow the online license validation to complete.
+        """
+    ).strip()
+    atomic_write_text(folder / "INSTRUCCIONES.txt", instructions + "\n")
+    return folder
+
+
+def _build_client_distribution_for_record(record: Dict[str, Any]) -> Tuple[bool, Optional[Path], str]:
+    try:
+        from build.helpers import build_client_distribution, dist_root
+    except Exception as exc:
+        return False, None, f"Could not import the client builder: {exc}"
+
+    client_name = str(record.get("client_name") or "cliente").strip() or "cliente"
+    target_dir = dist_root() / f"InstaCRM_{_safe_client_folder(client_name).replace(' ', '_')}"
+    try:
+        build_dir = build_client_distribution(
+            target_dir=target_dir,
+            license_key=str(record.get("license_key") or "").strip(),
+        )
+    except Exception as exc:
+        return False, None, f"Could not build the client distribution: {exc}"
+    return True, build_dir, f"Client distribution generated at {build_dir}"
 
 
 def _package_license(
     record: Dict[str, Any], url: str, key: str
 ) -> Tuple[bool, Optional[Path], str]:
-    try:
-        from tools.build_executable import build_for_license
-    except Exception as exc:  # pragma: no cover - entorno sin módulo
-        return False, None, f"No se pudo importar el generador de ejecutables: {exc}"
-
-    success, artifact_path, message = build_for_license(record)
+    del url, key
+    success, artifact_path, message = _build_client_distribution_for_record(record)
     if not success or not artifact_path:
         return False, None, message
 
     try:
-        bundle_path = _prepare_delivery_bundle(record, artifact_path)
-    except Exception as exc:  # pragma: no cover - errores de FS
-        return False, None, f"Build generado pero falló el empaquetado: {exc}"
+        bundle_path = _export_client_distribution(record, artifact_path)
+    except Exception as exc:  # pragma: no cover - filesystem failures
+        return False, None, f"Build generated but export failed: {exc}"
 
     return True, bundle_path, message
 
 
 def _package_license_local(record: Dict[str, Any]) -> Tuple[bool, Optional[Path], str]:
-    try:
-        from tools.build_executable import build_for_license
-    except Exception as exc:  # pragma: no cover - entorno sin módulo
-        return False, None, f"No se pudo importar el generador de ejecutables: {exc}"
-
-    success, artifact_path, message = build_for_license(record)
+    success, artifact_path, message = _build_client_distribution_for_record(record)
     if not success or not artifact_path:
         return False, None, message
 
     try:
-        bundle_path = _prepare_delivery_bundle(record, artifact_path)
-    except Exception as exc:  # pragma: no cover - errores de FS
-        return False, None, f"Build generado pero falló el empaquetado: {exc}"
+        bundle_path = _export_client_distribution(record, artifact_path)
+    except Exception as exc:  # pragma: no cover - filesystem failures
+        return False, None, f"Build generated but export failed: {exc}"
 
     return True, bundle_path, message
 
@@ -870,7 +899,7 @@ def _build_executable(record: Dict[str, Any], url: str, key: str) -> None:
 
     success, bundle_path, message = _package_license(record, url, key)
     if success:
-        ok(f"{message}. ZIP generado en: {bundle_path}")
+        ok(f"{message}. Carpeta generada en: {bundle_path}")
     else:
         warn(message)
     press_enter()
@@ -922,7 +951,7 @@ def _create_license(url: str, key: str) -> None:
     success, bundle_path, message = _package_license(record, url, key)
     if success:
         ok(
-            f"ZIP de entrega generado en: {bundle_path}. Último paso: compartir con el cliente."
+            f"Carpeta de entrega generada en: {bundle_path}. Último paso: compartir con el cliente."
         )
     else:
         warn(message)
@@ -957,11 +986,11 @@ def _create_license_local(*, package: bool = True) -> None:
     if package:
         success, bundle_path, message = _package_license_local(record)
         if success:
-            ok(f"Licencia creada. ZIP de entrega generado en: {bundle_path}")
+            ok(f"Licencia creada. Carpeta de entrega generada en: {bundle_path}")
         else:
             warn(message)
     else:
-        ok("Licencia creada. ZIP omitido.")
+        ok("Licencia creada. Exportacion omitida.")
     press_enter()
 
 
@@ -1056,22 +1085,17 @@ def validate_license_payload(
 def enforce_startup_validation() -> None:
     if os.environ.get("LICENSE_ALREADY_VALIDATED") == "1":
         return
-    payload = _load_local_payload()
-    require = SETTINGS.client_distribution or bool(payload)
-    if not require:
+    if not SETTINGS.client_distribution:
         return
-    if not payload:
-        print(full_line(color=Fore.RED))
-        print(style_text("No se encontró licencia local", color=Fore.RED, bold=True))
-        print(full_line(color=Fore.RED))
-        sys.exit(2)
+    try:
+        from license_client import LicenseStartupError, launch_with_license
 
-    license_key = payload.get("license_key", "")
-    ok, message, _ = validate_license_payload(license_key, payload)
-    if not ok:
+        launch_with_license()
+        os.environ["LICENSE_ALREADY_VALIDATED"] = "1"
+    except LicenseStartupError as exc:
         print(full_line(color=Fore.RED))
         print(style_text("Licencia inválida", color=Fore.RED, bold=True))
-        print(message or "No se pudo validar la licencia.")
+        print(str(exc.user_message or "No se pudo validar la licencia."))
         print(full_line(color=Fore.RED))
         sys.exit(2)
 
@@ -1086,7 +1110,7 @@ def _build_universal_executable() -> None:
 
     banner()
     print(full_line())
-    print(style_text("Ejecutable universal (backend)", color=Fore.CYAN, bold=True))
+    print(style_text("Ejecutable universal", color=Fore.CYAN, bold=True))
     print(full_line())
     print("Opciones de build:")
     print("1) Completo (incluye Playwright + browsers) - mas lento")
@@ -1255,98 +1279,37 @@ def _build_owner_macos_universal_executable() -> None:
     else:
         warn(message)
     press_enter()
+
+
 def _create_backend_license_and_files() -> None:
     banner()
     print(full_line())
-    print(style_text("Crear licencia (backend)", color=Fore.CYAN, bold=True))
+    print(style_text("Crear licencia remota", color=Fore.CYAN, bold=True))
     print(full_line())
-
-    backend_url = os.environ.get("BACKEND_URL", "").strip()
-    admin_token = os.environ.get("ADMIN_TOKEN", "").strip()
-
-    if backend_url:
-        print(f"Backend URL actual: {backend_url}")
-        use_current = ask("Usar esta URL? (S/n): ").strip().lower()
-        if use_current == "n":
-            backend_url = ""
-    if not backend_url:
-        backend_url = ask("BACKEND_URL: ").strip()
-    if not backend_url:
-        warn("Falta BACKEND_URL.")
-        press_enter()
-        return
-
-    if not admin_token:
-        admin_token = ask("ADMIN_TOKEN: ").strip()
-    if not admin_token:
-        warn("Falta ADMIN_TOKEN.")
-        press_enter()
-        return
 
     name = ask("Nombre del cliente: ").strip()
     if not name:
         warn("Se requiere un nombre de cliente.")
         press_enter()
         return
+
     email = ask("Email del cliente (opcional): ").strip() or None
     days = ask_int("Dias de validez (minimo 30): ", min_value=30, default=60)
 
     try:
-        from backend_license_client import LicenseBackendClient
+        record = _create_managed_license_record(name, days=days, email=email)
     except Exception as exc:
-        warn(f"No se pudo importar backend_license_client: {exc}")
+        warn(f"No se pudo crear la licencia remota: {exc}")
         press_enter()
         return
 
-    client = LicenseBackendClient(backend_url, admin_token)
-    ok_conn, err = client.health_check()
-    if not ok_conn:
-        warn(f"Backend no disponible: {err}")
+    folder = _client_delivery_folder(name)
+    try:
+        _write_license_export(record, folder=folder)
+    except Exception as exc:
+        warn(f"No se pudieron exportar los archivos de licencia: {exc}")
         press_enter()
         return
-
-    print(style_text("Creando licencia...", color=Fore.CYAN))
-    success, data, error = client.create_license(name, days, email)
-    if not success or not data:
-        warn(f"Error backend: {error or 'sin detalle'}")
-        press_enter()
-        return
-
-    license_key = str(data.get("license_key") or "").strip()
-    if not license_key:
-        warn("No se obtuvo license key del backend.")
-        press_enter()
-        return
-
-    folder = _desktop_root() / "Clientes" / _safe_client_folder(name)
-    folder.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "license_key": license_key,
-        "client_name": name,
-        "backend_url": backend_url,
-        "mode": "backend",
-    }
-    license_path = folder / "license.json"
-    license_path.write_text(
-        json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
-    )
-
-    expires = data.get("expires_at") or "-"
-    instructions = textwrap.dedent(
-        f"""
-        Cliente: {name}
-        License Key: {license_key}
-        Expira: {expires}
-        Backend URL: {backend_url}
-
-        Como usar:
-        1) Copia el ejecutable universal a una carpeta.
-        2) Copia license.json en la misma carpeta.
-        3) Ejecuta el .exe y valida la licencia.
-        """
-    ).strip()
-    instructions_path = folder / "INSTRUCCIONES.txt"
-    instructions_path.write_text(instructions + "\n", encoding="utf-8")
 
     ok(f"Licencia creada. Archivos en: {folder}")
     press_enter()
@@ -1355,21 +1318,8 @@ def _create_backend_license_and_files() -> None:
 def _write_backend_license_files() -> None:
     banner()
     print(full_line())
-    print(style_text("Archivo de licencia (backend)", color=Fore.CYAN, bold=True))
+    print(style_text("Exportar archivo de licencia", color=Fore.CYAN, bold=True))
     print(full_line())
-
-    backend_url = os.environ.get("BACKEND_URL", "").strip()
-    if backend_url:
-        print(f"Backend URL actual: {backend_url}")
-        use_current = ask("Usar esta URL? (S/n): ").strip().lower()
-        if use_current == "n":
-            backend_url = ""
-    if not backend_url:
-        backend_url = ask("BACKEND_URL: ").strip()
-    if not backend_url:
-        warn("Falta BACKEND_URL.")
-        press_enter()
-        return
 
     client = ask("Nombre del cliente: ").strip()
     if not client:
@@ -1383,34 +1333,21 @@ def _write_backend_license_files() -> None:
         press_enter()
         return
 
-    folder = _desktop_root() / "Clientes" / _safe_client_folder(client)
-    folder.mkdir(parents=True, exist_ok=True)
-
-    payload = {
-        "license_key": license_key,
-        "client_name": client,
-        "backend_url": backend_url,
-        "mode": "backend",
-    }
-    license_path = folder / "license.json"
-    license_path.write_text(
-        json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
-    )
-
-    instructions = textwrap.dedent(
-        f"""
-        Cliente: {client}
-        License Key: {license_key}
-        Backend URL: {backend_url}
-
-        Como usar:
-        1) Copia el ejecutable universal a una carpeta.
-        2) Copia license.json en la misma carpeta.
-        3) Ejecuta el .exe y valida la licencia.
-        """
-    ).strip()
-    instructions_path = folder / "INSTRUCCIONES.txt"
-    instructions_path.write_text(instructions + "\n", encoding="utf-8")
+    folder = _client_delivery_folder(client)
+    try:
+        _write_license_export(
+            {
+                "client_name": client,
+                "license_key": license_key,
+                "expires_at": "",
+                "status": _STATUS_ACTIVE,
+            },
+            folder=folder,
+        )
+    except Exception as exc:
+        warn(f"No se pudieron generar los archivos: {exc}")
+        press_enter()
+        return
 
     ok(f"Archivos generados en: {folder}")
     press_enter()
@@ -1427,10 +1364,13 @@ def menu_deliver() -> None:
         print(style_text("Entrega al cliente", color=Fore.CYAN, bold=True))
         print(full_line())
         print("1) Crear licencia en backend + archivo")
-        print("2) Generar archivo de licencia (backend)")
+        print("2) Exportar archivo de licencia (backend)")
         print("3) Crear nueva licencia local (sin ZIP)")
         print("4) Ver todas las licencias (sincronizar con backend)")
-        print("5) Eliminar o extender licencia")        print("6) Generar ejecutable universal (backend)")`n        print("7) Generar ejecutable owner universal (macOS Big Sur+)")`n        print("8) Volver")
+        print("5) Eliminar o extender licencia")
+        print("6) Generar ejecutable universal (backend)")
+        print("7) Generar ejecutable owner universal (macOS Big Sur+)")
+        print("8) Volver")
         print()
         choice = ask("Opcion: ").strip()
         if choice == "1":
@@ -1442,7 +1382,13 @@ def menu_deliver() -> None:
         elif choice == "4":
             _show_active_licenses()
         elif choice == "5":
-            _manage_license_simple()        elif choice == "6":`n            _build_universal_executable()`n        elif choice == "7":`n            _build_owner_macos_universal_executable()`n        elif choice == "8":`n            break
+            _manage_license_simple()
+        elif choice == "6":
+            _build_universal_executable()
+        elif choice == "7":
+            _build_owner_macos_universal_executable()
+        elif choice == "8":
+            break
         else:
             warn("Opcion invalida.")
             press_enter()

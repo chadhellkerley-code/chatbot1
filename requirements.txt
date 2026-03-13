@@ -1,4 +1,3 @@
-instagrapi==1.17.10
 playwright>=1.42.0
 openai>=1.12.0,<2.0.0
 colorama==0.4.6
@@ -9,6 +8,7 @@ cryptography==41.0.7
 moviepy==1.0.3
 pillow>=9.0.0
 numpy<2
+onnxruntime>=1.16.0,<2.0.0
 openpyxl
 google-auth>=2.0.0
 google-api-python-client>=2.0.0

@@ -8,12 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from paths import runtime_base
+from core.storage_atomic import load_json_file
+from paths import exports_root, storage_root
 from ui import Fore, banner, full_line, style_text
 from utils import ask, ok, press_enter, warn
 
 try:
-    from storage import TZ
+    from core.storage import TZ
 except Exception:  # pragma: no cover - fallback si storage falla
     TZ = timezone.utc
 
@@ -44,18 +45,12 @@ TIME_BUCKETS: List[Tuple[str, int, int]] = [
 ]
 
 
-def _base_dir() -> Path:
-    return runtime_base(Path(__file__).resolve().parents[2])
-
-
 def _engine_path() -> Path:
-    return _base_dir() / "storage" / "conversation_engine.json"
+    return storage_root(Path(__file__).resolve().parents[2]) / "conversation_engine.json"
 
 
 def _exports_dir() -> Path:
-    path = _base_dir() / "exports"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return exports_root(Path(__file__).resolve().parents[2])
 
 
 def _safe_ts(value: Any) -> Optional[float]:
@@ -147,10 +142,8 @@ def _distribution(counter: Counter) -> List[Tuple[str, str]]:
 
 def _load_engine() -> Dict[str, Any]:
     path = _engine_path()
-    if not path.exists():
-        return {"conversations": {}}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = load_json_file(path, {"conversations": {}}, label="analytics.conversation_engine")
     except Exception:
         return {"conversations": {}}
     if not isinstance(data, dict):

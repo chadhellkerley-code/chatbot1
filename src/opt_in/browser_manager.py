@@ -14,17 +14,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 try:  # pragma: no cover - import guard for optional dependency
-    from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+    from playwright.async_api import Browser, BrowserContext, Page
 except ImportError:  # pragma: no cover
     Browser = BrowserContext = Page = object  # type: ignore
 
-    async def async_playwright():  # type: ignore
-        raise RuntimeError("playwright is required for opt-in browser operations")
-
 from . import session_store
+from paths import sessions_root
 from src.playwright_service import resolve_playwright_executable
+from src.runtime.playwright_runtime import PlaywrightRuntime, launch_async_browser
 
-DEFAULT_STORAGE_DIR = Path("data/optin_sessions")
+_BASE_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_STORAGE_DIR = sessions_root(_BASE_ROOT) / "optin"
 
 
 async def _ensure_storage_dir() -> None:
@@ -43,7 +43,7 @@ async def launch_browser(
     ----------
     account:
         Alias of the account.  It is used to resolve the persisted storage state and
-        to namespace logs/contexts.
+        to namespace runtime logs/contexts.
     headless:
         Whether Playwright should run in headless mode.  If ``None`` the value of the
         ``OPTIN_HEADLESS`` environment variable is inspected (defaults to ``False``).
@@ -69,15 +69,20 @@ async def launch_browser(
 
     await _ensure_storage_dir()
 
-    playwright_cm = await async_playwright().start()
+    runtime = PlaywrightRuntime(headless=headless)
+    await runtime.start(launch_browser=False, force_headless=headless)
+    playwright_cm = runtime.playwright
+    if playwright_cm is None:
+        raise RuntimeError("No se pudo inicializar Playwright runtime para opt-in.")
     try:
-        launch_kwargs: Dict[str, Any] = {"headless": headless}
         executable = resolve_playwright_executable(headless=headless)
-        if executable:
-            launch_kwargs["executable_path"] = str(executable)
-        browser = await playwright_cm.chromium.launch(**launch_kwargs)
+        browser = await launch_async_browser(
+            playwright_cm,
+            headless=headless,
+            executable_path=executable,
+            visible_reason=f"opt_in:{account}",
+        )
     except Exception:
-        await playwright_cm.stop()
         raise
 
     storage_state = await session_store.load_storage_state_dict(account)
@@ -97,8 +102,6 @@ async def launch_browser(
             await context.close()
         with contextlib.suppress(Exception):
             await browser.close()
-        with contextlib.suppress(Exception):
-            await playwright_cm.stop()
 
     # Attach helper attribute so callers can gracefully shutdown without leaking.
     setattr(page, "_optin_close", _close_all)
