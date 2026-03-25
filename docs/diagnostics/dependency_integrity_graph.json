@@ -1,0 +1,3958 @@
+{
+  "generated_on": "2026-03-06",
+  "summary": {
+    "node_count": 216,
+    "edge_count": 408,
+    "top_level_cycle_count": 0,
+    "dynamic_import_count": 29,
+    "masked_import_count": 108
+  },
+  "nodes": [
+    {
+      "id": "__root__",
+      "path": "__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "accounts",
+      "path": "accounts.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "actions",
+      "path": "actions/__init__.py",
+      "kind": "package",
+      "is_wrapper": true
+    },
+    {
+      "id": "actions.content_publisher",
+      "path": "actions/content_publisher.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "actions.interactions",
+      "path": "actions/interactions.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "actions.interactions_adapters",
+      "path": "actions/interactions_adapters.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "adapters",
+      "path": "adapters/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "adapters.base",
+      "path": "adapters/base.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "adapters.instagram_instagrapi",
+      "path": "adapters/instagram_instagrapi.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "adapters.instagram_playwright",
+      "path": "adapters/instagram_playwright.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "adapters.instagram_stub",
+      "path": "adapters/instagram_stub.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "app",
+      "path": "app.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "automation",
+      "path": "automation/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "automation.actions",
+      "path": "automation/actions/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "automation.actions.content_publisher",
+      "path": "automation/actions/content_publisher.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "automation.actions.interactions",
+      "path": "automation/actions/interactions.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "automation.actions.interactions_adapters",
+      "path": "automation/actions/interactions_adapters.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "automation.whatsapp",
+      "path": "automation/whatsapp.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "backend",
+      "path": "backend/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "backend.main",
+      "path": "backend/main.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "backend_license_client",
+      "path": "backend_license_client.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "client_factory",
+      "path": "client_factory.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "client_launcher",
+      "path": "client_launcher.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "config",
+      "path": "config.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core",
+      "path": "core/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.accounts",
+      "path": "core/accounts.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.accounts_helpers",
+      "path": "core/accounts_helpers/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.accounts_helpers.csv_utils",
+      "path": "core/accounts_helpers/csv_utils.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.accounts_helpers.password_cache",
+      "path": "core/accounts_helpers/password_cache.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.autoresponder",
+      "path": "core/autoresponder/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.autoresponder.openai_client",
+      "path": "core/autoresponder/openai_client.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.disk_monitor",
+      "path": "core/disk_monitor.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.ig",
+      "path": "core/ig.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.leads",
+      "path": "core/leads.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.log_rotation",
+      "path": "core/log_rotation.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.responder",
+      "path": "core/responder.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.session_store",
+      "path": "core/session_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.storage",
+      "path": "core/storage.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "core.storage_atomic",
+      "path": "core/storage_atomic.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "flow_editor",
+      "path": "flow_editor/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "flow_editor.edge_item",
+      "path": "flow_editor/edge_item.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "flow_editor.flow_scene",
+      "path": "flow_editor/flow_scene.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "flow_editor.flow_view",
+      "path": "flow_editor/flow_view.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "flow_editor.node_item",
+      "path": "flow_editor/node_item.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "flow_editor.port_item",
+      "path": "flow_editor/port_item.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui",
+      "path": "gui/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.controllers",
+      "path": "gui/controllers/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.controllers.branding",
+      "path": "gui/controllers/branding.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.controllers.engine_state",
+      "path": "gui/controllers/engine_state.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.controllers.text_utils",
+      "path": "gui/controllers/text_utils.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.gui_app",
+      "path": "gui/gui_app.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.io_adapter",
+      "path": "gui/io_adapter.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.main_window",
+      "path": "gui/main_window.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.navigation",
+      "path": "gui/navigation/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.navigation.navigation_controller",
+      "path": "gui/navigation/navigation_controller.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui.navigation.routes",
+      "path": "gui/navigation/routes.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "gui_app",
+      "path": "gui_app.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "health_store",
+      "path": "health_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "ig",
+      "path": "ig.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "integraciones",
+      "path": "integraciones/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "integraciones.adapter",
+      "path": "integraciones/adapter.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "integraciones.android_sim_adapter",
+      "path": "integraciones/android_sim_adapter.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "io_adapter",
+      "path": "io_adapter.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "launchers",
+      "path": "launchers/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "launchers.client_launcher",
+      "path": "launchers/client_launcher.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "launchers.owner_gui_launcher",
+      "path": "launchers/owner_gui_launcher.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "leads",
+      "path": "leads.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "license_backend_menu",
+      "path": "license_backend_menu.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "license_client",
+      "path": "license_client.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "licensekit",
+      "path": "licensekit.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "main_window",
+      "path": "main_window.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "media_norm",
+      "path": "media_norm.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser",
+      "path": "optin_browser/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.audit",
+      "path": "optin_browser/audit.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.browser_manager",
+      "path": "optin_browser/browser_manager.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.config",
+      "path": "optin_browser/config.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.dm",
+      "path": "optin_browser/dm.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.login",
+      "path": "optin_browser/login.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.playback",
+      "path": "optin_browser/playback.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.recorder",
+      "path": "optin_browser/recorder.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.replies",
+      "path": "optin_browser/replies.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.session_store",
+      "path": "optin_browser/session_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "optin_browser.utils",
+      "path": "optin_browser/utils.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "owner_gui_launcher",
+      "path": "owner_gui_launcher.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "paths",
+      "path": "paths.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "proxy_manager",
+      "path": "proxy_manager.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "responder",
+      "path": "responder.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "runtime",
+      "path": "runtime/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "runtime.runtime",
+      "path": "runtime/runtime.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "runtime.runtime_parity",
+      "path": "runtime/runtime_parity.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "runtime_parity",
+      "path": "runtime_parity.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "scripts",
+      "path": "scripts/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.check_playwright",
+      "path": "scripts/check_playwright.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.client_launcher",
+      "path": "scripts/client_launcher.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.license_backend_menu",
+      "path": "scripts/license_backend_menu.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.manual_login_once",
+      "path": "scripts/manual_login_once.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.onboard_from_csv",
+      "path": "scripts/onboard_from_csv.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.package_client",
+      "path": "scripts/package_client.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_batch_send",
+      "path": "scripts/run_batch_send.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_batch_followup",
+      "path": "scripts/run_optin_batch_followup.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_batch_reply",
+      "path": "scripts/run_optin_batch_reply.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_batch_send",
+      "path": "scripts/run_optin_batch_send.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_followup",
+      "path": "scripts/run_optin_followup.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_login",
+      "path": "scripts/run_optin_login.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_menu",
+      "path": "scripts/run_optin_menu.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_playback",
+      "path": "scripts/run_optin_playback.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_record",
+      "path": "scripts/run_optin_record.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_reply",
+      "path": "scripts/run_optin_reply.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_reply_dm",
+      "path": "scripts/run_optin_reply_dm.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_send",
+      "path": "scripts/run_optin_send.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_send_dm",
+      "path": "scripts/run_optin_send_dm.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_optin_wizard",
+      "path": "scripts/run_optin_wizard.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_test_flow",
+      "path": "scripts/run_test_flow.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.run_test_jobs",
+      "path": "scripts/run_test_jobs.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.smoke_login_real",
+      "path": "scripts/smoke_login_real.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.smoke_open_chat",
+      "path": "scripts/smoke_open_chat.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.smoke_playwright_login",
+      "path": "scripts/smoke_playwright_login.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.smoke_send_message",
+      "path": "scripts/smoke_send_message.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "scripts.test_gramaddict",
+      "path": "scripts/test_gramaddict.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "sdk_sanitize",
+      "path": "sdk_sanitize.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "session_store",
+      "path": "session_store.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "src",
+      "path": "src/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.actions",
+      "path": "src/actions/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.actions.direct_helpers",
+      "path": "src/actions/direct_helpers.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.actions.direct_helpers_v2",
+      "path": "src/actions/direct_helpers_v2.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.actions.dm_actions",
+      "path": "src/actions/dm_actions.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.analytics",
+      "path": "src/analytics/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.analytics.stats_engine",
+      "path": "src/analytics/stats_engine.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.auth",
+      "path": "src/auth/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.auth.onboarding",
+      "path": "src/auth/onboarding.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.auth.persistent_login",
+      "path": "src/auth/persistent_login.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.autoresponder_runtime",
+      "path": "src/autoresponder_runtime.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.celery_app",
+      "path": "src/celery_app.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_campaign",
+      "path": "src/dm_campaign/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_campaign.adaptive_scheduler",
+      "path": "src/dm_campaign/adaptive_scheduler.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_campaign.campaign_runner",
+      "path": "src/dm_campaign/campaign_runner.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_campaign.health_monitor",
+      "path": "src/dm_campaign/health_monitor.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_campaign.lead_status_store",
+      "path": "src/dm_campaign/lead_status_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_campaign.proxy_workers_runner",
+      "path": "src/dm_campaign/proxy_workers_runner.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.dm_playwright_client",
+      "path": "src/dm_playwright_client.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.health_playwright",
+      "path": "src/health_playwright.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.humanizer",
+      "path": "src/humanizer.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.image_attribute_filter",
+      "path": "src/image_attribute_filter.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.image_engine_thresholds",
+      "path": "src/image_engine_thresholds.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.image_prompt_parser",
+      "path": "src/image_prompt_parser.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.image_rule_evaluator",
+      "path": "src/image_rule_evaluator.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.instagram_adapter",
+      "path": "src/instagram_adapter.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.jobs",
+      "path": "src/jobs/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.jobs.auto_reply_job",
+      "path": "src/jobs/auto_reply_job.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.jobs.login_job",
+      "path": "src/jobs/login_job.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.jobs.read_messages_job",
+      "path": "src/jobs/read_messages_job.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.jobs.send_message_job",
+      "path": "src/jobs/send_message_job.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.leads_filter_pipeline",
+      "path": "src/leads_filter_pipeline.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.leads_payload_migration",
+      "path": "src/leads_payload_migration.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.account_loader",
+      "path": "src/opt_in/account_loader.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.audit",
+      "path": "src/opt_in/audit.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.browser_manager",
+      "path": "src/opt_in/browser_manager.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.flows",
+      "path": "src/opt_in/flows.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.followup",
+      "path": "src/opt_in/followup.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.human_engine",
+      "path": "src/opt_in/human_engine.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.login_playwright",
+      "path": "src/opt_in/login_playwright.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.messenger_playwright",
+      "path": "src/opt_in/messenger_playwright.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.responder",
+      "path": "src/opt_in/responder.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.runner_pool",
+      "path": "src/opt_in/runner_pool.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.session_store",
+      "path": "src/opt_in/session_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.opt_in.wizard",
+      "path": "src/opt_in/wizard.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.playwright_service",
+      "path": "src/playwright_service.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.proxy_assigner",
+      "path": "src/proxy_assigner.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.proxy_payload",
+      "path": "src/proxy_payload.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.proxy_pool",
+      "path": "src/proxy_pool.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.queue_config",
+      "path": "src/queue_config.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.runtime",
+      "path": "src/runtime/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.runtime.playwright_runtime",
+      "path": "src/runtime/playwright_runtime.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.state_manager",
+      "path": "src/state_manager.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.tasks.auth",
+      "path": "src/tasks/auth.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.tasks.messaging",
+      "path": "src/tasks/messaging.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.text_engine_thresholds",
+      "path": "src/text_engine_thresholds.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.transport",
+      "path": "src/transport/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.transport.human_instagram_sender",
+      "path": "src/transport/human_instagram_sender.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.vision",
+      "path": "src/vision/__init__.py",
+      "kind": "package",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.vision.face_detector_scrfd",
+      "path": "src/vision/face_detector_scrfd.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.vision.fairface_analyzer",
+      "path": "src/vision/fairface_analyzer.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "src.vision.gender_age_analyzer",
+      "path": "src/vision/gender_age_analyzer.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "state_view",
+      "path": "state_view.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "storage",
+      "path": "storage.py",
+      "kind": "module",
+      "is_wrapper": true
+    },
+    {
+      "id": "supabase_migrations",
+      "path": "supabase_migrations.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "templates_store",
+      "path": "templates_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "test_headless_send",
+      "path": "test_headless_send.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "test_login_improved",
+      "path": "test_login_improved.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "test_playwright_login",
+      "path": "test_playwright_login.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_accounts_menu_and_limits",
+      "path": "tests/test_accounts_menu_and_limits.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_autoresponder_event_contract",
+      "path": "tests/test_autoresponder_event_contract.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_dm_campaign_template_variants",
+      "path": "tests/test_dm_campaign_template_variants.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_dm_playwright_client_api_timestamps",
+      "path": "tests/test_dm_playwright_client_api_timestamps.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_flow_engine",
+      "path": "tests/test_flow_engine.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_image_onnx_local_engine",
+      "path": "tests/test_image_onnx_local_engine.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_instagram_adapter",
+      "path": "tests/test_instagram_adapter.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_leads_filter_consistency",
+      "path": "tests/test_leads_filter_consistency.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_leads_local_pipeline",
+      "path": "tests/test_leads_local_pipeline.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_leads_ui_runtime_parser",
+      "path": "tests/test_leads_ui_runtime_parser.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests.test_login_2fa",
+      "path": "tests/test_login_2fa.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.conftest",
+      "path": "tests_optin/conftest.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.test_autoresponder_runtime",
+      "path": "tests_optin/test_autoresponder_runtime.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.test_autoresponder_runtime_controller",
+      "path": "tests_optin/test_autoresponder_runtime_controller.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.test_flows_login_fallback",
+      "path": "tests_optin/test_flows_login_fallback.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.test_human_engine_resilience",
+      "path": "tests_optin/test_human_engine_resilience.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.test_runner_pool_limits",
+      "path": "tests_optin/test_runner_pool_limits.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tests_optin.test_session_store",
+      "path": "tests_optin/test_session_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tools.build_executable",
+      "path": "tools/build_executable.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tools.build_owner_macos_universal",
+      "path": "tools/build_owner_macos_universal.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "tools.test_integration_send",
+      "path": "tools/test_integration_send.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "totp_store",
+      "path": "totp_store.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "ui",
+      "path": "ui.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "update_system",
+      "path": "update_system.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "utils",
+      "path": "utils.py",
+      "kind": "module",
+      "is_wrapper": false
+    },
+    {
+      "id": "whatsapp",
+      "path": "whatsapp.py",
+      "kind": "module",
+      "is_wrapper": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "accounts",
+      "to": "core",
+      "type": "from"
+    },
+    {
+      "from": "actions",
+      "to": "automation",
+      "type": "from"
+    },
+    {
+      "from": "actions.content_publisher",
+      "to": "automation.actions",
+      "type": "from"
+    },
+    {
+      "from": "actions.interactions",
+      "to": "automation.actions",
+      "type": "from"
+    },
+    {
+      "from": "actions.interactions_adapters",
+      "to": "automation.actions",
+      "type": "from"
+    },
+    {
+      "from": "adapters",
+      "to": "adapters.base",
+      "type": "from"
+    },
+    {
+      "from": "adapters",
+      "to": "adapters.instagram_instagrapi",
+      "type": "from"
+    },
+    {
+      "from": "adapters",
+      "to": "adapters.instagram_playwright",
+      "type": "from"
+    },
+    {
+      "from": "adapters",
+      "to": "adapters.instagram_stub",
+      "type": "from"
+    },
+    {
+      "from": "adapters.instagram_instagrapi",
+      "to": "adapters.base",
+      "type": "from"
+    },
+    {
+      "from": "adapters.instagram_playwright",
+      "to": "adapters.base",
+      "type": "from"
+    },
+    {
+      "from": "adapters.instagram_playwright",
+      "to": "src.auth.onboarding",
+      "type": "from"
+    },
+    {
+      "from": "adapters.instagram_playwright",
+      "to": "src.transport.human_instagram_sender",
+      "type": "from"
+    },
+    {
+      "from": "adapters.instagram_stub",
+      "to": "adapters.base",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "core.disk_monitor",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "core.log_rotation",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "core.storage",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "runtime.runtime_parity",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "app",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "client_factory",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "core.session_store",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "media_norm",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "proxy_manager",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "runtime.runtime",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "sdk_sanitize",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.content_publisher",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "automation.actions.interactions_adapters",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "client_factory",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "core.session_store",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "proxy_manager",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "runtime.runtime",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "automation.actions.interactions",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "automation.whatsapp",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "automation.whatsapp",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "automation.whatsapp",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "automation.whatsapp",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "client_factory",
+      "to": "adapters",
+      "type": "from"
+    },
+    {
+      "from": "client_launcher",
+      "to": "launchers",
+      "type": "from"
+    },
+    {
+      "from": "config",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "adapters.base",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "client_factory",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "core.accounts_helpers.csv_utils",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "core.accounts_helpers.password_cache",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "core.session_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "health_store",
+      "type": "import"
+    },
+    {
+      "from": "core.accounts",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "proxy_manager",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "totp_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "totp_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "totp_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "totp_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "totp_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "totp_store",
+      "type": "from"
+    },
+    {
+      "from": "core.accounts",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "core.autoresponder.openai_client",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "client_factory",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "core.leads",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "core.session_store",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "core.storage",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "runtime.runtime",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "src.auth.persistent_login",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "src.dm_campaign.campaign_runner",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "src.dm_campaign.proxy_workers_runner",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "src.proxy_assigner",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "src.transport.human_instagram_sender",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "templates_store",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "core.ig",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "core.leads",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "core.leads",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.leads",
+      "to": "templates_store",
+      "type": "from"
+    },
+    {
+      "from": "core.leads",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "core.autoresponder",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "core.autoresponder.openai_client",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "core.storage",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "proxy_manager",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "runtime.runtime",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "src.auth.onboarding",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "src.auth.persistent_login",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "src.autoresponder_runtime",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "src.dm_playwright_client",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "core.responder",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "core.session_store",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.storage",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "core.storage",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "core.storage",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "core.storage",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "core.storage",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor",
+      "to": "flow_editor.edge_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor",
+      "to": "flow_editor.flow_scene",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor",
+      "to": "flow_editor.flow_view",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor",
+      "to": "flow_editor.node_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor",
+      "to": "flow_editor.port_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor.edge_item",
+      "to": "flow_editor.port_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor.flow_scene",
+      "to": "flow_editor.edge_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor.flow_scene",
+      "to": "flow_editor.node_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor.flow_scene",
+      "to": "flow_editor.port_item",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor.flow_view",
+      "to": "flow_editor.flow_scene",
+      "type": "from"
+    },
+    {
+      "from": "flow_editor.node_item",
+      "to": "flow_editor.port_item",
+      "type": "from"
+    },
+    {
+      "from": "gui.controllers.text_utils",
+      "to": "gui.io_adapter",
+      "type": "from"
+    },
+    {
+      "from": "gui.gui_app",
+      "to": "gui.io_adapter",
+      "type": "from"
+    },
+    {
+      "from": "gui.gui_app",
+      "to": "gui.main_window",
+      "type": "from"
+    },
+    {
+      "from": "gui.gui_app",
+      "to": "runtime.runtime_parity",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "core.disk_monitor",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "core.log_rotation",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "flow_editor.flow_view",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "gui.controllers.branding",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "gui.controllers.engine_state",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "gui.controllers.text_utils",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "gui.io_adapter",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "gui.navigation.navigation_controller",
+      "type": "from"
+    },
+    {
+      "from": "gui.main_window",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "gui.navigation",
+      "to": "gui.navigation.navigation_controller",
+      "type": "from"
+    },
+    {
+      "from": "gui.navigation",
+      "to": "gui.navigation.routes",
+      "type": "from"
+    },
+    {
+      "from": "gui.navigation.navigation_controller",
+      "to": "gui.navigation.routes",
+      "type": "from"
+    },
+    {
+      "from": "gui_app",
+      "to": "gui",
+      "type": "from"
+    },
+    {
+      "from": "health_store",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "health_store",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "ig",
+      "to": "core",
+      "type": "from"
+    },
+    {
+      "from": "io_adapter",
+      "to": "gui",
+      "type": "from"
+    },
+    {
+      "from": "launchers.client_launcher",
+      "to": "license_client",
+      "type": "from"
+    },
+    {
+      "from": "launchers.client_launcher",
+      "to": "runtime.runtime_parity",
+      "type": "from"
+    },
+    {
+      "from": "launchers.owner_gui_launcher",
+      "to": "gui.gui_app",
+      "type": "from"
+    },
+    {
+      "from": "leads",
+      "to": "core",
+      "type": "from"
+    },
+    {
+      "from": "license_client",
+      "to": "config",
+      "type": "import"
+    },
+    {
+      "from": "license_client",
+      "to": "licensekit",
+      "type": "from"
+    },
+    {
+      "from": "license_client",
+      "to": "runtime.runtime_parity",
+      "type": "from"
+    },
+    {
+      "from": "license_client",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "licensekit",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "licensekit",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "licensekit",
+      "to": "supabase_migrations",
+      "type": "from"
+    },
+    {
+      "from": "licensekit",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "licensekit",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "main_window",
+      "to": "gui",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.audit",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.browser_manager",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.browser_manager",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.browser_manager",
+      "to": "optin_browser.session_store",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.browser_manager",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.browser_manager",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.browser_manager",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.dm",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.dm",
+      "to": "optin_browser.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.dm",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.dm",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.login",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.login",
+      "to": "optin_browser.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.login",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.login",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.playback",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.playback",
+      "to": "optin_browser.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.playback",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.playback",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.recorder",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.recorder",
+      "to": "optin_browser.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.recorder",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.recorder",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.replies",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.replies",
+      "to": "optin_browser.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.replies",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.replies",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.session_store",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.session_store",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "optin_browser.utils",
+      "to": "optin_browser.config",
+      "type": "from"
+    },
+    {
+      "from": "owner_gui_launcher",
+      "to": "launchers",
+      "type": "from"
+    },
+    {
+      "from": "proxy_manager",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "responder",
+      "to": "core",
+      "type": "from"
+    },
+    {
+      "from": "runtime",
+      "to": "runtime.runtime",
+      "type": "from"
+    },
+    {
+      "from": "runtime",
+      "to": "runtime.runtime_parity",
+      "type": "from"
+    },
+    {
+      "from": "runtime_parity",
+      "to": "runtime",
+      "type": "from"
+    },
+    {
+      "from": "scripts.check_playwright",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.check_playwright",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "scripts.client_launcher",
+      "to": "license_client",
+      "type": "from"
+    },
+    {
+      "from": "scripts.license_backend_menu",
+      "to": "backend_license_client",
+      "type": "from"
+    },
+    {
+      "from": "scripts.license_backend_menu",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "scripts.license_backend_menu",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "scripts.manual_login_once",
+      "to": "src.instagram_adapter",
+      "type": "from"
+    },
+    {
+      "from": "scripts.manual_login_once",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.onboard_from_csv",
+      "to": "src.auth.onboarding",
+      "type": "from"
+    },
+    {
+      "from": "scripts.package_client",
+      "to": "licensekit",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_batch_send",
+      "to": "src.actions.dm_actions",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_batch_send",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_followup",
+      "to": "src.opt_in.account_loader",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_followup",
+      "to": "src.opt_in.followup",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_followup",
+      "to": "src.opt_in.runner_pool",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_reply",
+      "to": "src.opt_in.account_loader",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_reply",
+      "to": "src.opt_in.responder",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_reply",
+      "to": "src.opt_in.runner_pool",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_send",
+      "to": "src.opt_in.account_loader",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_send",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_send",
+      "to": "src.opt_in.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_send",
+      "to": "src.opt_in.messenger_playwright",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_batch_send",
+      "to": "src.opt_in.runner_pool",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_followup",
+      "to": "src.opt_in.followup",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_login",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_menu",
+      "to": "src.opt_in.followup",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_menu",
+      "to": "src.opt_in.responder",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_menu",
+      "to": "src.opt_in.wizard",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_playback",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_playback",
+      "to": "optin_browser.utils",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_record",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_reply",
+      "to": "src.opt_in.responder",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_reply_dm",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_send",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_send",
+      "to": "src.opt_in.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_send",
+      "to": "src.opt_in.messenger_playwright",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_send_dm",
+      "to": "optin_browser",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_optin_wizard",
+      "to": "src.opt_in.wizard",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_test_flow",
+      "to": "src.tasks.auth",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_test_flow",
+      "to": "src.tasks.messaging",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_test_jobs",
+      "to": "src.jobs.login_job",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_test_jobs",
+      "to": "src.jobs.read_messages_job",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_test_jobs",
+      "to": "src.jobs.send_message_job",
+      "type": "from"
+    },
+    {
+      "from": "scripts.run_test_jobs",
+      "to": "src.state_manager",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_login_real",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_login_real",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_open_chat",
+      "to": "src.actions.direct_helpers_v2",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_open_chat",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_playwright_login",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_send_message",
+      "to": "src.actions.direct_helpers",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_send_message",
+      "to": "src.actions.dm_actions",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_send_message",
+      "to": "src.humanizer",
+      "type": "from"
+    },
+    {
+      "from": "scripts.smoke_send_message",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "scripts.test_gramaddict",
+      "to": "integraciones.android_sim_adapter",
+      "type": "from"
+    },
+    {
+      "from": "session_store",
+      "to": "core",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.direct_helpers",
+      "to": "src.humanizer",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.direct_helpers_v2",
+      "to": "src.actions.direct_helpers",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.direct_helpers_v2",
+      "to": "src.humanizer",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.dm_actions",
+      "to": "src.actions.direct_helpers",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.dm_actions",
+      "to": "src.auth.persistent_login",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.dm_actions",
+      "to": "src.humanizer",
+      "type": "from"
+    },
+    {
+      "from": "src.actions.dm_actions",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.analytics.stats_engine",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "src.analytics.stats_engine",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "src.analytics.stats_engine",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.onboarding",
+      "to": "src.auth.persistent_login",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.onboarding",
+      "to": "src.instagram_adapter",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.onboarding",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.onboarding",
+      "to": "src.proxy_payload",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.onboarding",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.persistent_login",
+      "to": "src.instagram_adapter",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.persistent_login",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.persistent_login",
+      "to": "src.proxy_payload",
+      "type": "from"
+    },
+    {
+      "from": "src.auth.persistent_login",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.celery_app",
+      "to": "src.queue_config",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign",
+      "to": "src.dm_campaign.adaptive_scheduler",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign",
+      "to": "src.dm_campaign.campaign_runner",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign",
+      "to": "src.dm_campaign.health_monitor",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign",
+      "to": "src.dm_campaign.proxy_workers_runner",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.adaptive_scheduler",
+      "to": "src.dm_campaign.health_monitor",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.campaign_runner",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.campaign_runner",
+      "to": "src.dm_campaign.proxy_workers_runner",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.lead_status_store",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.lead_status_store",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "core.leads",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "core.storage",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "runtime.runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.dm_campaign.adaptive_scheduler",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.dm_campaign.health_monitor",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.dm_campaign.lead_status_store",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.proxy_assigner",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.proxy_payload",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "src.transport.human_instagram_sender",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_campaign.proxy_workers_runner",
+      "to": "templates_store",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_playwright_client",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_playwright_client",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_playwright_client",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.dm_playwright_client",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "src.image_attribute_filter",
+      "to": "src.vision.face_detector_scrfd",
+      "type": "from"
+    },
+    {
+      "from": "src.image_attribute_filter",
+      "to": "src.vision.fairface_analyzer",
+      "type": "from"
+    },
+    {
+      "from": "src.image_attribute_filter",
+      "to": "src.vision.gender_age_analyzer",
+      "type": "from"
+    },
+    {
+      "from": "src.image_rule_evaluator",
+      "to": "src.image_attribute_filter",
+      "type": "from"
+    },
+    {
+      "from": "src.image_rule_evaluator",
+      "to": "src.image_engine_thresholds",
+      "type": "from"
+    },
+    {
+      "from": "src.image_rule_evaluator",
+      "to": "src.image_prompt_parser",
+      "type": "from"
+    },
+    {
+      "from": "src.instagram_adapter",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.auto_reply_job",
+      "to": "src.queue_config",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.auto_reply_job",
+      "to": "src.state_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.login_job",
+      "to": "src.auth.onboarding",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.login_job",
+      "to": "src.queue_config",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.login_job",
+      "to": "src.state_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.read_messages_job",
+      "to": "src.queue_config",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.read_messages_job",
+      "to": "src.state_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.send_message_job",
+      "to": "src.queue_config",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.send_message_job",
+      "to": "src.state_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.jobs.send_message_job",
+      "to": "src.transport.human_instagram_sender",
+      "type": "from"
+    },
+    {
+      "from": "src.leads_filter_pipeline",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "src.leads_filter_pipeline",
+      "to": "src.image_attribute_filter",
+      "type": "from"
+    },
+    {
+      "from": "src.leads_filter_pipeline",
+      "to": "src.image_engine_thresholds",
+      "type": "from"
+    },
+    {
+      "from": "src.leads_filter_pipeline",
+      "to": "src.image_prompt_parser",
+      "type": "from"
+    },
+    {
+      "from": "src.leads_filter_pipeline",
+      "to": "src.image_rule_evaluator",
+      "type": "from"
+    },
+    {
+      "from": "src.leads_filter_pipeline",
+      "to": "src.text_engine_thresholds",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.browser_manager",
+      "to": "src.opt_in.session_store",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.browser_manager",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.browser_manager",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.flows",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.flows",
+      "to": "src.opt_in.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.flows",
+      "to": "src.opt_in.human_engine",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.flows",
+      "to": "src.opt_in.login_playwright",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.flows",
+      "to": "src.opt_in.session_store",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.followup",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.followup",
+      "to": "src.opt_in.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.followup",
+      "to": "src.opt_in.human_engine",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.followup",
+      "to": "src.opt_in.messenger_playwright",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.login_playwright",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.login_playwright",
+      "to": "src.opt_in.human_engine",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.login_playwright",
+      "to": "src.opt_in.session_store",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.messenger_playwright",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.messenger_playwright",
+      "to": "src.opt_in.human_engine",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.responder",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.responder",
+      "to": "src.opt_in.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.responder",
+      "to": "src.opt_in.human_engine",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.responder",
+      "to": "src.opt_in.messenger_playwright",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.runner_pool",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.opt_in.wizard",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "src.playwright_service",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "src.playwright_service",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.proxy_assigner",
+      "to": "src.proxy_pool",
+      "type": "from"
+    },
+    {
+      "from": "src.proxy_pool",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "src.runtime",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "src.runtime.playwright_runtime",
+      "to": "core.log_rotation",
+      "type": "from"
+    },
+    {
+      "from": "src.runtime.playwright_runtime",
+      "to": "core.storage_atomic",
+      "type": "from"
+    },
+    {
+      "from": "src.runtime.playwright_runtime",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "src.tasks.auth",
+      "to": "src.auth.onboarding",
+      "type": "from"
+    },
+    {
+      "from": "src.tasks.auth",
+      "to": "src.celery_app",
+      "type": "from"
+    },
+    {
+      "from": "src.tasks.messaging",
+      "to": "src.celery_app",
+      "type": "from"
+    },
+    {
+      "from": "src.tasks.messaging",
+      "to": "src.transport.human_instagram_sender",
+      "type": "from"
+    },
+    {
+      "from": "src.transport.human_instagram_sender",
+      "to": "src.auth.persistent_login",
+      "type": "from"
+    },
+    {
+      "from": "src.transport.human_instagram_sender",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "src.transport.human_instagram_sender",
+      "to": "src.proxy_payload",
+      "type": "from"
+    },
+    {
+      "from": "src.transport.human_instagram_sender",
+      "to": "src.runtime.playwright_runtime",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "client_factory",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "core.session_store",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "core.storage",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "proxy_manager",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "state_view",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "storage",
+      "to": "core",
+      "type": "from"
+    },
+    {
+      "from": "templates_store",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "test_headless_send",
+      "to": "adapters.instagram_playwright",
+      "type": "from"
+    },
+    {
+      "from": "test_login_improved",
+      "to": "src.instagram_adapter",
+      "type": "from"
+    },
+    {
+      "from": "test_login_improved",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "test_playwright_login",
+      "to": "src.auth.onboarding",
+      "type": "from"
+    },
+    {
+      "from": "test_playwright_login",
+      "to": "src.instagram_adapter",
+      "type": "from"
+    },
+    {
+      "from": "test_playwright_login",
+      "to": "src.playwright_service",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_accounts_menu_and_limits",
+      "to": "gui.io_adapter",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_accounts_menu_and_limits",
+      "to": "gui.main_window",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_accounts_menu_and_limits",
+      "to": "src.dm_campaign.proxy_workers_runner",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_accounts_menu_and_limits",
+      "to": "src.health_playwright",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_autoresponder_event_contract",
+      "to": "core.responder",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_autoresponder_event_contract",
+      "to": "gui.main_window",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_dm_campaign_template_variants",
+      "to": "src.dm_campaign.proxy_workers_runner",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_dm_playwright_client_api_timestamps",
+      "to": "src.dm_playwright_client",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_flow_engine",
+      "to": "core.responder",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_image_onnx_local_engine",
+      "to": "src.vision.face_detector_scrfd",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_image_onnx_local_engine",
+      "to": "src.vision.gender_age_analyzer",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_instagram_adapter",
+      "to": "adapters.base",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_instagram_adapter",
+      "to": "src.instagram_adapter",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_leads_filter_consistency",
+      "to": "core.leads",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_leads_filter_consistency",
+      "to": "src",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_leads_local_pipeline",
+      "to": "core.leads",
+      "type": "import"
+    },
+    {
+      "from": "tests.test_leads_local_pipeline",
+      "to": "src",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_leads_local_pipeline",
+      "to": "src.image_attribute_filter",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_leads_local_pipeline",
+      "to": "src.image_prompt_parser",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_leads_local_pipeline",
+      "to": "src.image_rule_evaluator",
+      "type": "from"
+    },
+    {
+      "from": "tests.test_leads_ui_runtime_parser",
+      "to": "gui.main_window",
+      "type": "import"
+    },
+    {
+      "from": "tests_optin.test_autoresponder_runtime",
+      "to": "core.responder",
+      "type": "import"
+    },
+    {
+      "from": "tests_optin.test_autoresponder_runtime_controller",
+      "to": "src.autoresponder_runtime",
+      "type": "from"
+    },
+    {
+      "from": "tests_optin.test_flows_login_fallback",
+      "to": "src.opt_in.browser_manager",
+      "type": "from"
+    },
+    {
+      "from": "tests_optin.test_flows_login_fallback",
+      "to": "src.opt_in.flows",
+      "type": "from"
+    },
+    {
+      "from": "tests_optin.test_human_engine_resilience",
+      "to": "src.opt_in.human_engine",
+      "type": "from"
+    },
+    {
+      "from": "tests_optin.test_runner_pool_limits",
+      "to": "src.opt_in.audit",
+      "type": "from"
+    },
+    {
+      "from": "tests_optin.test_runner_pool_limits",
+      "to": "src.opt_in.runner_pool",
+      "type": "from"
+    },
+    {
+      "from": "tests_optin.test_session_store",
+      "to": "src.opt_in.session_store",
+      "type": "from"
+    },
+    {
+      "from": "tools.test_integration_send",
+      "to": "core.accounts",
+      "type": "from"
+    },
+    {
+      "from": "totp_store",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "update_system",
+      "to": "config",
+      "type": "from"
+    },
+    {
+      "from": "update_system",
+      "to": "licensekit",
+      "type": "from"
+    },
+    {
+      "from": "update_system",
+      "to": "paths",
+      "type": "from"
+    },
+    {
+      "from": "update_system",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "update_system",
+      "to": "utils",
+      "type": "from"
+    },
+    {
+      "from": "utils",
+      "to": "ui",
+      "type": "from"
+    },
+    {
+      "from": "whatsapp",
+      "to": "automation",
+      "type": "from"
+    }
+  ],
+  "top_level_cycles": [],
+  "function_scope_or_deferred_cycles": [
+    {
+      "modules": [
+        "src.auth.persistent_login",
+        "src.instagram_adapter"
+      ],
+      "status": "deferred_runtime_cycle_only"
+    },
+    {
+      "modules": [
+        "flow_editor.edge_item",
+        "flow_editor.node_item",
+        "flow_editor.port_item"
+      ],
+      "status": "tight_subgraph_no_import_time_cycle"
+    }
+  ],
+  "dynamic_import_sites": [
+    {
+      "module": "app",
+      "line": 154,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 155,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 156,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 157,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 158,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 159,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 160,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 169,
+      "call": "_safe_import"
+    },
+    {
+      "module": "app",
+      "line": 146,
+      "call": "importlib.import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 2564,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 3556,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 3604,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 3647,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 5470,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 13400,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 13706,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 15551,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 15569,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 15607,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 15629,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 16079,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 16101,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 18385,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 18414,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 20554,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 20730,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 20751,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 13655,
+      "call": "import_module"
+    },
+    {
+      "module": "gui.main_window",
+      "line": 13825,
+      "call": "import_module"
+    }
+  ],
+  "masked_import_sites": [
+    {
+      "module": "app",
+      "line": 46
+    },
+    {
+      "module": "app",
+      "line": 161
+    },
+    {
+      "module": "app",
+      "line": 64
+    },
+    {
+      "module": "backend_license_client",
+      "line": 268
+    },
+    {
+      "module": "licensekit",
+      "line": 829
+    },
+    {
+      "module": "licensekit",
+      "line": 847
+    },
+    {
+      "module": "licensekit",
+      "line": 1080
+    },
+    {
+      "module": "licensekit",
+      "line": 1207
+    },
+    {
+      "module": "licensekit",
+      "line": 1296
+    },
+    {
+      "module": "license_client",
+      "line": 178
+    },
+    {
+      "module": "license_client",
+      "line": 551
+    },
+    {
+      "module": "license_client",
+      "line": 627
+    },
+    {
+      "module": "license_client",
+      "line": 754
+    },
+    {
+      "module": "license_client",
+      "line": 795
+    },
+    {
+      "module": "license_client",
+      "line": 809
+    },
+    {
+      "module": "license_client",
+      "line": 859
+    },
+    {
+      "module": "license_client",
+      "line": 901
+    },
+    {
+      "module": "media_norm",
+      "line": 23
+    },
+    {
+      "module": "media_norm",
+      "line": 431
+    },
+    {
+      "module": "proxy_manager",
+      "line": 139
+    },
+    {
+      "module": "state_view",
+      "line": 14
+    },
+    {
+      "module": "state_view",
+      "line": 19
+    },
+    {
+      "module": "state_view",
+      "line": 24
+    },
+    {
+      "module": "state_view",
+      "line": 695
+    },
+    {
+      "module": "test_login_improved",
+      "line": 53
+    },
+    {
+      "module": "ui",
+      "line": 15
+    },
+    {
+      "module": "adapters.instagram_instagrapi",
+      "line": 11
+    },
+    {
+      "module": "automation.whatsapp",
+      "line": 123
+    },
+    {
+      "module": "automation.whatsapp",
+      "line": 2450
+    },
+    {
+      "module": "automation.whatsapp",
+      "line": 2682
+    },
+    {
+      "module": "automation.whatsapp",
+      "line": 3164
+    },
+    {
+      "module": "automation.whatsapp",
+      "line": 2428
+    },
+    {
+      "module": "automation.whatsapp",
+      "line": 129
+    },
+    {
+      "module": "automation.actions.interactions",
+      "line": 68
+    },
+    {
+      "module": "automation.actions.interactions",
+      "line": 1234
+    },
+    {
+      "module": "core.accounts",
+      "line": 86
+    },
+    {
+      "module": "core.accounts",
+      "line": 100
+    },
+    {
+      "module": "core.accounts",
+      "line": 104
+    },
+    {
+      "module": "core.accounts",
+      "line": 686
+    },
+    {
+      "module": "core.accounts",
+      "line": 770
+    },
+    {
+      "module": "core.accounts",
+      "line": 1160
+    },
+    {
+      "module": "core.accounts",
+      "line": 1171
+    },
+    {
+      "module": "core.accounts",
+      "line": 2054
+    },
+    {
+      "module": "core.accounts",
+      "line": 2349
+    },
+    {
+      "module": "core.accounts",
+      "line": 2790
+    },
+    {
+      "module": "core.ig",
+      "line": 21
+    },
+    {
+      "module": "core.ig",
+      "line": 34
+    },
+    {
+      "module": "core.ig",
+      "line": 39
+    },
+    {
+      "module": "core.ig",
+      "line": 44
+    },
+    {
+      "module": "core.ig",
+      "line": 583
+    },
+    {
+      "module": "core.ig",
+      "line": 594
+    },
+    {
+      "module": "core.leads",
+      "line": 545
+    },
+    {
+      "module": "core.leads",
+      "line": 556
+    },
+    {
+      "module": "core.leads",
+      "line": 567
+    },
+    {
+      "module": "core.leads",
+      "line": 578
+    },
+    {
+      "module": "core.leads",
+      "line": 1596
+    },
+    {
+      "module": "core.responder",
+      "line": 61
+    },
+    {
+      "module": "core.responder",
+      "line": 134
+    },
+    {
+      "module": "core.responder",
+      "line": 2314
+    },
+    {
+      "module": "core.storage",
+      "line": 11
+    },
+    {
+      "module": "core.storage",
+      "line": 16
+    },
+    {
+      "module": "core.storage",
+      "line": 21
+    },
+    {
+      "module": "core.storage",
+      "line": 260
+    },
+    {
+      "module": "gui.gui_app",
+      "line": 91
+    },
+    {
+      "module": "gui.main_window",
+      "line": 3584
+    },
+    {
+      "module": "gui.main_window",
+      "line": 4136
+    },
+    {
+      "module": "gui.main_window",
+      "line": 10213
+    },
+    {
+      "module": "gui.main_window",
+      "line": 10235
+    },
+    {
+      "module": "gui.main_window",
+      "line": 10272
+    },
+    {
+      "module": "gui.main_window",
+      "line": 10311
+    },
+    {
+      "module": "gui.main_window",
+      "line": 16275
+    },
+    {
+      "module": "gui.main_window",
+      "line": 20702
+    },
+    {
+      "module": "integraciones.adapter",
+      "line": 25
+    },
+    {
+      "module": "launchers.client_launcher",
+      "line": 397
+    },
+    {
+      "module": "launchers.client_launcher",
+      "line": 383
+    },
+    {
+      "module": "runtime.runtime_parity",
+      "line": 306
+    },
+    {
+      "module": "runtime.runtime_parity",
+      "line": 579
+    },
+    {
+      "module": "runtime.runtime_parity",
+      "line": 619
+    },
+    {
+      "module": "src.dm_playwright_client",
+      "line": 17
+    },
+    {
+      "module": "src.dm_playwright_client",
+      "line": 5749
+    },
+    {
+      "module": "src.dm_playwright_client",
+      "line": 3469
+    },
+    {
+      "module": "src.dm_playwright_client",
+      "line": 3503
+    },
+    {
+      "module": "src.instagram_adapter",
+      "line": 259
+    },
+    {
+      "module": "src.instagram_adapter",
+      "line": 793
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 1162
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 2126
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 2691
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 4425
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 654
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 3638
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 3745
+    },
+    {
+      "module": "src.leads_filter_pipeline",
+      "line": 690
+    },
+    {
+      "module": "src.proxy_payload",
+      "line": 109
+    },
+    {
+      "module": "src.analytics.stats_engine",
+      "line": 15
+    },
+    {
+      "module": "src.auth.onboarding",
+      "line": 342
+    },
+    {
+      "module": "src.auth.persistent_login",
+      "line": 377
+    },
+    {
+      "module": "src.jobs.auto_reply_job",
+      "line": 139
+    },
+    {
+      "module": "src.jobs.auto_reply_job",
+      "line": 49
+    },
+    {
+      "module": "src.jobs.login_job",
+      "line": 94
+    },
+    {
+      "module": "src.jobs.read_messages_job",
+      "line": 34
+    },
+    {
+      "module": "src.jobs.read_messages_job",
+      "line": 131
+    },
+    {
+      "module": "src.runtime.playwright_runtime",
+      "line": 142
+    },
+    {
+      "module": "src.runtime.playwright_runtime",
+      "line": 908
+    },
+    {
+      "module": "src.vision.face_detector_scrfd",
+      "line": 57
+    },
+    {
+      "module": "src.vision.fairface_analyzer",
+      "line": 92
+    },
+    {
+      "module": "src.vision.gender_age_analyzer",
+      "line": 64
+    },
+    {
+      "module": "tools.build_executable",
+      "line": 462
+    },
+    {
+      "module": "tools.test_integration_send",
+      "line": 22
+    }
+  ],
+  "strict_import_smoke": {
+    "app": "passed",
+    "mainwindow_offscreen": "passed",
+    "core_modules": "passed"
+  },
+  "notes": [
+    "No import-time cycle was detected in the top-level graph.",
+    "Masked import sites are still numerous."
+  ]
+}

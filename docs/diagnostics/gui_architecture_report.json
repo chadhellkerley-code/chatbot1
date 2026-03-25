@@ -1,0 +1,13 @@
+{
+  "generated_on": "2026-03-06",
+  "gui_architecture_score": 55,
+  "summary": "Responsive enough to boot and signal across threads, but not cleanly separated.",
+  "ui_logic_separated_from_backend_logic": "partial",
+  "heavy_io_on_ui_thread": "partial_pass",
+  "signal_slot_architecture": "pass_with_caveats",
+  "findings": [
+    "DashboardMetricsLoader moves dashboard refresh off the UI thread.",
+    "MainWindow still directly routes backend work via dynamic imports.",
+    "MainWindow is still a 20.8k-line class."
+  ]
+}

@@ -1,0 +1,361 @@
+{
+  "generated_on": "2026-03-06",
+  "modules": [
+    {
+      "module": "gui/main_window.py",
+      "status": "fail",
+      "metrics": {
+        "lines": 20874,
+        "functions": 681,
+        "classes": 12,
+        "largest_functions": [
+          {
+            "name": "_build_autoresponder_flow_panel",
+            "line": 4600,
+            "length": 466
+          },
+          {
+            "name": "_show_smart_text_engine_thresholds_dialog",
+            "line": 17578,
+            "length": 346
+          },
+          {
+            "name": "_build_execution_page",
+            "line": 8070,
+            "length": 324
+          },
+          {
+            "name": "_collect_top_responded_messages",
+            "line": 19863,
+            "length": 315
+          },
+          {
+            "name": "_show_filter_config_editor",
+            "line": 17166,
+            "length": 298
+          }
+        ],
+        "largest_classes": [
+          {
+            "name": "MainWindow",
+            "line": 1929,
+            "length": 18934
+          },
+          {
+            "name": "_FlowStageEditorDialog",
+            "line": 1431,
+            "length": 457
+          },
+          {
+            "name": "_FlowBuilderNodeWidget",
+            "line": 645,
+            "length": 375
+          }
+        ]
+      },
+      "modular_separation": "partial",
+      "import_stability": "pass",
+      "readability": "fail",
+      "patch_style_code": [
+        "legacy _legacy_open_* routes",
+        "many import_module() backend calls"
+      ]
+    },
+    {
+      "module": "core/responder.py",
+      "status": "fail",
+      "metrics": {
+        "lines": 11015,
+        "functions": 278,
+        "classes": 4,
+        "largest_functions": [
+          {
+            "name": "decision_cycle_from_memory",
+            "line": 8398,
+            "length": 1140
+          },
+          {
+            "name": "_activate_bot",
+            "line": 9948,
+            "length": 585
+          },
+          {
+            "name": "execute_pack",
+            "line": 5535,
+            "length": 503
+          },
+          {
+            "name": "_process_followups_math",
+            "line": 10642,
+            "length": 271
+          },
+          {
+            "name": "_hydrate_threads_on_demand",
+            "line": 7316,
+            "length": 256
+          }
+        ],
+        "largest_classes": [
+          {
+            "name": "FlowEngine",
+            "line": 1860,
+            "length": 351
+          },
+          {
+            "name": "BotStats",
+            "line": 2248,
+            "length": 59
+          },
+          {
+            "name": "_MemoryMessageSnapshot",
+            "line": 6640,
+            "length": 6
+          }
+        ]
+      },
+      "modular_separation": "partial",
+      "import_stability": "pass",
+      "readability": "fail",
+      "patch_style_code": [
+        "legacy/fallback flow reconstruction",
+        "1140-line decision_cycle_from_memory"
+      ]
+    },
+    {
+      "module": "src/dm_playwright_client.py",
+      "status": "warning",
+      "metrics": {
+        "lines": 5974,
+        "functions": 153,
+        "classes": 6,
+        "largest_functions": [
+          {
+            "name": "iter_threads",
+            "line": 811,
+            "length": 362
+          },
+          {
+            "name": "fetch_inbox_threads_page",
+            "line": 475,
+            "length": 245
+          },
+          {
+            "name": "_open_thread",
+            "line": 3734,
+            "length": 227
+          },
+          {
+            "name": "_extract_inbox_threads_from_payload",
+            "line": 5141,
+            "length": 201
+          },
+          {
+            "name": "_open_thread_by_cache",
+            "line": 4399,
+            "length": 189
+          }
+        ],
+        "largest_classes": [
+          {
+            "name": "PlaywrightDMClient",
+            "line": 369,
+            "length": 4547
+          },
+          {
+            "name": "ThreadLike",
+            "line": 339,
+            "length": 9
+          },
+          {
+            "name": "_APIMessageRecord",
+            "line": 360,
+            "length": 7
+          }
+        ]
+      },
+      "modular_separation": "partial",
+      "import_stability": "pass",
+      "readability": "warning",
+      "patch_style_code": [
+        "single 4.5k-line client class",
+        "multiple fallback thread/open paths"
+      ]
+    },
+    {
+      "module": "automation/whatsapp.py",
+      "status": "warning",
+      "metrics": {
+        "lines": 4745,
+        "functions": 161,
+        "classes": 4,
+        "largest_functions": [
+          {
+            "name": "_send_with_playwright",
+            "line": 2679,
+            "length": 214
+          },
+          {
+            "name": "_plan_message_run",
+            "line": 1607,
+            "length": 181
+          },
+          {
+            "name": "_deliver_event",
+            "line": 3856,
+            "length": 140
+          },
+          {
+            "name": "_wa_reply_on_current_chat",
+            "line": 3408,
+            "length": 121
+          },
+          {
+            "name": "_reconcile_runs",
+            "line": 2159,
+            "length": 110
+          }
+        ],
+        "largest_classes": [
+          {
+            "name": "WhatsAppDataStore",
+            "line": 332,
+            "length": 411
+          },
+          {
+            "name": "_WASelectors",
+            "line": 771,
+            "length": 98
+          },
+          {
+            "name": "_MessageRunner",
+            "line": 880,
+            "length": 37
+          }
+        ]
+      },
+      "modular_separation": "partial",
+      "import_stability": "pass",
+      "readability": "warning",
+      "patch_style_code": [
+        "data store + runtime + scheduling remain together"
+      ]
+    },
+    {
+      "module": "src/leads_filter_pipeline.py",
+      "status": "warning",
+      "metrics": {
+        "lines": 4527,
+        "functions": 149,
+        "classes": 19,
+        "largest_functions": [
+          {
+            "name": "execute_filter_list_async",
+            "line": 3523,
+            "length": 899
+          },
+          {
+            "name": "_v2_task_image_download",
+            "line": 3177,
+            "length": 209
+          },
+          {
+            "name": "_v2_init_runtime",
+            "line": 2664,
+            "length": 131
+          },
+          {
+            "name": "capture_runtime_http_meta",
+            "line": 1200,
+            "length": 115
+          },
+          {
+            "name": "_v2_task_image_score",
+            "line": 3388,
+            "length": 97
+          }
+        ],
+        "largest_classes": [
+          {
+            "name": "AdaptiveTokenLimiter",
+            "line": 289,
+            "length": 203
+          },
+          {
+            "name": "LocalTextEngine",
+            "line": 623,
+            "length": 168
+          },
+          {
+            "name": "AccountRuntime",
+            "line": 96,
+            "length": 41
+          }
+        ]
+      },
+      "modular_separation": "partial",
+      "import_stability": "pass",
+      "readability": "warning",
+      "patch_style_code": [
+        "899-line execute_filter_list_async"
+      ]
+    },
+    {
+      "module": "core/accounts.py",
+      "status": "warning",
+      "metrics": {
+        "lines": 3854,
+        "functions": 130,
+        "classes": 2,
+        "largest_functions": [
+          {
+            "name": "menu_accounts",
+            "line": 3543,
+            "length": 307
+          },
+          {
+            "name": "_import_accounts_from_csv",
+            "line": 2047,
+            "length": 134
+          },
+          {
+            "name": "relogin_accounts_with_playwright_background",
+            "line": 757,
+            "length": 113
+          },
+          {
+            "name": "_wait_until_manual_end",
+            "line": 2837,
+            "length": 104
+          },
+          {
+            "name": "open_manual_session",
+            "line": 2942,
+            "length": 85
+          }
+        ],
+        "largest_classes": [
+          {
+            "name": "_ManualPlaywrightLifecycle",
+            "line": 2589,
+            "length": 449
+          },
+          {
+            "name": "_LoginTwoFactorPayload",
+            "line": 873,
+            "length": 4
+          }
+        ]
+      },
+      "modular_separation": "partial",
+      "import_stability": "pass",
+      "readability": "warning",
+      "patch_style_code": [
+        "registry/login/csv/proxy/manual-session concerns remain together"
+      ]
+    }
+  ],
+  "overall_findings": [
+    "Import stability is better than module cleanliness.",
+    "The largest files are still not fully decomposed."
+  ]
+}

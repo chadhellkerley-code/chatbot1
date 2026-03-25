@@ -1,0 +1,102 @@
+{
+  "generated_on": "2026-03-06",
+  "storage_health_score": 79,
+  "json_ok_count": 386,
+  "json_fail_count": 0,
+  "jsonl_ok_count": 4,
+  "jsonl_fail_count": 0,
+  "profile_dirs": 263,
+  "profiles_with_storage_state": 127,
+  "profiles_without_storage_state_count": 136,
+  "profiles_without_storage_state_sample": [
+    "__diag__",
+    "__diag_final2__",
+    "__diag_proxy__",
+    "__diag_proxy_final__",
+    "__smoke_persistent__",
+    "__smoke_runtime__",
+    "__verify_persistent__",
+    "_smoke_runtime",
+    "_smoke_runtime_persistent",
+    "a.siyetolal5",
+    "abigail.jaiime",
+    "AnnaSnowfg",
+    "austinarmstrong8941",
+    "bahriye.oguzhan90",
+    "basirtaheri09j",
+    "brianboyd175",
+    "BrianWong696",
+    "cansuata.rq6",
+    "ClaraJoydg",
+    "dm_debug",
+    "donaldortega7376",
+    "eavo5ezu",
+    "edwardsanders4646",
+    "eroraeslami06e",
+    "Evangelinearad",
+    "FreyaSkyefe",
+    "fundakaceme.rs3",
+    "geraldanderson6642025",
+    "gulte.kinoynak74",
+    "Gwendoleleste",
+    "hadiserahbari06s1",
+    "hadiserahin96w",
+    "HelenaXxf",
+    "HollySkyfh",
+    "imansafari96w1",
+    "IngridXefg",
+    "IrisGlowef",
+    "IslaViolettafv",
+    "jamesrogers6732025",
+    "jamshid86s",
+    "javidfadb96ea1",
+    "Javidforogh97z",
+    "jazzso.ar",
+    "jesseray7255",
+    "jesseromero6595",
+    "Joaco.Artturo",
+    "jonathanchapman586",
+    "jordanfox1167",
+    "jorge.carrr",
+    "josephsimpson9641"
+  ],
+  "atomic_write_helper": "core/storage_atomic.py",
+  "atomic_smoke": [
+    "json round-trip passed",
+    "jsonl round-trip passed",
+    "corrupt json repair passed",
+    "corrupt jsonl repair passed"
+  ],
+  "bypasses_atomic_helper": [
+    {
+      "path": "templates_store.py",
+      "lines": [
+        48,
+        79
+      ]
+    },
+    {
+      "path": "src/proxy_pool.py",
+      "lines": [
+        19
+      ]
+    },
+    {
+      "path": "totp_store.py",
+      "lines": [
+        47,
+        117
+      ]
+    },
+    {
+      "path": "core/accounts_helpers/password_cache.py",
+      "lines": [
+        54
+      ]
+    }
+  ],
+  "warnings": [
+    "On-disk JSON/JSONL data are currently valid.",
+    "Storage ownership is not fully unified."
+  ]
+}

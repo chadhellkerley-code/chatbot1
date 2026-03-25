@@ -1,0 +1,28 @@
+{
+  "generated_on": "2026-03-06",
+  "safe_cleanup_candidate": [
+    "accounts.py",
+    "ig.py",
+    "leads.py",
+    "responder.py",
+    "session_store.py",
+    "storage.py",
+    "whatsapp.py",
+    "gui_app.py",
+    "io_adapter.py",
+    "main_window.py",
+    "client_launcher.py",
+    "owner_gui_launcher.py",
+    "runtime_parity.py",
+    "actions/",
+    "cd",
+    "git",
+    "python",
+    "license_backend_menu.py",
+    "test_headless_send.py",
+    "test_login_improved.py",
+    "test_playwright_login.py",
+    "tools/test_integration_send.py",
+    "Station ID/"
+  ]
+}

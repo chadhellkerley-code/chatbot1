@@ -1,0 +1,233 @@
+{
+  "directories_removed": [
+    "optin_browser"
+  ],
+  "wrappers_removed": [
+    "accounts.py",
+    "client_launcher.py",
+    "gui_app.py",
+    "ig.py",
+    "io_adapter.py",
+    "leads.py",
+    "main_window.py",
+    "owner_gui_launcher.py",
+    "responder.py",
+    "runtime_parity.py",
+    "session_store.py",
+    "storage.py",
+    "whatsapp.py",
+    "actions/__init__.py",
+    "actions/content_publisher.py",
+    "actions/interactions.py",
+    "actions/interactions_adapters.py"
+  ],
+  "modules_moved": [
+    {
+      "from": "templates_store.py",
+      "to": "core/templates_store.py"
+    },
+    {
+      "from": "totp_store.py",
+      "to": "core/totp_store.py"
+    },
+    {
+      "from": "optin_browser/",
+      "to": "src/opt_in/browser_tools/"
+    },
+    {
+      "from": "test_headless_send.py",
+      "to": "scripts/headless_send_smoke.py"
+    },
+    {
+      "from": "test_login_improved.py",
+      "to": "scripts/playwright_login_debug.py"
+    },
+    {
+      "from": "test_playwright_login.py",
+      "to": "scripts/playwright_interactive_login.py"
+    },
+    {
+      "from": "scripts/test_gramaddict.py",
+      "to": "scripts/run_gramaddict.py"
+    },
+    {
+      "from": "tools/test_integration_send.py",
+      "to": "scripts/integration_send_smoke.py"
+    },
+    {
+      "from": "gui/main_window.py::AutoResponderSummaryDialog",
+      "to": "gui/runtime_widgets.py::AutoResponderSummaryDialog"
+    },
+    {
+      "from": "gui/main_window.py::DashboardMetricsLoader",
+      "to": "gui/runtime_widgets.py::DashboardMetricsLoader"
+    }
+  ],
+  "imports_updated": [
+    {
+      "change": "Playwright executable resolution now uses src.runtime.playwright_resolver",
+      "files": [
+        "src/playwright_service.py",
+        "src/runtime/playwright_runtime.py"
+      ]
+    },
+    {
+      "change": "template storage imports now use core.templates_store",
+      "files": [
+        "core/leads.py",
+        "core/ig.py",
+        "gui/main_window.py",
+        "src/dm_campaign/proxy_workers_runner.py"
+      ]
+    },
+    {
+      "change": "TOTP storage imports now use core.totp_store",
+      "files": [
+        "core/accounts.py",
+        "tools/build_executable.py",
+        "tools/build_owner_macos_universal.py"
+      ]
+    },
+    {
+      "change": "opt-in browser tooling imports now resolve to src.opt_in.browser_tools",
+      "files": [
+        "app.py",
+        "scripts/run_optin_login.py",
+        "scripts/run_optin_send_dm.py",
+        "scripts/run_optin_reply_dm.py",
+        "scripts/run_optin_record.py",
+        "scripts/run_optin_playback.py"
+      ]
+    },
+    {
+      "change": "opt-in CLI scripts now bootstrap the repository root explicitly before local imports",
+      "files": [
+        "scripts/run_optin_batch_followup.py",
+        "scripts/run_optin_batch_reply.py",
+        "scripts/run_optin_batch_send.py",
+        "scripts/run_optin_followup.py",
+        "scripts/run_optin_menu.py",
+        "scripts/run_optin_reply.py",
+        "scripts/run_optin_send.py",
+        "scripts/run_optin_wizard.py"
+      ]
+    },
+    {
+      "change": "responder now uses the shared core.autoresponder.openai_client helpers directly instead of duplicating the helper block locally",
+      "files": [
+        "core/responder.py"
+      ]
+    }
+  ],
+  "playwright_runtime_status": {
+    "status": "passed",
+    "hardcoded_revision_paths_removed": true,
+    "resolver_module": "src/runtime/playwright_resolver.py",
+    "resolved_executable": "C:\\Users\\PC\\Desktop\\chatbot\\ms-playwright\\chromium-1155\\chrome-win\\chrome.exe",
+    "system_chrome_launch_smoke": "passed",
+    "bundled_browser_fallback_available": true,
+    "notes": [
+      "Runtime still tries the Chrome channel first and now falls back to the Playwright-managed Chromium path dynamically.",
+      "An async cleanup warning from BaseSubprocessTransport.__del__ still appears on shutdown, but the browser launch and page navigation smoke completed successfully."
+    ]
+  },
+  "test_system_status": {
+    "status": "passed",
+    "pytest_collect_only": "passed",
+    "full_suite": "passed",
+    "tests_collected": 107,
+    "tests_passed": 107,
+    "execution_scripts_renamed": [
+      "scripts/headless_send_smoke.py",
+      "scripts/playwright_login_debug.py",
+      "scripts/playwright_interactive_login.py",
+      "scripts/run_gramaddict.py",
+      "scripts/integration_send_smoke.py"
+    ],
+    "warnings": [
+      "Pydantic deprecation warnings from instagrapi remain in the environment."
+    ]
+  },
+  "final_root_structure": [
+    ".env",
+    ".env.local",
+    ".git",
+    ".gitattributes",
+    ".gitignore",
+    ".pytest_cache",
+    ".session_key",
+    ".vscode",
+    "README.md",
+    "Station ID",
+    "__init__.py",
+    "__pycache__",
+    "actions",
+    "adapters",
+    "app.py",
+    "automation",
+    "backend",
+    "backend_license_client.py",
+    "browser_sessions",
+    "browsers",
+    "client_factory.py",
+    "cloudflare",
+    "complete_refactor_verification_report.json",
+    "config.py",
+    "core",
+    "data",
+    "dependency_integrity_graph.json",
+    "dist",
+    "docs",
+    "flow_editor",
+    "gui",
+    "gui_architecture_report.json",
+    "health_store.py",
+    "infra",
+    "integraciones",
+    "launchers",
+    "legacy_files_report.json",
+    "license_client.py",
+    "licensekit.py",
+    "media_norm.py",
+    "models",
+    "module_cleanliness_report.json",
+    "ms-playwright",
+    "out",
+    "paths.py",
+    "profiles",
+    "proxy_manager.py",
+    "refactor_step_audit.json",
+    "repository_structure_integrity.json",
+    "requirements.txt",
+    "requirements_build.txt",
+    "requirements_optin.txt",
+    "runtime",
+    "screenshots",
+    "scripts",
+    "sdk_sanitize.py",
+    "src",
+    "state_view.py",
+    "step10_stability_fixes_report.json",
+    "step11b_production_hardening_report.json",
+    "storage",
+    "storage_system_health.json",
+    "styles.qss",
+    "supabase_migrations.py",
+    "tests",
+    "tests_optin",
+    "text",
+    "tools",
+    "traces",
+    "ui.py",
+    "update_manifest.json",
+    "update_system.py",
+    "utils.py",
+    "whatsapp_automation.json",
+    "whatsapp_exports"
+  ],
+  "residual_root_items": [
+    "actions/ remains as an empty wrapper directory; wrapper files were removed but the directory itself was not deleted.",
+    "Station ID/ was left untouched because it was not confirmed safe to remove.",
+    "Step 10-12 audit JSON artifacts remain at the repository root."
+  ]
+}
