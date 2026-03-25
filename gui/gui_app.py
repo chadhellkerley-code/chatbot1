@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
@@ -10,14 +11,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from application.services import build_application_services
-from bootstrap import ensure_bootstrapped, record_system_event
+from bootstrap import ensure_bootstrapped, record_system_event, start_post_show_bootstrap_tasks
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from gui.error_handling import configure_logging, install_exception_hooks
 from gui.main_window import MainWindow
-from license_client import LicenseStartupError
+from license_client import (
+    LicenseStartupError,
+    format_license_user_message,
+    license_failure_reason,
+)
 from runtime.runtime_parity import bootstrap_runtime_env
 
 ExecutionMode = Literal["owner", "client"]
@@ -62,6 +66,19 @@ def _resolve_mode(mode: Optional[str]) -> ExecutionMode:
     return "owner"
 
 
+def _run_post_show_startup(
+    window: MainWindow,
+    *,
+    bootstrap_ctx: Any,
+    time_to_window_show_seconds: float,
+) -> None:
+    start_post_show_bootstrap_tasks(
+        bootstrap_ctx,
+        time_to_window_show_seconds=time_to_window_show_seconds,
+    )
+    window.start_startup_housekeeping()
+
+
 def launch_gui_app(
     backend_entrypoint: Optional[Callable[[], Any]] = None,
     *,
@@ -70,7 +87,8 @@ def launch_gui_app(
     os.environ.setdefault("INSTACLI_DISABLE_CONSOLE_CLEAR", "1")
 
     resolved_mode = _resolve_mode(mode)
-    bootstrap_ctx = ensure_bootstrapped(resolved_mode)
+    launch_started_at = time.perf_counter()
+    bootstrap_ctx = ensure_bootstrapped(resolved_mode, defer_housekeeping=True)
     bootstrap_runtime_env(resolved_mode, app_root_hint=bootstrap_ctx.install_root, force=True)
     log_path = configure_logging(bootstrap_ctx.install_root)
     logger = logging.getLogger("insta_crm.gui")
@@ -95,20 +113,69 @@ def launch_gui_app(
         try:
             backend_entrypoint()
         except LicenseStartupError as exc:
-            logger.error("License startup validation failed: %s", exc.detail or exc.user_message)
-            QMessageBox.critical(None, "InstaCRM", exc.user_message)
-            record_system_event(
-                bootstrap_ctx.install_root,
-                "license_startup_blocked",
-                level="error",
-                payload={
-                    "mode": resolved_mode,
-                    "startup_id": bootstrap_ctx.startup_id,
-                    "code": exc.code,
-                    "detail": exc.detail,
-                },
-            )
-            return 2
+            if exc.code == "license_missing":
+                from gui.license_activation_dialog import LicenseActivationDialog
+
+                dialog = LicenseActivationDialog()
+                if dialog.exec() == QDialog.Accepted:
+                    try:
+                        backend_entrypoint()
+                    except LicenseStartupError as exc2:
+                        logger.error(
+                            "License startup validation failed after activation: %s",
+                            exc2.detail or exc2.user_message,
+                        )
+                        QMessageBox.critical(None, "InstaCRM", format_license_user_message(exc2))
+                        record_system_event(
+                            bootstrap_ctx.install_root,
+                            "license_startup_blocked",
+                            level="error",
+                            payload={
+                                "mode": resolved_mode,
+                                "startup_id": bootstrap_ctx.startup_id,
+                                "code": exc2.code,
+                                "reason": license_failure_reason(exc2.code),
+                                "detail": exc2.detail,
+                            },
+                        )
+                        return 2
+                else:
+                    logger.error(
+                        "License activation cancelled / missing local key: %s",
+                        exc.detail or exc.user_message,
+                    )
+                    QMessageBox.critical(None, "InstaCRM", format_license_user_message(exc))
+                    record_system_event(
+                        bootstrap_ctx.install_root,
+                        "license_startup_blocked",
+                        level="error",
+                        payload={
+                            "mode": resolved_mode,
+                            "startup_id": bootstrap_ctx.startup_id,
+                            "code": exc.code,
+                            "reason": license_failure_reason(exc.code),
+                            "detail": exc.detail,
+                        },
+                    )
+                    return 2
+            else:
+                logger.error(
+                    "License startup validation failed: %s", exc.detail or exc.user_message
+                )
+                QMessageBox.critical(None, "InstaCRM", format_license_user_message(exc))
+                record_system_event(
+                    bootstrap_ctx.install_root,
+                    "license_startup_blocked",
+                    level="error",
+                    payload={
+                        "mode": resolved_mode,
+                        "startup_id": bootstrap_ctx.startup_id,
+                        "code": exc.code,
+                        "reason": license_failure_reason(exc.code),
+                        "detail": exc.detail,
+                    },
+                )
+                return 2
         except Exception as exc:
             logger.exception("Unexpected startup validation failure")
             QMessageBox.critical(
@@ -128,11 +195,9 @@ def launch_gui_app(
             )
             return 2
 
+    from application.services import build_application_services
+
     services = build_application_services(bootstrap_ctx.install_root)
-    try:
-        services.inbox.ensure_started()
-    except Exception:
-        logger.exception("Inbox startup bootstrap failed")
     window = MainWindow(mode=resolved_mode, services=services)
     install_exception_hooks(
         log_append=window.logs.append,
@@ -140,7 +205,24 @@ def launch_gui_app(
     )
     window.logs.append(f"Logs persistidos en {log_path}\n")
     window.show()
-    QTimer.singleShot(0, window.start_startup_housekeeping)
+    time_to_window_show_seconds = time.perf_counter() - launch_started_at
+    record_system_event(
+        bootstrap_ctx.install_root,
+        "gui_window_shown",
+        payload={
+            "mode": resolved_mode,
+            "startup_id": bootstrap_ctx.startup_id,
+            "time_to_window_show_ms": int(time_to_window_show_seconds * 1000.0),
+        },
+    )
+    QTimer.singleShot(
+        0,
+        lambda: _run_post_show_startup(
+            window,
+            bootstrap_ctx=bootstrap_ctx,
+            time_to_window_show_seconds=time_to_window_show_seconds,
+        ),
+    )
 
     qt_exit = app.exec()
     if window.backend_exit_code is not None:

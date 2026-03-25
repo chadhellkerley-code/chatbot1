@@ -44,6 +44,19 @@ SYSTEM_SUBSECTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _update_check_status_message(payload: Any) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    status = str(data.get("status") or "").strip()
+    message = str(data.get("message") or "").strip()
+    if status == "update_available":
+        return message or "Hay una actualizacion disponible."
+    if status == "up_to_date":
+        return message or "No hay updates disponibles."
+    if status == "error":
+        return message or "No se pudo verificar updates."
+    return "Check de updates ejecutado."
+
+
 class SystemSectionPage(SectionPage):
     def __init__(
         self,
@@ -412,7 +425,7 @@ class SystemLicensePage(SystemSectionPage):
                 row.get("machine_name", ""),
                 row.get("os_user", ""),
                 row.get("activated_at", ""),
-                row.get("last_seen", ""),
+                row.get("last_seen_at", ""),
             ]
             for column, value in enumerate(values):
                 self._activations_table.setItem(row_index, column, table_item(value))
@@ -675,7 +688,7 @@ class SystemConfigPage(SystemSectionPage):
         self._updates_box = QPlainTextEdit()
         self._updates_box.setObjectName("LogConsole")
         self._updates_box.setReadOnly(True)
-        self._updates_box.setPlaceholderText("Resultado de check_for_updates().")
+        self._updates_box.setPlaceholderText("Resultado estructurado del check de updates.")
         self.content_layout().addWidget(self._updates_box)
         self._config_request_id = 0
         self._config_loading = False
@@ -759,8 +772,8 @@ class SystemConfigPage(SystemSectionPage):
             return
         self._updates_loading = False
         data = dict(payload) if isinstance(payload, dict) else {}
-        self._updates_box.setPlainText(pretty_json(data.get("result") or {}))
-        self.set_status("Check de updates ejecutado.")
+        self._updates_box.setPlainText(pretty_json(data))
+        self.set_status(_update_check_status_message(data))
 
     def _on_updates_failed(self, request_id: int, error: QueryError) -> None:
         if request_id != self._updates_request_id:
@@ -852,14 +865,8 @@ class SystemDiagnosticsPage(SystemSectionPage):
             ),
             (
                 "Colas",
-                str(
-                    safe_int((data.get("queues") or {}).get("leads_pending"))
-                    + safe_int((data.get("queues") or {}).get("inbox_tasks"))
-                ),
-                (
-                    f"Leads={(data.get('queues') or {}).get('leads_pending', 0)} | "
-                    f"Inbox={(data.get('queues') or {}).get('inbox_tasks', 0)}"
-                ),
+                str(safe_int((data.get("queues") or {}).get("inbox_tasks"))),
+                f"Inbox={(data.get('queues') or {}).get('inbox_tasks', 0)}",
             ),
         ]
         self._table.setRowCount(len(rows))

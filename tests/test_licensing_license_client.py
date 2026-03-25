@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+import requests
 
-from src.licensing.device_id import collect_device_identity
+from src.licensing.device_id import DeviceIdentity, collect_device_identity
 from src.licensing.license_client import (
     LicenseStartupError,
+    SupabaseConfig,
     SupabaseLicenseClient,
+    SupabaseRestClient,
+    _get_embedded_supabase_config,
+    clear_runtime_context,
+    launch_with_license,
     load_local_license_key,
+    save_local_license_cache,
 )
 
 
@@ -83,6 +91,18 @@ class FakeRestClient:
         return deleted
 
 
+class FakeResponse:
+    def __init__(self, *, status_code: int, payload=None, text: str = "") -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
 def test_validate_and_activate_registers_new_device_when_capacity_is_available() -> None:
     rest = FakeRestClient(
         license_row={
@@ -93,6 +113,8 @@ def test_validate_and_activate_registers_new_device_when_capacity_is_available()
             "expires_at": "2099-01-01T00:00:00+00:00",
             "client_name": "Cliente Demo",
             "plan_name": "pro",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "last_seen_at": "2026-01-01T00:00:00+00:00",
         }
     )
     client = SupabaseLicenseClient(rest_client=rest)
@@ -112,8 +134,9 @@ def test_validate_and_activate_registers_new_device_when_capacity_is_available()
     assert context.device_id == device.device_id
     assert len(rest.insert_calls) == 1
     inserted = rest.insert_calls[0][1]
+    assert inserted["license_id"] == "license-1"
     assert inserted["device_id"] == device.device_id
-    assert inserted["license_key"] == "ABCD-EFGH-IJKL-MNOP"
+    assert inserted["last_seen_at"] == inserted["activated_at"]
 
 
 def test_validate_and_activate_blocks_when_license_reaches_max_devices() -> None:
@@ -124,10 +147,34 @@ def test_validate_and_activate_blocks_when_license_reaches_max_devices() -> None
             "status": "active",
             "max_devices": 2,
             "expires_at": "2099-01-01T00:00:00+00:00",
+            "client_name": "Cliente Demo",
+            "plan_name": "pro",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "last_seen_at": "2026-01-01T00:00:00+00:00",
         },
         activation_rows=[
-            {"id": "a1", "license_key": "WXYZ-0000-1111-2222", "device_id": "device-1", "status": "active"},
-            {"id": "a2", "license_key": "WXYZ-0000-1111-2222", "device_id": "device-2", "status": "active"},
+            {
+                "id": "a1",
+                "license_id": "license-2",
+                "device_id": "device-1",
+                "machine_name": "pc-1",
+                "os_user": "owner",
+                "mac_address": "00:00:00:00:00:01",
+                "activated_at": "2026-03-17T00:00:00+00:00",
+                "last_seen_at": "2026-03-17T01:00:00+00:00",
+                "status": "active",
+            },
+            {
+                "id": "a2",
+                "license_id": "license-2",
+                "device_id": "device-2",
+                "machine_name": "pc-2",
+                "os_user": "owner",
+                "mac_address": "00:00:00:00:00:02",
+                "activated_at": "2026-03-17T00:00:00+00:00",
+                "last_seen_at": "2026-03-17T01:00:00+00:00",
+                "status": "active",
+            },
         ],
     )
     client = SupabaseLicenseClient(rest_client=rest)
@@ -168,3 +215,204 @@ def test_load_local_license_key_accepts_legacy_json_as_key_source(
     monkeypatch.setenv("INSTACRM_LICENSE_FILE", str(license_path))
 
     assert load_local_license_key() == "WXYZ-0000-1111-2222"
+
+
+def test_supabase_license_client_uses_embedded_config_even_when_env_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://wrong-project.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "wrong-key")
+
+    client = SupabaseLicenseClient(admin=False)
+    url, key = _get_embedded_supabase_config()
+
+    assert client.config.url == url
+    assert client.config.key == key
+
+
+def test_supabase_rest_client_sends_embedded_url_and_key_in_headers() -> None:
+    url, key = _get_embedded_supabase_config()
+    rest = SupabaseRestClient(SupabaseConfig(url=url, key=key))
+    captured: dict[str, object] = {}
+
+    class _Session:
+        def request(self, **kwargs):
+            captured.update(kwargs)
+            return FakeResponse(status_code=200, payload=[{"id": "license-1"}], text='[{"id":"license-1"}]')
+
+    rest._session = _Session()
+
+    payload = rest.request("get", "licenses", params={"select": "*"})
+
+    assert payload == [{"id": "license-1"}]
+    assert captured["url"] == f"{url}/rest/v1/licenses"
+    assert captured["headers"]["apikey"] == key
+    assert captured["headers"]["Authorization"] == f"Bearer {key}"
+
+
+def test_supabase_rest_client_maps_network_errors_to_connection_failure() -> None:
+    url, key = _get_embedded_supabase_config()
+    rest = SupabaseRestClient(SupabaseConfig(url=url, key=key))
+
+    class _Session:
+        def request(self, **kwargs):
+            raise requests.ConnectionError("network down")
+
+    rest._session = _Session()
+
+    with pytest.raises(LicenseStartupError) as exc_info:
+        rest.request("get", "licenses")
+
+    assert exc_info.value.code == "supabase_request_failed"
+
+
+def test_supabase_rest_client_maps_auth_errors_to_auth_failure() -> None:
+    url, key = _get_embedded_supabase_config()
+    rest = SupabaseRestClient(SupabaseConfig(url=url, key=key))
+
+    class _Session:
+        def request(self, **kwargs):
+            return FakeResponse(
+                status_code=401,
+                payload={"message": "Invalid API key"},
+                text='{"message":"Invalid API key"}',
+            )
+
+    rest._session = _Session()
+
+    with pytest.raises(LicenseStartupError) as exc_info:
+        rest.request("get", "licenses")
+
+    assert exc_info.value.code == "supabase_auth_failed"
+
+
+def test_launch_with_license_uses_fresh_local_cache_without_remote_call(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_runtime_context()
+    monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
+
+    device = DeviceIdentity(
+        hostname="pc-1",
+        os_user="owner",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        device_id="device-abc",
+    )
+    monkeypatch.setattr(
+        "src.licensing.license_client.collect_device_identity",
+        lambda: device,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    save_local_license_cache(
+        {
+            "license_key": "ABCD-EFGH-IJKL-MNOP",
+            "device_id": device.device_id,
+            "validated_at": (now - timedelta(hours=1)).isoformat(),
+            "expires_at": (now + timedelta(days=30)).isoformat(),
+        }
+    )
+
+    class _ShouldNotInstantiate:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("SupabaseLicenseClient should not be instantiated when cache is fresh.")
+
+    monkeypatch.setattr("src.licensing.license_client.SupabaseLicenseClient", _ShouldNotInstantiate)
+
+    context = launch_with_license()
+    assert context.license_key == "ABCD-EFGH-IJKL-MNOP"
+    assert context.device_id == device.device_id
+
+
+def test_launch_with_license_falls_back_to_cache_when_supabase_is_down(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_runtime_context()
+    monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
+
+    device = DeviceIdentity(
+        hostname="pc-1",
+        os_user="owner",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        device_id="device-abc",
+    )
+    monkeypatch.setattr(
+        "src.licensing.license_client.collect_device_identity",
+        lambda: device,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    save_local_license_cache(
+        {
+            "license_key": "ABCD-EFGH-IJKL-MNOP",
+            "device_id": device.device_id,
+            "validated_at": (now - timedelta(days=2)).isoformat(),
+            "expires_at": (now + timedelta(days=30)).isoformat(),
+        }
+    )
+
+    class _OfflineClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def validate_and_activate(self, *args, **kwargs):
+            raise LicenseStartupError(
+                code="supabase_request_failed",
+                user_message="offline",
+                detail="network down",
+            )
+
+    monkeypatch.setattr("src.licensing.license_client.SupabaseLicenseClient", _OfflineClient)
+
+    context = launch_with_license()
+    assert context.license_key == "ABCD-EFGH-IJKL-MNOP"
+    assert context.device_id == device.device_id
+
+
+def test_launch_with_license_blocks_when_offline_cache_is_too_old(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_runtime_context()
+    monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
+
+    device = DeviceIdentity(
+        hostname="pc-1",
+        os_user="owner",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        device_id="device-abc",
+    )
+    monkeypatch.setattr(
+        "src.licensing.license_client.collect_device_identity",
+        lambda: device,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    save_local_license_cache(
+        {
+            "license_key": "ABCD-EFGH-IJKL-MNOP",
+            "device_id": device.device_id,
+            "validated_at": (now - timedelta(days=5)).isoformat(),
+            "expires_at": (now + timedelta(days=30)).isoformat(),
+        }
+    )
+
+    class _OfflineClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def validate_and_activate(self, *args, **kwargs):
+            raise LicenseStartupError(
+                code="supabase_request_failed",
+                user_message="offline",
+                detail="network down",
+            )
+
+    monkeypatch.setattr("src.licensing.license_client.SupabaseLicenseClient", _OfflineClient)
+
+    with pytest.raises(LicenseStartupError) as exc_info:
+        launch_with_license()
+
+    assert exc_info.value.code == "offline_cache_expired"

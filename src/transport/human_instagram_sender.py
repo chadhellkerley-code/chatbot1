@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 from playwright.async_api import Locator, Page
 
 from core.account_limits import account_message_limit, can_send_message_for_account
+from paths import storage_root
 from runtime.runtime import STOP_EVENT
 from src.auth.persistent_login import ensure_logged_in_async
 from src.browser_telemetry import log_browser_stage
@@ -97,9 +98,10 @@ SEND_BUTTONS = (
 )
 
 _DEBUG_ENV = "HUMAN_DM_DEBUG"
-_DEBUG_SCREENSHOT_DIR = Path("storage") / "debug_screenshots"
+_STORAGE_ROOT = storage_root(Path(__file__).resolve().parents[2])
+_DEBUG_SCREENSHOT_DIR = _STORAGE_ROOT / "debug_screenshots"
 _FAILURE_CAPTURE_ENV = "HUMAN_DM_CAPTURE_FAILURE_ARTIFACTS"
-_FAILURE_ARTIFACT_DIR = Path("storage") / "dm_failures"
+_FAILURE_ARTIFACT_DIR = _STORAGE_ROOT / "dm_failures"
 _FAILURE_HTML_MAX_BYTES = max(120_000, int(os.getenv("HUMAN_DM_FAILURE_HTML_MAX_BYTES", "260000")))
 _DM_CTX: ContextVar[dict[str, Any]] = ContextVar("human_dm_ctx", default={})
 _STAGE_CALLBACK = Callable[[str, Dict[str, Any]], None]

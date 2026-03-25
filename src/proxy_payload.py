@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional, Union
 from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 
-from core.proxy_registry import ProxyResolutionError, proxy_reference_status
+from core.proxy_registry import ProxyResolutionError, get_proxy_by_id, proxy_reference_status
+
+
+logger = logging.getLogger(__name__)
 
 
 def _clean(value: Any) -> str:
@@ -108,51 +112,72 @@ def proxy_from_account(account: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
     if not account:
         return None
 
+    username = _clean(account.get("username")).lstrip("@")
     assigned_proxy_id = _clean(account.get("assigned_proxy_id"))
-    if assigned_proxy_id:
-        status = proxy_reference_status(assigned_proxy_id)
-        if status.get("status") == "missing":
-            raise ProxyResolutionError(
-                "assigned_proxy_missing",
-                assigned_proxy_id,
-                str(status.get("message") or "").strip(),
-            )
-        if status.get("status") == "inactive":
-            raise ProxyResolutionError(
-                "assigned_proxy_inactive",
-                assigned_proxy_id,
-                str(status.get("message") or "").strip(),
-            )
-        if status.get("status") == "quarantined":
-            raise ProxyResolutionError(
-                "assigned_proxy_quarantined",
-                assigned_proxy_id,
-                str(status.get("message") or "").strip(),
-            )
-        pooled = _proxy_from_pool(assigned_proxy_id)
-        if pooled is not None:
-            return pooled
+    if not assigned_proxy_id:
+        logger.warning("Account without proxy: username=%s", username or "-")
+        return None
+
+    status = proxy_reference_status(assigned_proxy_id)
+    status_value = str(status.get("status") or "").strip().lower()
+    if status_value == "missing":
+        logger.warning("Account without proxy: username=%s", username or "-")
+        raise ProxyResolutionError(
+            "assigned_proxy_missing",
+            assigned_proxy_id,
+            str(status.get("message") or "").strip(),
+        )
+    if status_value == "inactive":
+        logger.warning("Account without proxy: username=%s", username or "-")
+        raise ProxyResolutionError(
+            "assigned_proxy_inactive",
+            assigned_proxy_id,
+            str(status.get("message") or "").strip(),
+        )
+    if status_value == "quarantined":
+        logger.warning("Account without proxy: username=%s", username or "-")
+        raise ProxyResolutionError(
+            "assigned_proxy_quarantined",
+            assigned_proxy_id,
+            str(status.get("message") or "").strip(),
+        )
+    if status_value != "ok":
+        logger.warning("Account without proxy: username=%s", username or "-")
+        raise ProxyResolutionError(
+            "assigned_proxy_unresolved",
+            assigned_proxy_id,
+            str(status.get("message") or "").strip() or f"No se pudo resolver el proxy asignado {assigned_proxy_id}.",
+        )
+
+    record = status.get("record") if isinstance(status.get("record"), dict) else None
+    if record is None:
+        record = get_proxy_by_id(assigned_proxy_id, active_only=True)
+
+    if not isinstance(record, dict):
+        logger.warning("Account without proxy: username=%s", username or "-")
         raise ProxyResolutionError(
             "assigned_proxy_unresolved",
             assigned_proxy_id,
             f"No se pudo resolver el proxy asignado {assigned_proxy_id}.",
         )
 
-    proxy_url = _clean(account.get("proxy_url"))
-    proxy_user = _clean(account.get("proxy_user") or account.get("proxy_username"))
-    proxy_pass = _clean(account.get("proxy_pass") or account.get("proxy_password"))
-
-    raw_proxy: Union[str, Dict[str, Any], None]
-    if proxy_url:
-        raw_proxy = proxy_url
-    else:
-        raw_proxy = account.get("proxy")
-
-    return normalize_playwright_proxy(
-        raw_proxy,
+    server = _clean(record.get("server") or record.get("proxy_url") or record.get("url") or record.get("proxy"))
+    proxy_user = _clean(record.get("user") or record.get("username"))
+    proxy_pass = _clean(record.get("pass") or record.get("password"))
+    payload = normalize_playwright_proxy(
+        server,
         proxy_user=proxy_user,
         proxy_pass=proxy_pass,
     )
+    if payload is None:
+        logger.warning("Account without proxy: username=%s", username or "-")
+        raise ProxyResolutionError(
+            "assigned_proxy_unresolved",
+            assigned_proxy_id,
+            f"No se pudo resolver el proxy asignado {assigned_proxy_id}.",
+        )
+
+    return payload
 
 
 def proxy_fields_from_account(account: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -198,45 +223,3 @@ def requests_proxy_map_from_account(account: Optional[Dict[str, Any]]) -> Dict[s
             )
         )
     return {"http": proxy_url, "https": proxy_url}
-
-
-def _proxy_from_pool(proxy_id: str) -> Optional[Dict[str, str]]:
-    try:
-        from src.proxy_pool import get_proxy_by_id
-    except Exception:
-        return None
-
-    proxy_record = get_proxy_by_id(proxy_id, active_only=True)
-    if not isinstance(proxy_record, dict):
-        return None
-
-    proxy_url = _clean(
-        proxy_record.get("proxy_url")
-        or proxy_record.get("url")
-        or proxy_record.get("server")
-        or proxy_record.get("proxy")
-    )
-    proxy_user = _clean(
-        proxy_record.get("proxy_user")
-        or proxy_record.get("proxy_username")
-        or proxy_record.get("username")
-        or proxy_record.get("user")
-    )
-    proxy_pass = _clean(
-        proxy_record.get("proxy_pass")
-        or proxy_record.get("proxy_password")
-        or proxy_record.get("password")
-        or proxy_record.get("pass")
-    )
-
-    raw_proxy: Union[str, Dict[str, Any], None]
-    if proxy_url:
-        raw_proxy = proxy_url
-    else:
-        raw_proxy = proxy_record.get("proxy")
-
-    return normalize_playwright_proxy(
-        raw_proxy,
-        proxy_user=proxy_user,
-        proxy_pass=proxy_pass,
-    )

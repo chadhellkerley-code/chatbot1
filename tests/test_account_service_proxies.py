@@ -256,7 +256,7 @@ def test_add_account_with_legacy_proxy_materializes_managed_proxy(monkeypatch, t
 
     assert account is not None
     assert account["assigned_proxy_id"] == "acct:uno"
-    assert account["proxy_url"] == "http://127.0.0.1:9000"
+    assert account["proxy_url"] == ""
     proxy_row = proxy_registry.get_proxy_by_id("acct:uno", path=tmp_path / "storage" / "accounts" / "proxies.json")
     assert proxy_row is not None
     assert proxy_row["server"] == "http://127.0.0.1:9000"
@@ -301,6 +301,53 @@ def test_load_accounts_migrates_legacy_proxy_url_to_managed_assignment(monkeypat
     assert proxy_row["server"] == "http://127.0.0.1:9000"
 
 
+def test_load_accounts_recovers_missing_proxy_assignment_from_audit(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
+    for module_name in ("core.proxy_registry", "core.accounts"):
+        sys.modules.pop(module_name, None)
+    import core.accounts as accounts_module  # type: ignore
+    import core.proxy_registry as proxy_registry  # type: ignore
+
+    proxy_registry = importlib.reload(proxy_registry)
+    proxies_path = tmp_path / "storage" / "accounts" / "proxies.json"
+    proxy_registry.upsert_proxy_record(
+        {"id": "proxy-a", "server": "http://127.0.0.1:9000", "active": True},
+        proxies_path,
+    )
+    proxy_registry.record_proxy_audit_event(
+        "proxy-a",
+        event="proxy_assign",
+        status="ok",
+        message="Proxy proxy-a asignado a 1 cuenta(s).",
+        meta={"accounts": ["uno"]},
+        path=tmp_path / "runtime" / "logs" / "proxy_audit.jsonl",
+    )
+
+    accounts_path = tmp_path / "storage" / "accounts" / "accounts.json"
+    accounts_path.parent.mkdir(parents=True, exist_ok=True)
+    accounts_path.write_text(
+        json.dumps(
+            [
+                {
+                    "username": "uno",
+                    "alias": "default",
+                    "active": True,
+                    "connected": False,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    accounts_module = importlib.reload(accounts_module)
+    rows = accounts_module.list_all()
+
+    assert rows[0]["assigned_proxy_id"] == "proxy-a"
+    stored_accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+    assert stored_accounts[0]["assigned_proxy_id"] == "proxy-a"
+    assert proxy_registry.assigned_accounts_for_proxy("proxy-a", proxies_path) == ["uno"]
+
+
 def test_assign_proxy_requires_existing_active_proxy(monkeypatch, tmp_path: Path) -> None:
     service = _build_service(tmp_path)
     service.upsert_proxy({"id": "proxy-a", "server": "http://127.0.0.1:9000", "active": False})
@@ -329,7 +376,9 @@ def test_assign_proxy_clears_legacy_proxy_fields(monkeypatch, tmp_path: Path) ->
         updated_calls.append((username, dict(updates)))
         return True
 
-    monkeypatch.setattr(account_service_module.accounts_module, "update_account", _fake_update_account)
+    import core.accounts as core_accounts  # type: ignore
+
+    monkeypatch.setattr(core_accounts, "update_account", _fake_update_account)
 
     updated = service.assign_proxy(["uno"], "proxy-a")
 
@@ -339,10 +388,9 @@ def test_assign_proxy_clears_legacy_proxy_fields(monkeypatch, tmp_path: Path) ->
             "uno",
             {
                 "assigned_proxy_id": "proxy-a",
-                "proxy_url": "",
-                "proxy_user": "",
-                "proxy_pass": "",
-                "proxy_sticky_minutes": None,
+                "proxy_url": None,
+                "proxy_user": None,
+                "proxy_pass": None,
             },
         )
     ]

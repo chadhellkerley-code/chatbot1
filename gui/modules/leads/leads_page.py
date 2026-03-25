@@ -8,8 +8,6 @@ from gui.page_base import ClickableMetricCard, PageContext, SectionPage
 from gui.query_runner import QueryError
 from gui.snapshot_queries import build_leads_home_snapshot
 
-from .filter_config_panel import LeadsFilterConfigPanel
-from .filter_runner_panel import LeadsFilterRunnerPanel
 from .import_panel import LeadsImportPanel
 from .lists_panel import LeadsListsPanel
 from .templates_panel import LeadsTemplatesPanel
@@ -19,7 +17,6 @@ LEADS_SUBSECTIONS: tuple[tuple[str, str], ...] = (
     ("leads_lists_page", "Listas"),
     ("leads_templates_page", "Plantillas"),
     ("leads_import_page", "Importar"),
-    ("leads_filter_page", "Filtrado"),
 )
 
 
@@ -40,7 +37,7 @@ class LeadsSectionPage(SectionPage):
             title,
             subtitle,
             section_title="Leads",
-            section_subtitle="Submenu horizontal para separar listas, plantillas, importacion y filtrado.",
+            section_subtitle="Submenu horizontal para separar listas, plantillas e importacion.",
             section_routes=LEADS_SUBSECTIONS,
             route_key=route_key,
             back_button=back_button,
@@ -54,7 +51,7 @@ class LeadsHomePage(LeadsSectionPage):
         super().__init__(
             ctx,
             "Leads",
-            "Plantillas, listas, importacion y filtrado desde un modulo unico y persistente.",
+            "Plantillas, listas e importacion desde un modulo unico y persistente.",
             route_key=None,
             back_button=False,
             parent=parent,
@@ -74,20 +71,16 @@ class LeadsHomePage(LeadsSectionPage):
         self._cards = {
             "templates": ClickableMetricCard("Plantillas", "0"),
             "lists": ClickableMetricCard("Listas origen", "0"),
-            "completed": ClickableMetricCard("Resultados completos", "0"),
-            "pending": ClickableMetricCard("Pendientes / ejecutar", "0"),
         }
         self._cards["templates"].clicked.connect(lambda: self._ctx.open_route("leads_templates_page", None))
         self._cards["lists"].clicked.connect(lambda: self._ctx.open_route("leads_lists_page", None))
-        self._cards["completed"].clicked.connect(lambda: self._ctx.open_route("leads_filter_page", None))
-        self._cards["pending"].clicked.connect(lambda: self._ctx.open_route("leads_filter_page", None))
-        for index, key in enumerate(("lists", "templates", "completed", "pending")):
+        for index, key in enumerate(("lists", "templates")):
             grid.addWidget(self._cards[key], index // 2, index % 2)
         layout.addLayout(grid)
 
         helper = QLabel(
             "Usa el submenu superior para entrar directo al panel que necesites. "
-            "Importacion, configuracion y ejecucion quedan aisladas para evitar ruido visual."
+            "Importacion, listas y plantillas quedan aisladas para evitar ruido visual."
         )
         helper.setObjectName("SectionPanelHint")
         helper.setWordWrap(True)
@@ -192,40 +185,3 @@ class LeadsImportPage(LeadsSectionPage):
 
     def on_navigate_to(self, payload: Any = None) -> None:
         self._panel.refresh_page()
-
-
-class LeadsFilterConfigPage(LeadsSectionPage):
-    def __init__(self, ctx: PageContext, parent=None) -> None:
-        super().__init__(
-            ctx,
-            "Configuracion de filtros",
-            "Formulario visual para clasificar perfiles y ajustar los bloques de IA.",
-            route_key="leads_filter_config_page",
-            parent=parent,
-        )
-        self._panel = LeadsFilterConfigPanel(ctx, self)
-        self.content_layout().addWidget(self._panel)
-        self.content_layout().addStretch(1)
-
-    def on_navigate_to(self, payload: Any = None) -> None:
-        self._panel.load_config()
-
-
-class LeadsFilterPage(LeadsSectionPage):
-    def __init__(self, ctx: PageContext, parent=None) -> None:
-        super().__init__(
-            ctx,
-            "Filtrado",
-            "Configuracion, activacion y actividad del filtrado dentro de una sola vista operativa.",
-            route_key="leads_filter_page",
-            scrollable=False,
-            parent=parent,
-        )
-        self._panel = LeadsFilterRunnerPanel(ctx, self)
-        self.content_layout().addWidget(self._panel, 1)
-
-    def on_navigate_to(self, payload: Any = None) -> None:
-        self._panel.on_navigate_to(payload)
-
-    def on_navigate_from(self) -> None:
-        self._panel.on_navigate_from()

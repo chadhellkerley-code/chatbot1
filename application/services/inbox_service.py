@@ -5,6 +5,7 @@ from typing import Any
 from core.inbox.inbox_manager import InboxManager
 
 from .base import ServiceContext
+from .inbox_automation_service import InboxAutomationService
 from .inbox_runtime import InboxRuntime
 
 
@@ -16,6 +17,17 @@ class InboxService:
         self.context = context
         self._engine = InboxEngine(context.root_dir)
         self._runtime = InboxRuntime(context, self._engine)
+        engine_store = getattr(self._engine, "_store", None)
+        engine_sender = getattr(self._engine, "_sender", None)
+        self._automation = (
+            InboxAutomationService(
+                store=engine_store,
+                sender=engine_sender,
+                ensure_backend_started=self.ensure_started,
+            )
+            if engine_store is not None and engine_sender is not None
+            else None
+        )
 
     def ensure_started(self) -> None:
         self._runtime.ensure_backend_started()
@@ -65,21 +77,72 @@ class InboxService:
     def send_message(self, thread_key: str, text: str) -> str:
         self.ensure_started()
         clean_key = str(thread_key or "").strip()
-        if not self._runtime.ensure_thread_seeded(clean_key) and not isinstance(self._engine.get_thread(clean_key), dict):
+        thread = self._engine.get_thread(clean_key)
+        if not self._runtime.ensure_thread_seeded(clean_key) and not isinstance(thread, dict):
             return ""
-        local_id = str(self._engine.send_message(clean_key, text) or "").strip()
+        thread = self._engine.get_thread(clean_key)
+        if not isinstance(thread, dict):
+            return ""
+        if self._automation is None:
+            local_id = str(self._engine.send_message(clean_key, text) or "").strip()
+            self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
+            return local_id
+        if not self._automation.manual_send_allowed(thread):
+            return ""
+        if str(thread.get("owner") or "").strip().lower() != "manual":
+            self._automation.manual_takeover(clean_key, operator_id="inbox_ui")
+        local_id = str(self._engine._sender.queue_message(clean_key, text, job_type="manual_reply") or "").strip()
         self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
         return local_id
 
     def send_pack(self, thread_key: str, pack_id: str) -> bool:
         self.ensure_started()
         clean_key = str(thread_key or "").strip()
-        if not self._runtime.ensure_thread_seeded(clean_key) and not isinstance(self._engine.get_thread(clean_key), dict):
+        thread = self._engine.get_thread(clean_key)
+        if not self._runtime.ensure_thread_seeded(clean_key) and not isinstance(thread, dict):
             return False
-        queued = bool(self._engine.send_pack(clean_key, pack_id))
+        thread = self._engine.get_thread(clean_key)
+        if not isinstance(thread, dict):
+            return False
+        if self._automation is None:
+            queued = bool(self._engine.send_pack(clean_key, pack_id))
+            if queued:
+                self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
+            return queued
+        if not self._automation.manual_send_allowed(thread):
+            return False
+        if str(thread.get("owner") or "").strip().lower() != "manual":
+            self._automation.manual_takeover(clean_key, operator_id="inbox_ui")
+        queued = bool(self._engine._sender.queue_pack(clean_key, pack_id, job_type="manual_pack"))
         if queued:
             self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
         return queued
+
+    def take_thread_manual(self, thread_key: str, *, operator_id: str = "inbox_ui") -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or self._automation is None:
+            return False
+        thread = self.get_thread(clean_key)
+        if not isinstance(thread, dict) or not self._automation.manual_takeover_allowed(thread):
+            return False
+        updated = self._automation.manual_takeover(clean_key, operator_id=operator_id)
+        if not isinstance(updated, dict):
+            return False
+        self._runtime.request_rebuild(reason="manual_takeover", thread_keys=[clean_key])
+        return True
+
+    def release_thread_manual(self, thread_key: str) -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or self._automation is None:
+            return False
+        thread = self.get_thread(clean_key)
+        if not isinstance(thread, dict) or not self._automation.manual_release_allowed(thread):
+            return False
+        updated = self._automation.manual_release(clean_key)
+        if not isinstance(updated, dict):
+            return False
+        self._runtime.request_rebuild(reason="manual_release", thread_keys=[clean_key])
+        return True
 
     def request_ai_suggestion(self, thread_key: str) -> bool:
         self.ensure_started()
@@ -91,6 +154,36 @@ class InboxService:
             self._runtime.request_rebuild(reason="request_ai_suggestion", thread_keys=[clean_key])
         return queued
 
+    def mark_thread_qualified(self, thread_key: str, *, operator_id: str = "inbox_ui") -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or self._automation is None:
+            return False
+        updated = self._automation.mark_thread_qualified(clean_key, operator_id=operator_id)
+        if not isinstance(updated, dict):
+            return False
+        self._runtime.request_rebuild(reason="thread_marked_qualified", thread_keys=[clean_key])
+        return True
+
+    def mark_thread_disqualified(self, thread_key: str) -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or self._automation is None:
+            return False
+        updated = self._automation.mark_thread_disqualified(clean_key)
+        if not isinstance(updated, dict):
+            return False
+        self._runtime.request_rebuild(reason="thread_marked_disqualified", thread_keys=[clean_key])
+        return True
+
+    def clear_thread_classification(self, thread_key: str) -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or self._automation is None:
+            return False
+        updated = self._automation.clear_thread_classification(clean_key)
+        if not isinstance(updated, dict):
+            return False
+        self._runtime.request_rebuild(reason="thread_classification_cleared", thread_keys=[clean_key])
+        return True
+
     def list_packs(self) -> list[dict[str, Any]]:
         self.ensure_started()
         return self._engine.list_packs()
@@ -101,6 +194,7 @@ class InboxService:
         payload = {}
         if runtime_payload.get("backend_started") and hasattr(self._engine, "diagnostics"):
             payload = dict(self._engine.diagnostics() or {})
+        payload["runtime_alias_states"] = self._automation.list_statuses() if self._automation is not None else []
         payload.update(runtime_payload)
         payload["effective_thread_count"] = max(
             int(payload.get("thread_count") or 0),
@@ -136,6 +230,30 @@ class InboxService:
             self._runtime.request_rebuild(reason="follow_up_marked", thread_keys=[clean_key])
         return changed
 
+    def delete_local_message(self, thread_key: str, message_ref: dict[str, Any]) -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or not isinstance(message_ref, dict):
+            return False
+        if not self._runtime.ensure_thread_seeded(clean_key) and not isinstance(self._engine.get_thread(clean_key), dict):
+            return False
+        deleted = bool(getattr(self._engine, "delete_message_local", lambda *_args, **_kwargs: False)(clean_key, message_ref))
+        if deleted:
+            self._runtime.request_rebuild(reason="delete_local_message", thread_keys=[clean_key])
+        return deleted
+
     def refresh(self) -> None:
         self.ensure_started()
         self._runtime.request_sync(force=True)
+
+    def list_runtime_aliases(self) -> list[str]:
+        return self._automation.list_aliases() if self._automation is not None else []
+
+    def alias_runtime_status(self, alias_id: str) -> dict[str, Any]:
+        return self._automation.status(alias_id) if self._automation is not None else {}
+
+    def start_alias_runtime(self, alias_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_started()
+        return self._automation.start_alias(alias_id, config) if self._automation is not None else {}
+
+    def stop_alias_runtime(self, alias_id: str) -> dict[str, Any]:
+        return self._automation.stop_alias(alias_id) if self._automation is not None else {}

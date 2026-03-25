@@ -5,11 +5,18 @@ import json
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
+from core import responder as responder_module
 from core.storage_atomic import load_json_file
 from paths import storage_root
+from src.inbox.message_timestamps import (
+    annotate_message_timestamps,
+    message_canonical_timestamp,
+    message_sort_key,
+)
 
 
 class InboxStorage:
@@ -22,6 +29,55 @@ class InboxStorage:
     _MAX_THREADS_PER_ACCOUNT = _MAX_ACTIVE_THREADS
     _LOCAL_TAG_FOLLOW_UP = "seguimiento"
     _RESPONSE_BLOCK_WINDOW_SECONDS = 180.0
+    _MESSAGE_RECONCILE_WINDOW_SECONDS = 180.0
+    _SYNTHETIC_MESSAGE_ID_PREFIXES = (
+        "local-",
+        "dom-confirmed-",
+        "confirmed-",
+        "thread-read-confirmed-",
+    )
+    _LOCAL_ONLY_MESSAGE_ID_PREFIXES = (
+        "local-",
+        "synthetic-",
+    )
+    _THREAD_RECORD_FIELDS = {
+        "thread_key",
+        "thread_id",
+        "thread_href",
+        "account_id",
+        "alias_id",
+        "account_alias",
+        "recipient_username",
+        "display_name",
+        "owner",
+        "bucket",
+        "status",
+        "stage_id",
+        "followup_level",
+        "last_inbound_at",
+        "last_outbound_at",
+        "last_action_type",
+        "last_action_at",
+        "last_pack_sent",
+        "manual_lock",
+        "manual_assignee",
+        "is_deleted_from_view",
+        "trash_at",
+        "created_at",
+        "updated_at",
+        "last_message_text",
+        "last_message_timestamp",
+        "last_message_direction",
+        "last_message_id",
+        "unread_count",
+        "needs_reply",
+        "tags",
+        "participants",
+        "last_synced_at",
+        "last_seen_text",
+        "last_seen_at",
+        "latest_customer_message_at",
+    }
 
     def __init__(self, root_dir: Path) -> None:
         self._root_dir = Path(root_dir)
@@ -36,6 +92,8 @@ class InboxStorage:
         self._conn.row_factory = sqlite3.Row
         self._configure_connection()
         self._create_schema()
+        self._ensure_schema_compat()
+        self._create_indexes()
         self._migrate_legacy_json_if_needed()
 
     def _configure_connection(self) -> None:
@@ -53,9 +111,26 @@ class InboxStorage:
                     thread_id TEXT NOT NULL,
                     thread_href TEXT NOT NULL DEFAULT '',
                     account_id TEXT NOT NULL,
+                    alias_id TEXT NOT NULL DEFAULT '',
                     account_alias TEXT NOT NULL DEFAULT '',
                     recipient_username TEXT NOT NULL DEFAULT '',
                     display_name TEXT NOT NULL DEFAULT '',
+                    owner TEXT NOT NULL DEFAULT 'none',
+                    bucket TEXT NOT NULL DEFAULT 'all',
+                    status TEXT NOT NULL DEFAULT 'open',
+                    stage_id TEXT NOT NULL DEFAULT 'initial',
+                    followup_level INTEGER NOT NULL DEFAULT 0,
+                    last_inbound_at REAL,
+                    last_outbound_at REAL,
+                    last_action_type TEXT NOT NULL DEFAULT '',
+                    last_action_at REAL,
+                    last_pack_sent TEXT NOT NULL DEFAULT '',
+                    manual_lock INTEGER NOT NULL DEFAULT 0,
+                    manual_assignee TEXT NOT NULL DEFAULT '',
+                    is_deleted_from_view INTEGER NOT NULL DEFAULT 0,
+                    trash_at REAL,
+                    created_at REAL,
+                    updated_at REAL,
                     last_message_text TEXT NOT NULL DEFAULT '',
                     last_message_timestamp REAL,
                     last_message_direction TEXT NOT NULL DEFAULT 'unknown',
@@ -69,26 +144,31 @@ class InboxStorage:
                     last_seen_at REAL,
                     latest_customer_message_at REAL
                 );
-                CREATE INDEX IF NOT EXISTS inbox_threads_account_ts_idx
-                    ON inbox_threads(account_id, last_message_timestamp DESC, thread_key);
 
                 CREATE TABLE IF NOT EXISTS inbox_messages (
                     thread_key TEXT NOT NULL,
                     block_id TEXT NOT NULL,
                     ordinal INTEGER NOT NULL,
+                    account_id TEXT NOT NULL DEFAULT '',
                     message_id TEXT NOT NULL,
+                    external_message_id TEXT NOT NULL DEFAULT '',
                     text TEXT NOT NULL DEFAULT '',
                     timestamp REAL,
                     direction TEXT NOT NULL DEFAULT 'unknown',
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    pack_id TEXT NOT NULL DEFAULT '',
+                    stage_id TEXT NOT NULL DEFAULT '',
+                    created_at REAL,
+                    confirmed_at REAL,
                     user_id TEXT NOT NULL DEFAULT '',
                     delivery_status TEXT NOT NULL DEFAULT 'sent',
+                    sent_status TEXT NOT NULL DEFAULT 'sent',
                     local_echo INTEGER NOT NULL DEFAULT 0,
+                    hidden_at REAL,
                     error_message TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(thread_key, block_id, ordinal),
                     FOREIGN KEY(thread_key) REFERENCES inbox_threads(thread_key) ON DELETE CASCADE
                 );
-                CREATE INDEX IF NOT EXISTS inbox_messages_thread_ts_idx
-                    ON inbox_messages(thread_key, timestamp, ordinal);
 
                 CREATE TABLE IF NOT EXISTS inbox_thread_state (
                     thread_key TEXT PRIMARY KEY,
@@ -117,23 +197,26 @@ class InboxStorage:
                     source TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS thread_action_memory_lookup_idx
-                    ON thread_action_memory(account_id, thread_id, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS inbox_send_queue_jobs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_type TEXT NOT NULL,
+                    job_type TEXT NOT NULL DEFAULT '',
                     dedupe_key TEXT NOT NULL DEFAULT '',
                     thread_key TEXT NOT NULL DEFAULT '',
                     account_id TEXT NOT NULL DEFAULT '',
                     payload_json TEXT NOT NULL DEFAULT '{}',
-                    state TEXT NOT NULL DEFAULT 'pending',
+                    priority INTEGER NOT NULL DEFAULT 50,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    scheduled_at REAL,
+                    started_at REAL,
+                    finished_at REAL,
                     error_message TEXT NOT NULL DEFAULT '',
+                    failure_reason TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS inbox_send_queue_state_idx
-                    ON inbox_send_queue_jobs(state, created_at);
 
                 CREATE TABLE IF NOT EXISTS inbox_deleted_threads (
                     thread_key TEXT PRIMARY KEY,
@@ -141,11 +224,277 @@ class InboxStorage:
                     deleted_at REAL NOT NULL,
                     last_activity_timestamp REAL
                 );
-                CREATE INDEX IF NOT EXISTS inbox_deleted_threads_account_idx
-                    ON inbox_deleted_threads(account_id, deleted_at DESC);
+
+                CREATE TABLE IF NOT EXISTS inbox_thread_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_key TEXT NOT NULL,
+                    account_id TEXT NOT NULL DEFAULT '',
+                    alias_id TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS runtime_alias_state (
+                    alias_id TEXT PRIMARY KEY,
+                    is_running INTEGER NOT NULL DEFAULT 0,
+                    worker_state TEXT NOT NULL DEFAULT 'stopped',
+                    current_account_id TEXT NOT NULL DEFAULT '',
+                    current_turn_count INTEGER NOT NULL DEFAULT 0,
+                    max_turns_per_account INTEGER NOT NULL DEFAULT 1,
+                    delay_min_ms INTEGER NOT NULL DEFAULT 0,
+                    delay_max_ms INTEGER NOT NULL DEFAULT 0,
+                    mode TEXT NOT NULL DEFAULT 'both',
+                    next_account_id TEXT NOT NULL DEFAULT '',
+                    last_heartbeat_at REAL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    stats_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS session_connector_state (
+                    account_id TEXT PRIMARY KEY,
+                    alias_id TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'offline',
+                    proxy_key TEXT NOT NULL DEFAULT '',
+                    last_heartbeat_at REAL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    updated_at REAL NOT NULL
+                );
                 """
             )
             self._conn.commit()
+
+    def _ensure_schema_compat(self) -> None:
+        with self._lock:
+            self._ensure_table_columns(
+                "inbox_threads",
+                {
+                    "thread_id": "TEXT NOT NULL DEFAULT ''",
+                    "thread_href": "TEXT NOT NULL DEFAULT ''",
+                    "account_id": "TEXT NOT NULL DEFAULT ''",
+                    "alias_id": "TEXT NOT NULL DEFAULT ''",
+                    "account_alias": "TEXT NOT NULL DEFAULT ''",
+                    "recipient_username": "TEXT NOT NULL DEFAULT ''",
+                    "display_name": "TEXT NOT NULL DEFAULT ''",
+                    "owner": "TEXT NOT NULL DEFAULT 'none'",
+                    "bucket": "TEXT NOT NULL DEFAULT 'all'",
+                    "status": "TEXT NOT NULL DEFAULT 'open'",
+                    "stage_id": "TEXT NOT NULL DEFAULT 'initial'",
+                    "followup_level": "INTEGER NOT NULL DEFAULT 0",
+                    "last_inbound_at": "REAL",
+                    "last_outbound_at": "REAL",
+                    "last_action_type": "TEXT NOT NULL DEFAULT ''",
+                    "last_action_at": "REAL",
+                    "last_pack_sent": "TEXT NOT NULL DEFAULT ''",
+                    "manual_lock": "INTEGER NOT NULL DEFAULT 0",
+                    "manual_assignee": "TEXT NOT NULL DEFAULT ''",
+                    "is_deleted_from_view": "INTEGER NOT NULL DEFAULT 0",
+                    "trash_at": "REAL",
+                    "created_at": "REAL",
+                    "updated_at": "REAL",
+                    "last_message_text": "TEXT NOT NULL DEFAULT ''",
+                    "last_message_timestamp": "REAL",
+                    "last_message_direction": "TEXT NOT NULL DEFAULT 'unknown'",
+                    "last_message_id": "TEXT NOT NULL DEFAULT ''",
+                    "unread_count": "INTEGER NOT NULL DEFAULT 0",
+                    "needs_reply": "INTEGER NOT NULL DEFAULT 0",
+                    "tags_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "participants_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "last_synced_at": "REAL",
+                    "last_seen_text": "TEXT NOT NULL DEFAULT ''",
+                    "last_seen_at": "REAL",
+                    "latest_customer_message_at": "REAL",
+                },
+            )
+            self._ensure_table_columns(
+                "inbox_messages",
+                {
+                    "account_id": "TEXT NOT NULL DEFAULT ''",
+                    "message_id": "TEXT NOT NULL DEFAULT ''",
+                    "external_message_id": "TEXT NOT NULL DEFAULT ''",
+                    "text": "TEXT NOT NULL DEFAULT ''",
+                    "timestamp": "REAL",
+                    "direction": "TEXT NOT NULL DEFAULT 'unknown'",
+                    "source": "TEXT NOT NULL DEFAULT 'manual'",
+                    "pack_id": "TEXT NOT NULL DEFAULT ''",
+                    "stage_id": "TEXT NOT NULL DEFAULT ''",
+                    "created_at": "REAL",
+                    "confirmed_at": "REAL",
+                    "user_id": "TEXT NOT NULL DEFAULT ''",
+                    "delivery_status": "TEXT NOT NULL DEFAULT 'sent'",
+                    "sent_status": "TEXT NOT NULL DEFAULT 'sent'",
+                    "local_echo": "INTEGER NOT NULL DEFAULT 0",
+                    "hidden_at": "REAL",
+                    "error_message": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
+            self._ensure_table_columns(
+                "inbox_send_queue_jobs",
+                {
+                    "task_type": "TEXT NOT NULL DEFAULT ''",
+                    "job_type": "TEXT NOT NULL DEFAULT ''",
+                    "dedupe_key": "TEXT NOT NULL DEFAULT ''",
+                    "thread_key": "TEXT NOT NULL DEFAULT ''",
+                    "account_id": "TEXT NOT NULL DEFAULT ''",
+                    "payload_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "priority": "INTEGER NOT NULL DEFAULT 50",
+                    "state": "TEXT NOT NULL DEFAULT 'queued'",
+                    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+                    "scheduled_at": "REAL",
+                    "started_at": "REAL",
+                    "finished_at": "REAL",
+                    "error_message": "TEXT NOT NULL DEFAULT ''",
+                    "failure_reason": "TEXT NOT NULL DEFAULT ''",
+                    "created_at": "REAL",
+                    "updated_at": "REAL",
+                },
+            )
+            self._ensure_table_columns(
+                "inbox_thread_events",
+                {
+                    "account_id": "TEXT NOT NULL DEFAULT ''",
+                    "alias_id": "TEXT NOT NULL DEFAULT ''",
+                    "event_type": "TEXT NOT NULL DEFAULT ''",
+                    "payload_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "created_at": "REAL",
+                },
+            )
+            self._ensure_table_columns(
+                "runtime_alias_state",
+                {
+                    "is_running": "INTEGER NOT NULL DEFAULT 0",
+                    "worker_state": "TEXT NOT NULL DEFAULT 'stopped'",
+                    "current_account_id": "TEXT NOT NULL DEFAULT ''",
+                    "current_turn_count": "INTEGER NOT NULL DEFAULT 0",
+                    "max_turns_per_account": "INTEGER NOT NULL DEFAULT 1",
+                    "delay_min_ms": "INTEGER NOT NULL DEFAULT 0",
+                    "delay_max_ms": "INTEGER NOT NULL DEFAULT 0",
+                    "mode": "TEXT NOT NULL DEFAULT 'both'",
+                    "next_account_id": "TEXT NOT NULL DEFAULT ''",
+                    "last_heartbeat_at": "REAL",
+                    "last_error": "TEXT NOT NULL DEFAULT ''",
+                    "stats_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "updated_at": "REAL",
+                },
+            )
+            self._ensure_table_columns(
+                "session_connector_state",
+                {
+                    "alias_id": "TEXT NOT NULL DEFAULT ''",
+                    "state": "TEXT NOT NULL DEFAULT 'offline'",
+                    "proxy_key": "TEXT NOT NULL DEFAULT ''",
+                    "last_heartbeat_at": "REAL",
+                    "last_error": "TEXT NOT NULL DEFAULT ''",
+                    "updated_at": "REAL",
+                },
+            )
+            self._backfill_alias_ids()
+            self._conn.commit()
+
+    def _ensure_table_columns(self, table_name: str, columns: dict[str, str]) -> None:
+        existing = self._table_columns(table_name)
+        if not existing:
+            return
+        for column_name, definition in columns.items():
+            if column_name.lower() in existing:
+                continue
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+            existing.add(column_name.lower())
+
+    def _create_indexes(self) -> None:
+        with self._lock:
+            self._create_index_if_possible(
+                "inbox_threads_account_ts_idx",
+                "inbox_threads",
+                "account_id, last_message_timestamp DESC, thread_key",
+                ("account_id", "last_message_timestamp", "thread_key"),
+            )
+            self._create_index_if_possible(
+                "inbox_threads_alias_bucket_idx",
+                "inbox_threads",
+                "alias_id, bucket, owner, status, thread_key",
+                ("alias_id", "bucket", "owner", "status", "thread_key"),
+            )
+            self._create_index_if_possible(
+                "inbox_messages_thread_ts_idx",
+                "inbox_messages",
+                "thread_key, timestamp, ordinal",
+                ("thread_key", "timestamp", "ordinal"),
+            )
+            self._create_index_if_possible(
+                "thread_action_memory_lookup_idx",
+                "thread_action_memory",
+                "account_id, thread_id, created_at DESC",
+                ("account_id", "thread_id", "created_at"),
+            )
+            self._create_index_if_possible(
+                "inbox_send_queue_state_idx",
+                "inbox_send_queue_jobs",
+                "state, priority DESC, created_at",
+                ("state", "priority", "created_at"),
+            )
+            self._create_index_if_possible(
+                "inbox_send_queue_account_idx",
+                "inbox_send_queue_jobs",
+                "account_id, state, priority DESC, created_at",
+                ("account_id", "state", "priority", "created_at"),
+            )
+            self._create_index_if_possible(
+                "inbox_deleted_threads_account_idx",
+                "inbox_deleted_threads",
+                "account_id, deleted_at DESC",
+                ("account_id", "deleted_at"),
+            )
+            self._create_index_if_possible(
+                "inbox_thread_events_thread_idx",
+                "inbox_thread_events",
+                "thread_key, created_at DESC",
+                ("thread_key", "created_at"),
+            )
+            self._conn.commit()
+
+    def _create_index_if_possible(
+        self,
+        index_name: str,
+        table_name: str,
+        columns_sql: str,
+        required_columns: tuple[str, ...],
+    ) -> None:
+        if not self._table_has_columns(table_name, *required_columns):
+            return
+        self._conn.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({columns_sql})")
+
+    def _table_exists(self, table_name: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        if not self._table_exists(table_name):
+            return set()
+        return {
+            str(row["name"] or "").strip().lower()
+            for row in self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+
+    def _table_has_columns(self, table_name: str, *required_columns: str) -> bool:
+        existing = self._table_columns(table_name)
+        return all(str(column or "").strip().lower() in existing for column in required_columns)
+
+    def _backfill_alias_ids(self) -> None:
+        if not self._table_has_columns("inbox_threads", "alias_id", "account_alias"):
+            return
+        self._conn.execute(
+            """
+            UPDATE inbox_threads
+            SET alias_id = TRIM(COALESCE(account_alias, ''))
+            WHERE TRIM(COALESCE(alias_id, '')) = ''
+              AND TRIM(COALESCE(account_alias, '')) <> ''
+            """
+        )
 
     def _migrate_legacy_json_if_needed(self) -> None:
         with self._lock:
@@ -216,6 +565,17 @@ class InboxStorage:
         except Exception:
             return None
         return stamp if stamp > 0 else None
+
+    @staticmethod
+    def _coerce_non_negative_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _normalize_stage_id(value: Any, *, default: str = "initial") -> str:
+        return str(value or default).strip() or default
 
     @staticmethod
     def _split_thread_key(thread_key: str) -> tuple[str, str]:
@@ -294,6 +654,408 @@ class InboxStorage:
             return "sent"
         return status
 
+    @classmethod
+    def _is_synthetic_message_id(cls, value: Any) -> bool:
+        message_id = str(value or "").strip().lower()
+        if not message_id:
+            return False
+        return any(message_id.startswith(prefix) for prefix in cls._SYNTHETIC_MESSAGE_ID_PREFIXES)
+
+    @classmethod
+    def _looks_like_local_only_message_id(cls, value: Any) -> bool:
+        message_id = str(value or "").strip().lower()
+        if not message_id:
+            return False
+        return any(message_id.startswith(prefix) for prefix in cls._LOCAL_ONLY_MESSAGE_ID_PREFIXES)
+
+    @classmethod
+    def _flow_state_anchor_timestamp(cls, flow_state: dict[str, Any] | None) -> float | None:
+        if not isinstance(flow_state, dict):
+            return None
+        return cls._coerce_timestamp(flow_state.get("followup_anchor_ts")) or cls._coerce_timestamp(
+            flow_state.get("last_outbound_ts")
+        )
+
+    @classmethod
+    def _confirmed_outbound_message_for_stage(cls, message: dict[str, Any], *, stage_id: str) -> bool:
+        if str(message.get("direction") or "").strip().lower() != "outbound":
+            return False
+        if not responder_module._flow_stage_ids_match(message.get("stage_id"), stage_id):
+            return False
+        confirmation_ts = cls._coerce_timestamp(message.get("confirmed_at")) or cls._coerce_timestamp(message.get("timestamp"))
+        if confirmation_ts is None:
+            return False
+        delivery_status = str(message.get("delivery_status") or "").strip().lower()
+        sent_status = str(message.get("sent_status") or "").strip().lower()
+        return delivery_status == "sent" or sent_status in {"sent", "confirmed"}
+
+    @classmethod
+    def _message_anchor_timestamp(cls, message: dict[str, Any]) -> float | None:
+        del cls
+        return message_canonical_timestamp(message)
+
+    @classmethod
+    def _message_display_timestamp(cls, message: dict[str, Any]) -> float | None:
+        del cls
+        return message_canonical_timestamp(message)
+
+    @classmethod
+    def _message_sort_key(cls, message: dict[str, Any]) -> tuple[float, float, str, int]:
+        del cls
+        return message_sort_key(message)
+
+    @classmethod
+    def _message_has_real_identity(cls, message: dict[str, Any]) -> bool:
+        for value in (
+            message.get("external_message_id"),
+            message.get("message_id"),
+        ):
+            clean_value = str(value or "").strip()
+            if clean_value and not cls._is_synthetic_message_id(clean_value):
+                return True
+        return False
+
+    @classmethod
+    def _message_identity_tokens(cls, message: dict[str, Any]) -> set[str]:
+        tokens: set[str] = set()
+        message_id = str(message.get("message_id") or "").strip()
+        external_message_id = str(message.get("external_message_id") or "").strip()
+        if message_id:
+            tokens.add(f"message:{message_id}")
+        if external_message_id:
+            tokens.add(f"external:{external_message_id}")
+        return tokens
+
+    @classmethod
+    def _message_status_rank(cls, message: dict[str, Any]) -> int:
+        return {
+            "error": 0,
+            "pending": 1,
+            "sending": 2,
+            "sent": 3,
+        }.get(cls._normalize_delivery_status(message.get("delivery_status")), 0)
+
+    @classmethod
+    def _message_priority(cls, message: dict[str, Any]) -> tuple[int, int, int, int, float]:
+        return (
+            cls._message_has_real_identity(message),
+            cls._message_status_rank(message),
+            1 if cls._coerce_timestamp(message.get("timestamp")) is not None else 0,
+            0 if bool(message.get("local_echo")) else 1,
+            cls._message_anchor_timestamp(message) or 0.0,
+        )
+
+    @classmethod
+    def _message_text_key(cls, message: dict[str, Any]) -> str:
+        return str(message.get("text") or "").strip()
+
+    @classmethod
+    def _messages_match_for_reconciliation(
+        cls,
+        left: dict[str, Any],
+        right: dict[str, Any],
+    ) -> bool:
+        left_direction = str(left.get("direction") or "").strip().lower()
+        right_direction = str(right.get("direction") or "").strip().lower()
+        if left_direction != right_direction:
+            return False
+        if cls._message_identity_tokens(left) & cls._message_identity_tokens(right):
+            return True
+        if left_direction != "outbound":
+            return False
+        left_text = cls._message_text_key(left)
+        right_text = cls._message_text_key(right)
+        if not left_text or left_text != right_text:
+            return False
+        left_anchor = cls._message_anchor_timestamp(left)
+        right_anchor = cls._message_anchor_timestamp(right)
+        if left_anchor is None or right_anchor is None:
+            return False
+        if abs(left_anchor - right_anchor) > cls._MESSAGE_RECONCILE_WINDOW_SECONDS:
+            return False
+        left_needs_reconcile = bool(left.get("local_echo")) or not cls._message_has_real_identity(left)
+        right_needs_reconcile = bool(right.get("local_echo")) or not cls._message_has_real_identity(right)
+        return left_needs_reconcile or right_needs_reconcile
+
+    @classmethod
+    def _pick_message_value(cls, preferred: dict[str, Any], fallback: dict[str, Any], key: str) -> Any:
+        preferred_value = preferred.get(key)
+        if preferred_value not in (None, "", [], ()):
+            return preferred_value
+        return fallback.get(key)
+
+    @classmethod
+    def _merge_reconciled_messages(
+        cls,
+        left: dict[str, Any],
+        right: dict[str, Any],
+    ) -> dict[str, Any]:
+        preferred = left if cls._message_priority(left) >= cls._message_priority(right) else right
+        fallback = right if preferred is left else left
+        merged = dict(preferred)
+
+        preferred_anchor = cls._message_anchor_timestamp(preferred)
+        fallback_anchor = cls._message_anchor_timestamp(fallback)
+        preferred_has_real_identity = cls._message_has_real_identity(preferred)
+        fallback_has_real_identity = cls._message_has_real_identity(fallback)
+
+        for key in ("account_id", "source", "pack_id", "stage_id", "user_id", "text"):
+            merged[key] = cls._pick_message_value(preferred, fallback, key)
+
+        if fallback_has_real_identity and not preferred_has_real_identity:
+            merged["message_id"] = str(
+                fallback.get("message_id") or fallback.get("external_message_id") or preferred.get("message_id") or ""
+            ).strip()
+            merged["external_message_id"] = str(
+                fallback.get("external_message_id") or fallback.get("message_id") or preferred.get("external_message_id") or ""
+            ).strip()
+        else:
+            merged["message_id"] = str(
+                preferred.get("message_id") or preferred.get("external_message_id") or fallback.get("message_id") or ""
+            ).strip()
+            merged["external_message_id"] = str(
+                preferred.get("external_message_id") or preferred.get("message_id") or fallback.get("external_message_id") or ""
+            ).strip()
+
+        resolved_timestamp = cls._coerce_timestamp(preferred.get("timestamp"))
+        if fallback_has_real_identity and (
+            resolved_timestamp is None
+            or (not preferred_has_real_identity and cls._coerce_timestamp(fallback.get("timestamp")) is not None)
+        ):
+            resolved_timestamp = cls._coerce_timestamp(fallback.get("timestamp"))
+        if resolved_timestamp is None:
+            resolved_timestamp = max(
+                (stamp for stamp in (preferred_anchor, fallback_anchor) if stamp is not None),
+                default=None,
+            )
+        merged["timestamp"] = resolved_timestamp
+
+        created_candidates = [
+            stamp
+            for stamp in (
+                cls._coerce_timestamp(preferred.get("created_at")),
+                cls._coerce_timestamp(fallback.get("created_at")),
+            )
+            if stamp is not None
+        ]
+        merged["created_at"] = min(created_candidates) if created_candidates else resolved_timestamp
+
+        confirmed_candidates = [
+            stamp
+            for stamp in (
+                cls._coerce_timestamp(preferred.get("confirmed_at")),
+                cls._coerce_timestamp(fallback.get("confirmed_at")),
+                resolved_timestamp if cls._message_status_rank(preferred) >= 3 or cls._message_status_rank(fallback) >= 3 else None,
+            )
+            if stamp is not None
+        ]
+        merged["confirmed_at"] = max(confirmed_candidates) if confirmed_candidates else None
+
+        if cls._message_status_rank(preferred) >= cls._message_status_rank(fallback):
+            merged["delivery_status"] = cls._normalize_delivery_status(preferred.get("delivery_status"))
+        else:
+            merged["delivery_status"] = cls._normalize_delivery_status(fallback.get("delivery_status"))
+        merged["sent_status"] = cls._normalize_job_state(
+            preferred.get("sent_status") or fallback.get("sent_status") or merged.get("delivery_status")
+        )
+        if cls._normalize_delivery_status(merged.get("delivery_status")) == "sent":
+            merged["local_echo"] = False
+            merged["error_message"] = ""
+        else:
+            merged["local_echo"] = bool(preferred.get("local_echo")) and bool(fallback.get("local_echo"))
+            merged["error_message"] = str(
+                preferred.get("error_message") or fallback.get("error_message") or ""
+            ).strip()
+        merged["hidden_at"] = max(
+            (
+                stamp
+                for stamp in (
+                    cls._coerce_timestamp(preferred.get("hidden_at")),
+                    cls._coerce_timestamp(fallback.get("hidden_at")),
+                )
+                if stamp is not None
+            ),
+            default=None,
+        )
+        merged["block_id"] = str(merged.get("message_id") or merged.get("block_id") or "").strip()
+        return merged
+
+    @classmethod
+    def _visible_blocks(cls, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            annotate_message_timestamps(block)
+            for block in blocks
+            if cls._coerce_timestamp(block.get("hidden_at")) is None
+        ]
+
+    @classmethod
+    def _canonicalize_blocks(cls, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ordered = [dict(block) for block in blocks if isinstance(block, dict)]
+        ordered.sort(key=cls._message_sort_key)
+        reconciled: list[dict[str, Any]] = []
+        for candidate in ordered:
+            merged = False
+            for index, existing in enumerate(reconciled):
+                if not cls._messages_match_for_reconciliation(existing, candidate):
+                    continue
+                reconciled[index] = cls._merge_reconciled_messages(existing, candidate)
+                merged = True
+                break
+            if not merged:
+                reconciled.append(dict(candidate))
+        reconciled.sort(key=cls._message_sort_key)
+        return [annotate_message_timestamps(block) for block in reconciled[-cls._MAX_MESSAGES_PER_THREAD :]]
+
+    @staticmethod
+    def _normalize_thread_owner(value: Any) -> str:
+        owner = str(value or "").strip().lower() or "none"
+        if owner not in {"auto", "manual", "none"}:
+            return "none"
+        return owner
+
+    @staticmethod
+    def _normalize_thread_bucket(value: Any) -> str:
+        bucket = str(value or "").strip().lower() or "all"
+        if bucket in {"schedule", "scheduled"}:
+            bucket = "qualified"
+        if bucket not in {"all", "qualified", "disqualified"}:
+            return "all"
+        return bucket
+
+    @staticmethod
+    def _normalize_thread_status(value: Any) -> str:
+        status = str(value or "").strip().lower() or "open"
+        if status not in {
+            "open",
+            "pending",
+            "replied",
+            "followup_sent",
+            "paused",
+            "closed",
+            "failed",
+            "pack_sent",
+            "active",
+            "error",
+        }:
+            return "open"
+        return status
+
+    @staticmethod
+    def _normalize_ui_status(value: Any) -> str:
+        status = str(value or "").strip().lower()
+        if not status:
+            return ""
+        if status not in {
+            "open",
+            "pending",
+            "replied",
+            "followup_sent",
+            "paused",
+            "closed",
+            "failed",
+            "pack_sent",
+            "active",
+            "error",
+            "needs_reply",
+        }:
+            return ""
+        return status
+
+    @classmethod
+    def _normalize_thread_state_payload(cls, raw: Any) -> dict[str, Any]:
+        payload = cls._decode_json_dict(raw)
+        if not payload:
+            return {}
+        normalized = dict(payload)
+        normalized.pop("stage_id", None)
+        normalized.pop("followup_level", None)
+        legacy_ui_status = normalized.get("ui_status")
+        if legacy_ui_status in (None, ""):
+            legacy_ui_status = normalized.get("status")
+        normalized.pop("status", None)
+        ui_status = cls._normalize_ui_status(legacy_ui_status)
+        if ui_status:
+            normalized["ui_status"] = ui_status
+        else:
+            normalized.pop("ui_status", None)
+        flow_state = cls._normalize_flow_state_payload(normalized.get("flow_state"))
+        if flow_state:
+            normalized["flow_state"] = flow_state
+        else:
+            normalized.pop("flow_state", None)
+        return normalized
+
+    @classmethod
+    def _normalize_flow_state_payload(cls, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {}
+        normalized = dict(raw)
+        stage_id = str(normalized.get("stage_id") or "").strip()
+        if stage_id:
+            normalized["stage_id"] = stage_id
+        else:
+            normalized.pop("stage_id", None)
+        normalized["followup_level"] = cls._coerce_non_negative_int(normalized.get("followup_level"))
+        return normalized
+
+    @staticmethod
+    def _normalize_message_source(value: Any) -> str:
+        source = str(value or "").strip().lower() or "manual"
+        if source == "manual_pack":
+            return "manual"
+        if source not in {"auto", "manual", "followup", "campaign", "inbound"}:
+            return "manual"
+        return source
+
+    @staticmethod
+    def _normalize_job_state(value: Any) -> str:
+        state = str(value or "").strip().lower() or "queued"
+        remapped = {
+            "pending": "queued",
+            "sending": "processing",
+            "error": "failed",
+            "confirmed": "confirmed",
+        }
+        state = remapped.get(state, state)
+        if state not in {"queued", "processing", "sent", "confirmed", "failed", "cancelled"}:
+            return "queued"
+        return state
+
+    @staticmethod
+    def _normalize_job_type(value: Any) -> str:
+        job_type = str(value or "").strip().lower()
+        legacy_map = {
+            "send_message": "manual_reply",
+            "send_pack": "manual_pack",
+        }
+        job_type = legacy_map.get(job_type, job_type)
+        if job_type not in {"manual_reply", "manual_pack", "auto_reply", "followup"}:
+            return "manual_reply"
+        return job_type
+
+    @staticmethod
+    def _priority_for_job_type(job_type: str) -> int:
+        mapping = {
+            "manual_reply": 100,
+            "manual_pack": 80,
+            "auto_reply": 60,
+            "followup": 40,
+        }
+        return int(mapping.get(str(job_type or "").strip().lower(), 50))
+
+    @staticmethod
+    def _normalize_runtime_mode(value: Any) -> str:
+        mode = str(value or "").strip().lower() or "both"
+        aliases = {
+            "autoresponder": "auto",
+            "reply": "auto",
+            "follow-up": "followup",
+        }
+        mode = aliases.get(mode, mode)
+        if mode not in {"auto", "followup", "both"}:
+            return "both"
+        return mode
+
     @staticmethod
     def _normalize_health_state(value: Any) -> str:
         state = str(value or "").strip().lower() or "unknown"
@@ -352,9 +1114,26 @@ class InboxStorage:
             "thread_href": str(raw.get("thread_href") or "").strip()
             or f"https://www.instagram.com/direct/t/{thread_id}/",
             "account_id": account_id,
+            "alias_id": str(raw.get("alias_id") or raw.get("account_alias") or "").strip(),
             "account_alias": str(raw.get("account_alias") or "").strip(),
             "recipient_username": recipient_username,
             "display_name": str(raw.get("display_name") or raw.get("title") or recipient_username or thread_id).strip(),
+            "owner": self._normalize_thread_owner(raw.get("owner")),
+            "bucket": self._normalize_thread_bucket(raw.get("bucket")),
+            "status": self._normalize_thread_status(raw.get("status") or raw.get("operational_status")),
+            "stage_id": str(raw.get("stage_id") or raw.get("stage") or "initial").strip() or "initial",
+            "followup_level": max(0, int(raw.get("followup_level") or 0)),
+            "last_inbound_at": self._coerce_timestamp(raw.get("last_inbound_at")),
+            "last_outbound_at": self._coerce_timestamp(raw.get("last_outbound_at")),
+            "last_action_type": str(raw.get("last_action_type") or "").strip(),
+            "last_action_at": self._coerce_timestamp(raw.get("last_action_at")),
+            "last_pack_sent": str(raw.get("last_pack_sent") or "").strip(),
+            "manual_lock": bool(raw.get("manual_lock", False)),
+            "manual_assignee": str(raw.get("manual_assignee") or "").strip(),
+            "is_deleted_from_view": bool(raw.get("is_deleted_from_view", False)),
+            "trash_at": self._coerce_timestamp(raw.get("trash_at")),
+            "created_at": self._coerce_timestamp(raw.get("created_at")) or self._coerce_timestamp(raw.get("confirmed_at")) or self._coerce_timestamp(raw.get("timestamp")),
+            "updated_at": self._coerce_timestamp(raw.get("updated_at")) or time.time(),
             "last_message_text": str(raw.get("last_message_text") or "").strip(),
             "last_message_timestamp": self._coerce_timestamp(raw.get("last_message_timestamp")),
             "last_message_direction": last_direction,
@@ -380,12 +1159,23 @@ class InboxStorage:
             direction = "unknown"
         return {
             "message_id": message_id,
+            "external_message_id": str(raw.get("external_message_id") or message_id).strip(),
             "text": str(raw.get("text") or "").strip(),
             "timestamp": self._coerce_timestamp(raw.get("timestamp")),
             "direction": direction,
+            "account_id": self._clean_account_id(raw.get("account_id") or raw.get("account")),
+            "source": self._normalize_message_source(
+                raw.get("source") or ("inbound" if direction == "inbound" else "manual")
+            ),
+            "pack_id": str(raw.get("pack_id") or "").strip(),
+            "stage_id": str(raw.get("stage_id") or "").strip(),
+            "created_at": self._coerce_timestamp(raw.get("created_at")) or self._coerce_timestamp(raw.get("confirmed_at")) or self._coerce_timestamp(raw.get("timestamp")),
+            "confirmed_at": self._coerce_timestamp(raw.get("confirmed_at")),
             "user_id": str(raw.get("user_id") or "").strip(),
             "delivery_status": self._normalize_delivery_status(raw.get("delivery_status")),
+            "sent_status": self._normalize_job_state(raw.get("sent_status") or raw.get("delivery_status")),
             "local_echo": bool(raw.get("local_echo", False)),
+            "hidden_at": self._coerce_timestamp(raw.get("hidden_at")),
             "error_message": str(raw.get("error_message") or "").strip(),
         }
 
@@ -396,17 +1186,116 @@ class InboxStorage:
         ).fetchone()
         if row is None:
             return {}
-        return self._decode_json_dict(row["state_json"])
+        return self._normalize_thread_state_payload(row["state_json"])
 
     def _save_thread_state(self, thread_key: str, state: dict[str, Any]) -> None:
+        normalized = self._normalize_thread_state_payload(state)
         self._conn.execute(
             """
             INSERT INTO inbox_thread_state(thread_key, state_json)
             VALUES(?, ?)
             ON CONFLICT(thread_key) DO UPDATE SET state_json = excluded.state_json
             """,
-            (thread_key, self._encode_json(state)),
+            (thread_key, self._encode_json(normalized)),
         )
+
+    def _thread_stage_has_operational_evidence_locked(
+        self,
+        thread_key: str,
+        *,
+        stage_id: str,
+        thread: dict[str, Any],
+        state: dict[str, Any] | None = None,
+    ) -> bool:
+        clean_stage = str(stage_id or "").strip()
+        if not clean_stage:
+            return False
+        flow_state = self._normalize_flow_state_payload(
+            (state or {}).get("flow_state") if isinstance(state, dict) else thread.get("flow_state")
+        )
+        flow_anchor_ts = self._flow_state_anchor_timestamp(flow_state)
+        last_outbound_at = self._coerce_timestamp(thread.get("last_outbound_at"))
+        if (
+            responder_module._is_initial_flow_stage_id(clean_stage)
+            and responder_module._flow_stage_ids_match(flow_state.get("stage_id"), clean_stage)
+            and flow_anchor_ts is not None
+        ):
+            return True
+        if (
+            responder_module._flow_stage_ids_match(flow_state.get("stage_id"), clean_stage)
+            and flow_anchor_ts is not None
+            and last_outbound_at is not None
+        ):
+            return True
+        last_direction = str(thread.get("last_message_direction") or "").strip().lower()
+        last_message_id = str(thread.get("last_message_id") or "").strip()
+        thread_anchor_ts = last_outbound_at or self._coerce_timestamp(thread.get("last_message_timestamp"))
+        if (
+            self._normalize_stage_id(thread.get("stage_id")) == clean_stage
+            and last_direction == "outbound"
+            and last_message_id
+            and thread_anchor_ts is not None
+            and not self._looks_like_local_only_message_id(last_message_id)
+        ):
+            return True
+        for block in reversed(self._load_blocks(thread_key)):
+            if self._confirmed_outbound_message_for_stage(block, stage_id=clean_stage):
+                return True
+        return False
+
+    def _reconciled_followup_level_locked(
+        self,
+        thread_key: str,
+        *,
+        stage_id: str,
+        thread: dict[str, Any],
+        state: dict[str, Any] | None = None,
+    ) -> int:
+        if not self._thread_stage_has_operational_evidence_locked(
+            thread_key,
+            stage_id=stage_id,
+            thread=thread,
+            state=state,
+        ):
+            return 0
+        flow_state = self._normalize_flow_state_payload(
+            (state or {}).get("flow_state") if isinstance(state, dict) else thread.get("flow_state")
+        )
+        if not responder_module._flow_stage_ids_match(flow_state.get("stage_id"), stage_id):
+            return 0
+        if self._flow_state_anchor_timestamp(flow_state) is None:
+            return 0
+        return self._coerce_non_negative_int(flow_state.get("followup_level"))
+
+    def _reconcile_thread_state_locked(
+        self,
+        thread_key: str,
+        *,
+        thread: dict[str, Any],
+        state: dict[str, Any] | None,
+        stage_evidenced: bool | None = None,
+    ) -> dict[str, Any]:
+        normalized = self._normalize_thread_state_payload(state)
+        flow_state = self._normalize_flow_state_payload(normalized.get("flow_state"))
+        if not flow_state:
+            normalized.pop("flow_state", None)
+            return normalized
+        canonical_stage_id = self._normalize_stage_id(thread.get("stage_id"))
+        canonical_followup_level = self._coerce_non_negative_int(thread.get("followup_level"))
+        if stage_evidenced is None:
+            stage_evidenced = self._thread_stage_has_operational_evidence_locked(
+                thread_key,
+                stage_id=canonical_stage_id,
+                thread=thread,
+                state=normalized,
+            )
+        flow_state["stage_id"] = canonical_stage_id
+        flow_state["followup_level"] = canonical_followup_level if stage_evidenced else 0
+        if not stage_evidenced:
+            flow_state["last_outbound_ts"] = None
+            flow_state["followup_anchor_ts"] = None
+        normalized["flow_state"] = flow_state
+        return normalized
 
     def _account_overlay(self, account_id: str) -> dict[str, Any]:
         clean_account = self._clean_account_id(account_id)
@@ -436,6 +1325,7 @@ class InboxStorage:
             return None
         for key in (
             "last_activity_timestamp",
+            "last_action_at",
             "last_message_timestamp",
             "latest_customer_message_at",
             "last_seen_at",
@@ -447,11 +1337,11 @@ class InboxStorage:
 
     @classmethod
     def _thread_sort_key(cls, thread: dict[str, Any]) -> tuple[float, float, str, str]:
-        activity_stamp = cls._thread_activity_timestamp(thread) or 0.0
         message_stamp = cls._coerce_timestamp(thread.get("last_message_timestamp")) or 0.0
+        activity_stamp = cls._thread_activity_timestamp(thread) or 0.0
         return (
-            -activity_stamp,
             -message_stamp,
+            -activity_stamp,
             str(thread.get("display_name") or "").strip().lower(),
             str(thread.get("thread_key") or "").strip(),
         )
@@ -495,14 +1385,33 @@ class InboxStorage:
 
     def _row_to_thread_payload(self, row: sqlite3.Row) -> dict[str, Any]:
         thread_key = str(row["thread_key"] or "").strip()
+        operational_status = self._normalize_thread_status(self._row_value(row, "status", "open"))
         payload = {
             "thread_key": thread_key,
             "thread_id": str(row["thread_id"] or "").strip(),
             "thread_href": str(row["thread_href"] or "").strip(),
             "account_id": self._clean_account_id(row["account_id"]),
+            "alias_id": str(self._row_value(row, "alias_id", "") or "").strip(),
             "account_alias": str(row["account_alias"] or "").strip(),
             "recipient_username": str(row["recipient_username"] or "").strip(),
             "display_name": str(row["display_name"] or "").strip(),
+            "owner": self._normalize_thread_owner(self._row_value(row, "owner", "none")),
+            "bucket": self._normalize_thread_bucket(self._row_value(row, "bucket", "all")),
+            "status": operational_status,
+            "operational_status": operational_status,
+            "stage_id": str(self._row_value(row, "stage_id", "initial") or "initial").strip() or "initial",
+            "followup_level": max(0, int(self._row_value(row, "followup_level", 0) or 0)),
+            "last_inbound_at": self._coerce_timestamp(self._row_value(row, "last_inbound_at")),
+            "last_outbound_at": self._coerce_timestamp(self._row_value(row, "last_outbound_at")),
+            "last_action_type": str(self._row_value(row, "last_action_type", "") or "").strip(),
+            "last_action_at": self._coerce_timestamp(self._row_value(row, "last_action_at")),
+            "last_pack_sent": str(self._row_value(row, "last_pack_sent", "") or "").strip(),
+            "manual_lock": bool(self._row_value(row, "manual_lock", 0)),
+            "manual_assignee": str(self._row_value(row, "manual_assignee", "") or "").strip(),
+            "is_deleted_from_view": bool(self._row_value(row, "is_deleted_from_view", 0)),
+            "trash_at": self._coerce_timestamp(self._row_value(row, "trash_at")),
+            "created_at": self._coerce_timestamp(self._row_value(row, "created_at")),
+            "updated_at": self._coerce_timestamp(self._row_value(row, "updated_at")),
             "last_message_text": str(row["last_message_text"] or "").strip(),
             "last_message_timestamp": self._coerce_timestamp(row["last_message_timestamp"]),
             "last_message_direction": str(row["last_message_direction"] or "").strip() or "unknown",
@@ -516,7 +1425,16 @@ class InboxStorage:
             "last_seen_at": self._coerce_timestamp(row["last_seen_at"]),
             "latest_customer_message_at": self._coerce_timestamp(row["latest_customer_message_at"]),
         }
-        payload.update(self._load_thread_state(thread_key))
+        payload.update(
+            self._reconcile_thread_state_locked(
+                thread_key,
+                thread=payload,
+                state=self._load_thread_state(thread_key),
+            )
+        )
+        payload["status"] = operational_status
+        payload["operational_status"] = operational_status
+        payload["ui_status"] = self._normalize_ui_status(payload.get("ui_status"))
         payload.update(self._account_overlay(payload["account_id"]))
         return payload
 
@@ -570,9 +1488,28 @@ class InboxStorage:
             "thread_href": str(current_payload.get("thread_href") or "").strip()
             or (f"https://www.instagram.com/direct/t/{thread_id}/" if thread_id else ""),
             "account_id": self._clean_account_id(current_payload.get("account_id") or account_id),
+            "alias_id": str(current_payload.get("alias_id") or current_payload.get("account_alias") or "").strip(),
             "account_alias": str(current_payload.get("account_alias") or "").strip(),
             "recipient_username": recipient_username,
             "display_name": display_name,
+            "owner": self._normalize_thread_owner(current_payload.get("owner")),
+            "bucket": self._normalize_thread_bucket(current_payload.get("bucket")),
+            "status": self._normalize_thread_status(
+                current_payload.get("status") or current_payload.get("operational_status")
+            ),
+            "stage_id": str(current_payload.get("stage_id") or "initial").strip() or "initial",
+            "followup_level": max(0, int(current_payload.get("followup_level") or 0)),
+            "last_inbound_at": self._coerce_timestamp(current_payload.get("last_inbound_at")),
+            "last_outbound_at": self._coerce_timestamp(current_payload.get("last_outbound_at")),
+            "last_action_type": str(current_payload.get("last_action_type") or "").strip(),
+            "last_action_at": self._coerce_timestamp(current_payload.get("last_action_at")),
+            "last_pack_sent": str(current_payload.get("last_pack_sent") or "").strip(),
+            "manual_lock": bool(current_payload.get("manual_lock", False)),
+            "manual_assignee": str(current_payload.get("manual_assignee") or "").strip(),
+            "is_deleted_from_view": bool(current_payload.get("is_deleted_from_view", False)),
+            "trash_at": self._coerce_timestamp(current_payload.get("trash_at")),
+            "created_at": self._coerce_timestamp(current_payload.get("created_at")) or time.time(),
+            "updated_at": self._coerce_timestamp(current_payload.get("updated_at")) or time.time(),
             "last_message_text": str(current_payload.get("last_message_text") or "").strip(),
             "last_message_timestamp": self._coerce_timestamp(current_payload.get("last_message_timestamp")),
             "last_message_direction": str(current_payload.get("last_message_direction") or "unknown").strip() or "unknown",
@@ -598,23 +1535,46 @@ class InboxStorage:
         return self._coerce_timestamp(self._row_value(row, "session_started_at"))
 
     def _upsert_thread_record(self, thread: dict[str, Any]) -> None:
+        thread = dict(thread or {})
+        thread.setdefault("created_at", self._coerce_timestamp(thread.get("created_at")) or time.time())
+        thread["updated_at"] = self._coerce_timestamp(thread.get("updated_at")) or time.time()
         self._conn.execute(
             """
             INSERT INTO inbox_threads(
-                thread_key, thread_id, thread_href, account_id, account_alias,
-                recipient_username, display_name, last_message_text, last_message_timestamp,
-                last_message_direction, last_message_id, unread_count, needs_reply,
-                tags_json, participants_json, last_synced_at, last_seen_text, last_seen_at,
-                latest_customer_message_at
+                thread_key, thread_id, thread_href, account_id, alias_id, account_alias,
+                recipient_username, display_name, owner, bucket, status, stage_id,
+                followup_level, last_inbound_at, last_outbound_at, last_action_type,
+                last_action_at, last_pack_sent, manual_lock, manual_assignee,
+                is_deleted_from_view, trash_at, created_at, updated_at,
+                last_message_text, last_message_timestamp, last_message_direction,
+                last_message_id, unread_count, needs_reply, tags_json, participants_json,
+                last_synced_at, last_seen_text, last_seen_at, latest_customer_message_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(thread_key) DO UPDATE SET
                 thread_id = excluded.thread_id,
                 thread_href = excluded.thread_href,
                 account_id = excluded.account_id,
+                alias_id = excluded.alias_id,
                 account_alias = excluded.account_alias,
                 recipient_username = excluded.recipient_username,
                 display_name = excluded.display_name,
+                owner = excluded.owner,
+                bucket = excluded.bucket,
+                status = excluded.status,
+                stage_id = excluded.stage_id,
+                followup_level = excluded.followup_level,
+                last_inbound_at = excluded.last_inbound_at,
+                last_outbound_at = excluded.last_outbound_at,
+                last_action_type = excluded.last_action_type,
+                last_action_at = excluded.last_action_at,
+                last_pack_sent = excluded.last_pack_sent,
+                manual_lock = excluded.manual_lock,
+                manual_assignee = excluded.manual_assignee,
+                is_deleted_from_view = excluded.is_deleted_from_view,
+                trash_at = excluded.trash_at,
+                created_at = COALESCE(inbox_threads.created_at, excluded.created_at),
+                updated_at = excluded.updated_at,
                 last_message_text = excluded.last_message_text,
                 last_message_timestamp = excluded.last_message_timestamp,
                 last_message_direction = excluded.last_message_direction,
@@ -633,9 +1593,26 @@ class InboxStorage:
                 thread["thread_id"],
                 thread["thread_href"],
                 thread["account_id"],
+                str(thread.get("alias_id") or "").strip(),
                 thread["account_alias"],
                 thread["recipient_username"],
                 thread["display_name"],
+                self._normalize_thread_owner(thread.get("owner")),
+                self._normalize_thread_bucket(thread.get("bucket")),
+                self._normalize_thread_status(thread.get("status")),
+                str(thread.get("stage_id") or "initial").strip() or "initial",
+                max(0, int(thread.get("followup_level") or 0)),
+                self._coerce_timestamp(thread.get("last_inbound_at")),
+                self._coerce_timestamp(thread.get("last_outbound_at")),
+                str(thread.get("last_action_type") or "").strip(),
+                self._coerce_timestamp(thread.get("last_action_at")),
+                str(thread.get("last_pack_sent") or "").strip(),
+                1 if bool(thread.get("manual_lock")) else 0,
+                str(thread.get("manual_assignee") or "").strip(),
+                1 if bool(thread.get("is_deleted_from_view")) else 0,
+                self._coerce_timestamp(thread.get("trash_at")),
+                self._coerce_timestamp(thread.get("created_at")),
+                self._coerce_timestamp(thread.get("updated_at")),
                 thread["last_message_text"],
                 thread["last_message_timestamp"],
                 thread["last_message_direction"],
@@ -654,8 +1631,11 @@ class InboxStorage:
     def _load_blocks(self, thread_key: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
-            SELECT block_id, ordinal, message_id, text, timestamp, direction, user_id,
-                   delivery_status, local_echo, error_message
+            SELECT block_id, ordinal, account_id, message_id, external_message_id, text,
+                   timestamp, direction, source, pack_id, stage_id, created_at,
+                   confirmed_at, user_id, delivery_status, sent_status, local_echo,
+                   hidden_at,
+                   error_message
             FROM inbox_messages
             WHERE thread_key = ?
             ORDER BY COALESCE(timestamp, 0), ordinal
@@ -665,13 +1645,22 @@ class InboxStorage:
         return [
             {
                 "block_id": str(row["block_id"] or "").strip(),
+                "account_id": self._clean_account_id(self._row_value(row, "account_id", "")),
                 "message_id": str(row["message_id"] or "").strip(),
+                "external_message_id": str(self._row_value(row, "external_message_id", "") or "").strip(),
                 "text": str(row["text"] or "").strip(),
                 "timestamp": self._coerce_timestamp(row["timestamp"]),
                 "direction": str(row["direction"] or "").strip() or "unknown",
+                "source": self._normalize_message_source(self._row_value(row, "source", "")),
+                "pack_id": str(self._row_value(row, "pack_id", "") or "").strip(),
+                "stage_id": str(self._row_value(row, "stage_id", "") or "").strip(),
+                "created_at": self._coerce_timestamp(self._row_value(row, "created_at")),
+                "confirmed_at": self._coerce_timestamp(self._row_value(row, "confirmed_at")),
                 "user_id": str(row["user_id"] or "").strip(),
                 "delivery_status": self._normalize_delivery_status(row["delivery_status"]),
+                "sent_status": self._normalize_job_state(self._row_value(row, "sent_status", row["delivery_status"])),
                 "local_echo": bool(row["local_echo"]),
+                "hidden_at": self._coerce_timestamp(self._row_value(row, "hidden_at")),
                 "error_message": str(row["error_message"] or "").strip(),
             }
             for row in rows
@@ -683,22 +1672,34 @@ class InboxStorage:
             self._conn.execute(
                 """
                 INSERT INTO inbox_messages(
-                    thread_key, block_id, ordinal, message_id, text, timestamp, direction,
-                    user_id, delivery_status, local_echo, error_message
+                    thread_key, block_id, ordinal, account_id, message_id, external_message_id,
+                    text, timestamp, direction, source, pack_id, stage_id, created_at,
+                    confirmed_at, user_id, delivery_status, sent_status, local_echo,
+                    hidden_at,
+                    error_message
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     thread_key,
                     str(block.get("block_id") or block.get("message_id") or f"block:{ordinal}").strip(),
                     ordinal,
+                    self._clean_account_id(block.get("account_id")),
                     str(block.get("message_id") or "").strip(),
+                    str(block.get("external_message_id") or block.get("message_id") or "").strip(),
                     str(block.get("text") or "").strip(),
                     self._coerce_timestamp(block.get("timestamp")),
                     str(block.get("direction") or "unknown").strip(),
+                    self._normalize_message_source(block.get("source")),
+                    str(block.get("pack_id") or "").strip(),
+                    str(block.get("stage_id") or "").strip(),
+                    self._coerce_timestamp(block.get("created_at")) or self._coerce_timestamp(block.get("timestamp")),
+                    self._coerce_timestamp(block.get("confirmed_at")),
                     str(block.get("user_id") or "").strip(),
                     self._normalize_delivery_status(block.get("delivery_status")),
+                    self._normalize_job_state(block.get("sent_status") or block.get("delivery_status")),
                     1 if bool(block.get("local_echo")) else 0,
+                    self._coerce_timestamp(block.get("hidden_at")),
                     str(block.get("error_message") or "").strip(),
                 ),
             )
@@ -706,100 +1707,73 @@ class InboxStorage:
     def _compress_blocks(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized = [self._normalize_message_record(item) for item in messages]
         clean_rows = [item for item in normalized if isinstance(item, dict)]
-        clean_rows.sort(
-            key=lambda item: (
-                self._coerce_timestamp(item.get("timestamp")) or 0.0,
-                str(item.get("message_id") or ""),
-            )
-        )
+        clean_rows.sort(key=self._message_sort_key)
         if not clean_rows:
             return []
 
         blocks: list[dict[str, Any]] = []
-        current: dict[str, Any] | None = None
-        current_start_ts: float | None = None
-        for message in clean_rows:
-            stamp = self._coerce_timestamp(message.get("timestamp"))
-            direction = str(message.get("direction") or "unknown").strip().lower() or "unknown"
-            should_group = False
-            if current is not None:
-                current_direction = str(current.get("direction") or "").strip().lower()
-                current_ts = self._coerce_timestamp(current.get("timestamp"))
-                should_group = (
-                    current_direction == direction
-                    and current_ts is not None
-                    and stamp is not None
-                    and current_start_ts is not None
-                    and (stamp - current_start_ts) <= self._RESPONSE_BLOCK_WINDOW_SECONDS
-                    and str(current.get("delivery_status") or "").strip().lower() not in {"pending", "sending", "error"}
-                    and str(message.get("delivery_status") or "").strip().lower() not in {"pending", "sending", "error"}
-                )
-            if not should_group:
-                if current is not None:
-                    blocks.append(current)
-                current_start_ts = stamp
-                current = {
-                    "block_id": str(message.get("message_id") or f"block:{len(blocks)}").strip(),
-                    "message_id": str(message.get("message_id") or "").strip(),
+        for index, message in enumerate(clean_rows):
+            stamp = self._message_anchor_timestamp(message)
+            message_id = str(message.get("message_id") or "").strip()
+            external_message_id = str(message.get("external_message_id") or message_id).strip()
+            block_id = str(message_id or external_message_id or f"block:{index}").strip()
+            blocks.append(
+                {
+                    "block_id": block_id,
+                    "account_id": self._clean_account_id(message.get("account_id")),
+                    "message_id": message_id,
+                    "external_message_id": external_message_id,
                     "text": str(message.get("text") or "").strip(),
-                    "timestamp": stamp,
-                    "direction": direction,
+                    "timestamp": self._coerce_timestamp(message.get("timestamp")),
+                    "direction": str(message.get("direction") or "unknown").strip().lower() or "unknown",
+                    "source": self._normalize_message_source(message.get("source")),
+                    "pack_id": str(message.get("pack_id") or "").strip(),
+                    "stage_id": str(message.get("stage_id") or "").strip(),
+                    "created_at": self._coerce_timestamp(message.get("created_at")) or self._coerce_timestamp(message.get("confirmed_at")) or stamp,
+                    "confirmed_at": self._coerce_timestamp(message.get("confirmed_at")),
                     "user_id": str(message.get("user_id") or "").strip(),
                     "delivery_status": self._normalize_delivery_status(message.get("delivery_status")),
+                    "sent_status": self._normalize_job_state(message.get("sent_status") or message.get("delivery_status")),
                     "local_echo": bool(message.get("local_echo")),
+                    "hidden_at": self._coerce_timestamp(message.get("hidden_at")),
                     "error_message": str(message.get("error_message") or "").strip(),
                 }
-                continue
-            if current is None:
-                continue
-            combined = [str(current.get("text") or "").strip(), str(message.get("text") or "").strip()]
-            current["text"] = "\n".join([item for item in combined if item])
-            current["timestamp"] = stamp if stamp is not None else current.get("timestamp")
-            current["message_id"] = str(message.get("message_id") or current.get("message_id") or "").strip()
-            current["user_id"] = str(message.get("user_id") or current.get("user_id") or "").strip()
-            current["local_echo"] = bool(current.get("local_echo")) or bool(message.get("local_echo"))
-            status = self._normalize_delivery_status(message.get("delivery_status"))
-            current_status = self._normalize_delivery_status(current.get("delivery_status"))
-            if "error" in {status, current_status}:
-                current["delivery_status"] = "error"
-            elif "sending" in {status, current_status}:
-                current["delivery_status"] = "sending"
-            elif "pending" in {status, current_status}:
-                current["delivery_status"] = "pending"
-            else:
-                current["delivery_status"] = "sent"
-            if str(message.get("error_message") or "").strip():
-                current["error_message"] = str(message.get("error_message") or "").strip()
-        if current is not None:
-            blocks.append(current)
-        return blocks[-self._MAX_MESSAGES_PER_THREAD :]
+            )
+        return self._canonicalize_blocks(blocks)
+
+    def _apply_message_timestamp_fallbacks(
+        self,
+        blocks: list[dict[str, Any]],
+        *,
+        current: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        del current
+        return [dict(block) for block in blocks if isinstance(block, dict)]
 
     def _merge_remote_and_local_blocks(self, thread_key: str, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         remote_ids = {str(item.get("message_id") or "").strip() for item in blocks if str(item.get("message_id") or "").strip()}
-        pending_blocks = [
+        carried_blocks = [
             item
             for item in self._load_blocks(thread_key)
             if self._normalize_delivery_status(item.get("delivery_status")) in {"pending", "sending", "error"}
+            or self._coerce_timestamp(item.get("hidden_at")) is not None
         ]
         merged = list(blocks)
-        for block in pending_blocks:
+        for block in carried_blocks:
             block_id = str(block.get("message_id") or "").strip()
-            if block_id and block_id in remote_ids:
+            if block_id and block_id in remote_ids and self._coerce_timestamp(block.get("hidden_at")) is None:
                 continue
             merged.append(dict(block))
-        merged.sort(
-            key=lambda item: (
-                self._coerce_timestamp(item.get("timestamp")) or 0.0,
-                str(item.get("message_id") or ""),
-            )
-        )
+        merged = self._canonicalize_blocks(merged)
         deduped: dict[str, dict[str, Any]] = {}
         for block in merged:
             key = str(block.get("message_id") or block.get("block_id") or "").strip()
             if not key:
                 key = f"anon:{len(deduped)}"
             deduped[key] = dict(block)
-        return list(deduped.values())[-self._MAX_MESSAGES_PER_THREAD :]
+        rows = list(deduped.values())[-self._MAX_MESSAGES_PER_THREAD :]
+        rows.sort(key=self._message_sort_key)
+        return rows
 
     def _merge_cached_blocks(
         self,
@@ -817,12 +1791,8 @@ class InboxStorage:
                     order.append(key)
                 merged[key] = dict(block)
         rows = [merged[key] for key in order]
-        rows.sort(
-            key=lambda item: (
-                self._coerce_timestamp(item.get("timestamp")) or 0.0,
-                str(item.get("message_id") or item.get("block_id") or ""),
-            )
-        )
+        rows = self._canonicalize_blocks(rows)
+        rows.sort(key=self._message_sort_key)
         return rows[-self._MAX_MESSAGES_PER_THREAD :]
 
     @staticmethod
@@ -838,6 +1808,17 @@ class InboxStorage:
             )
         )
 
+    @staticmethod
+    def _block_matches_message_ref(block: dict[str, Any], message_ref: dict[str, Any]) -> bool:
+        for key in ("block_id", "message_id", "external_message_id"):
+            ref_value = str(message_ref.get(key) or "").strip()
+            if not ref_value:
+                continue
+            block_value = str(block.get(key) or "").strip()
+            if block_value and block_value == ref_value:
+                return True
+        return False
+
     def _derive_thread_metrics(
         self,
         blocks: list[dict[str, Any]],
@@ -845,22 +1826,28 @@ class InboxStorage:
         current_unread_count: int,
         mark_read: bool,
     ) -> dict[str, Any]:
-        latest_message = blocks[-1] if blocks else None
+        visible_blocks = self._visible_blocks(blocks)
+        latest_message = visible_blocks[-1] if visible_blocks else None
         latest_inbound_at: float | None = None
         latest_outbound_sent_at: float | None = None
-        for block in blocks:
-            stamp = self._coerce_timestamp(block.get("timestamp"))
+        for block in visible_blocks:
+            real_timestamp = self._coerce_timestamp(block.get("timestamp"))
+            display_timestamp = self._message_display_timestamp(block)
             direction = str(block.get("direction") or "").strip().lower()
             status = self._normalize_delivery_status(block.get("delivery_status"))
-            if direction == "inbound" and stamp is not None:
-                latest_inbound_at = stamp if latest_inbound_at is None else max(latest_inbound_at, stamp)
-            if direction == "outbound" and stamp is not None and status == "sent":
-                latest_outbound_sent_at = stamp if latest_outbound_sent_at is None else max(latest_outbound_sent_at, stamp)
+            if direction == "inbound" and real_timestamp is not None:
+                latest_inbound_at = real_timestamp if latest_inbound_at is None else max(latest_inbound_at, real_timestamp)
+            if direction == "outbound" and display_timestamp is not None and status == "sent":
+                latest_outbound_sent_at = (
+                    display_timestamp
+                    if latest_outbound_sent_at is None
+                    else max(latest_outbound_sent_at, display_timestamp)
+                )
         needs_reply = bool(
             latest_inbound_at is not None
             and (latest_outbound_sent_at is None or latest_outbound_sent_at < latest_inbound_at)
         )
-        unread_count = 0 if mark_read else current_unread_count
+        unread_count = 0
         if not mark_read and latest_message is not None and str(latest_message.get("direction") or "").strip().lower() == "inbound":
             unread_count = max(1, int(current_unread_count or 0))
         return {
@@ -903,6 +1890,12 @@ class InboxStorage:
     @staticmethod
     def _include_thread(thread: dict[str, Any], filter_mode: str) -> bool:
         mode = str(filter_mode or "all").strip().lower()
+        if bool(thread.get("is_deleted_from_view")):
+            return False
+        if mode == "qualified":
+            return str(thread.get("bucket") or "").strip().lower() == "qualified"
+        if mode == "disqualified":
+            return str(thread.get("bucket") or "").strip().lower() == "disqualified"
         if mode == "unread":
             try:
                 return int(thread.get("unread_count") or 0) > 0
@@ -973,7 +1966,14 @@ class InboxStorage:
             thread = self._load_thread_record(clean_key)
             if not isinstance(thread, dict):
                 return None
-            thread["messages"] = self._load_blocks(clean_key)
+            if bool(thread.get("is_deleted_from_view")):
+                return None
+            blocks = self._load_blocks(clean_key)
+            canonical = self._canonicalize_blocks(blocks)
+            if canonical != blocks:
+                self._save_blocks(clean_key, canonical)
+                self._conn.commit()
+            thread["messages"] = self._visible_blocks(canonical)
             return copy.deepcopy(thread)
 
     def get_messages(self, thread_key: str) -> list[dict[str, Any]]:
@@ -981,12 +1981,26 @@ class InboxStorage:
         if not clean_key:
             return []
         with self._lock:
-            return copy.deepcopy(self._load_blocks(clean_key))
+            blocks = self._load_blocks(clean_key)
+            canonical = self._canonicalize_blocks(blocks)
+            if canonical != blocks:
+                self._save_blocks(clean_key, canonical)
+                self._conn.commit()
+            return copy.deepcopy(self._visible_blocks(canonical))
 
     def upsert_threads(self, thread_rows: list[dict[str, Any]]) -> None:
         now = time.time()
         with self._lock:
             for raw in thread_rows:
+                raw_stage_present = any(
+                    key in raw and str(raw.get(key) or "").strip()
+                    for key in ("stage_id", "stage")
+                ) if isinstance(raw, dict) else False
+                raw_followup_present = (
+                    isinstance(raw, dict)
+                    and "followup_level" in raw
+                    and raw.get("followup_level") not in {None, ""}
+                )
                 thread = self._normalize_thread_record(raw)
                 if not thread:
                     continue
@@ -1002,6 +2016,49 @@ class InboxStorage:
                 if not thread.get("last_seen_text"):
                     thread["last_seen_text"] = str(current.get("last_seen_text") or "").strip()
                     thread["last_seen_at"] = self._coerce_timestamp(current.get("last_seen_at"))
+                thread["alias_id"] = str(thread.get("alias_id") or current.get("alias_id") or thread.get("account_alias") or "").strip()
+                thread["owner"] = self._normalize_thread_owner(thread.get("owner") or current.get("owner") or "none")
+                thread["bucket"] = self._normalize_thread_bucket(thread.get("bucket") or current.get("bucket") or "all")
+                thread["status"] = self._normalize_thread_status(thread.get("status") or current.get("status") or "open")
+                current_stage_id = self._normalize_stage_id(current.get("stage_id"))
+                current_state = self._load_thread_state(thread["thread_key"])
+                current_stage_evidenced = self._thread_stage_has_operational_evidence_locked(
+                    thread["thread_key"],
+                    stage_id=current_stage_id,
+                    thread=current,
+                    state=current_state,
+                ) if current else False
+                if raw_stage_present:
+                    thread["stage_id"] = self._normalize_stage_id(thread.get("stage_id"))
+                    final_stage_evidenced = True
+                elif responder_module._is_initial_flow_stage_id(current_stage_id) or current_stage_evidenced:
+                    thread["stage_id"] = current_stage_id
+                    final_stage_evidenced = current_stage_evidenced
+                else:
+                    thread["stage_id"] = "initial"
+                    final_stage_evidenced = False
+                if raw_followup_present and (raw_stage_present or thread["stage_id"] == current_stage_id):
+                    thread["followup_level"] = self._coerce_non_negative_int(thread.get("followup_level"))
+                elif thread["stage_id"] == current_stage_id and current:
+                    thread["followup_level"] = self._reconciled_followup_level_locked(
+                        thread["thread_key"],
+                        stage_id=thread["stage_id"],
+                        thread=current,
+                        state=current_state,
+                    )
+                else:
+                    thread["followup_level"] = 0
+                thread["last_inbound_at"] = self._coerce_timestamp(thread.get("last_inbound_at") or current.get("last_inbound_at"))
+                thread["last_outbound_at"] = self._coerce_timestamp(thread.get("last_outbound_at") or current.get("last_outbound_at"))
+                thread["last_action_type"] = str(thread.get("last_action_type") or current.get("last_action_type") or "").strip()
+                thread["last_action_at"] = self._coerce_timestamp(thread.get("last_action_at") or current.get("last_action_at"))
+                thread["last_pack_sent"] = str(thread.get("last_pack_sent") or current.get("last_pack_sent") or "").strip()
+                thread["manual_lock"] = bool(thread.get("manual_lock", current.get("manual_lock", False)))
+                thread["manual_assignee"] = str(thread.get("manual_assignee") or current.get("manual_assignee") or "").strip()
+                thread["is_deleted_from_view"] = bool(thread.get("is_deleted_from_view", current.get("is_deleted_from_view", False)))
+                thread["trash_at"] = self._coerce_timestamp(thread.get("trash_at") or current.get("trash_at"))
+                thread["created_at"] = self._coerce_timestamp(thread.get("created_at") or current.get("created_at")) or now
+                thread["updated_at"] = now
                 thread["participants"] = self._normalize_participants(
                     list(current.get("participants") or []) + list(thread.get("participants") or [])
                 )
@@ -1010,6 +2067,15 @@ class InboxStorage:
                 )
                 thread["last_synced_at"] = now
                 self._upsert_thread_record(thread)
+                state = self._load_thread_state(thread["thread_key"])
+                reconciled_state = self._reconcile_thread_state_locked(
+                    thread["thread_key"],
+                    thread=thread,
+                    state=state,
+                    stage_evidenced=final_stage_evidenced,
+                )
+                if reconciled_state != state:
+                    self._save_thread_state(thread["thread_key"], reconciled_state)
             self._trim_global_threads_locked()
             self._conn.commit()
 
@@ -1028,7 +2094,10 @@ class InboxStorage:
             return
         with self._lock:
             current = self._load_thread_record(clean_key) or self._thread_shell(clean_key, participants=participants)
-            compressed = self._compress_blocks(messages)
+            compressed = self._apply_message_timestamp_fallbacks(
+                self._compress_blocks(messages),
+                current=current,
+            )
             blocks = self._merge_remote_and_local_blocks(clean_key, compressed)
             metrics = self._derive_thread_metrics(
                 blocks,
@@ -1037,15 +2106,31 @@ class InboxStorage:
             )
             latest = metrics["latest_message"]
             thread = self._thread_shell(clean_key, current=current, participants=participants)
+            latest_timestamp = self._message_display_timestamp(latest) if latest is not None else None
             if latest is not None:
                 thread["last_message_text"] = str(latest.get("text") or "").strip()
-                thread["last_message_timestamp"] = self._coerce_timestamp(latest.get("timestamp"))
                 thread["last_message_direction"] = str(latest.get("direction") or "unknown").strip()
                 thread["last_message_id"] = str(latest.get("message_id") or "").strip()
-            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"]
+                if latest_timestamp is not None:
+                    thread["last_message_timestamp"] = latest_timestamp
+            else:
+                thread["last_message_text"] = ""
+                thread["last_message_direction"] = "unknown"
+                thread["last_message_id"] = ""
+                thread["last_message_timestamp"] = None
+            thread["last_inbound_at"] = metrics["latest_customer_message_at"] or self._coerce_timestamp(
+                current.get("last_inbound_at")
+            )
+            if latest is not None and str(latest.get("direction") or "").strip().lower() == "outbound":
+                if latest_timestamp is not None:
+                    thread["last_outbound_at"] = latest_timestamp
+            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"] or self._coerce_timestamp(
+                current.get("latest_customer_message_at")
+            )
             thread["needs_reply"] = 1 if metrics["needs_reply"] else 0
             thread["unread_count"] = int(metrics["unread_count"] or 0)
             thread["last_synced_at"] = time.time()
+            thread["updated_at"] = time.time()
             if seen_text:
                 thread["last_seen_text"] = str(seen_text or "").strip()
                 thread["last_seen_at"] = self._coerce_timestamp(seen_at) or time.time()
@@ -1068,10 +2153,13 @@ class InboxStorage:
         if not clean_key:
             return
         with self._lock:
-            preview_blocks = self._compress_blocks(messages)
+            current = self._load_thread_record(clean_key) or self._thread_shell(clean_key, participants=participants)
+            preview_blocks = self._apply_message_timestamp_fallbacks(
+                self._compress_blocks(messages),
+                current=current,
+            )
             if not preview_blocks:
                 return
-            current = self._load_thread_record(clean_key) or self._thread_shell(clean_key, participants=participants)
             existing_blocks = self._load_blocks(clean_key)
             blocks = self._merge_cached_blocks(existing_blocks, preview_blocks)
             metrics = self._derive_thread_metrics(
@@ -1081,60 +2169,102 @@ class InboxStorage:
             )
             latest = metrics["latest_message"]
             thread = self._thread_shell(clean_key, current=current, participants=participants)
+            latest_timestamp = self._message_display_timestamp(latest) if latest is not None else None
             if latest is not None:
                 thread["last_message_text"] = str(latest.get("text") or "").strip()
-                thread["last_message_timestamp"] = self._coerce_timestamp(latest.get("timestamp"))
                 thread["last_message_direction"] = str(latest.get("direction") or "unknown").strip()
                 thread["last_message_id"] = str(latest.get("message_id") or "").strip()
-            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"]
+                if latest_timestamp is not None:
+                    thread["last_message_timestamp"] = latest_timestamp
+            else:
+                thread["last_message_text"] = ""
+                thread["last_message_direction"] = "unknown"
+                thread["last_message_id"] = ""
+                thread["last_message_timestamp"] = None
+            thread["last_inbound_at"] = metrics["latest_customer_message_at"] or self._coerce_timestamp(
+                current.get("last_inbound_at")
+            )
+            if latest is not None and str(latest.get("direction") or "").strip().lower() == "outbound":
+                if latest_timestamp is not None:
+                    thread["last_outbound_at"] = latest_timestamp
+            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"] or self._coerce_timestamp(
+                current.get("latest_customer_message_at")
+            )
             thread["needs_reply"] = 1 if metrics["needs_reply"] else 0
             thread["unread_count"] = int(metrics["unread_count"] or 0)
             thread["last_synced_at"] = time.time()
+            thread["updated_at"] = time.time()
             self._upsert_thread_record(thread)
             self._save_blocks(clean_key, blocks)
             self._conn.commit()
 
-    def append_local_outbound_message(self, thread_key: str, text: str) -> dict[str, Any] | None:
+    def append_local_outbound_message(
+        self,
+        thread_key: str,
+        text: str,
+        *,
+        source: str = "manual",
+        pack_id: str = "",
+    ) -> dict[str, Any] | None:
         clean_key = str(thread_key or "").strip()
         content = str(text or "").strip()
         if not clean_key or not content:
             return None
-        local_id = f"local-{int(time.time() * 1000)}"
+        local_id = f"local-{uuid.uuid4().hex}"
+        now = time.time()
+        normalized_source = self._normalize_message_source(source)
+        action_by_source = {
+            "auto": "auto_reply",
+            "followup": "followup",
+            "campaign": "campaign",
+            "manual": "manual_reply",
+        }
         block = {
             "block_id": local_id,
             "message_id": local_id,
+            "external_message_id": local_id,
             "text": content,
-            "timestamp": time.time(),
+            "timestamp": now,
             "direction": "outbound",
+            "source": normalized_source,
+            "pack_id": str(pack_id or "").strip(),
+            "created_at": now,
             "user_id": "",
             "delivery_status": "pending",
+            "sent_status": "queued",
             "local_echo": True,
+            "hidden_at": None,
             "error_message": "",
         }
         with self._lock:
             current = self._load_thread_record(clean_key) or self._thread_shell(clean_key)
+            block["account_id"] = str(current.get("account_id") or "").strip()
+            block["stage_id"] = str(current.get("stage_id") or "").strip()
             blocks = self._load_blocks(clean_key)
             blocks.append(block)
-            blocks.sort(
-                key=lambda item: (
-                    self._coerce_timestamp(item.get("timestamp")) or 0.0,
-                    str(item.get("message_id") or ""),
-                )
-            )
-            blocks = blocks[-self._MAX_MESSAGES_PER_THREAD :]
+            blocks = self._canonicalize_blocks(blocks)
             metrics = self._derive_thread_metrics(
                 blocks,
                 current_unread_count=max(0, int(current.get("unread_count") or 0)),
                 mark_read=True,
             )
             thread = self._thread_shell(clean_key, current=current)
+            local_timestamp = self._message_display_timestamp(block)
             thread["last_message_text"] = content
-            thread["last_message_timestamp"] = block["timestamp"]
+            thread["last_message_timestamp"] = local_timestamp
             thread["last_message_direction"] = "outbound"
             thread["last_message_id"] = local_id
+            thread["last_outbound_at"] = local_timestamp
+            thread["last_action_type"] = str(action_by_source.get(normalized_source, "manual_reply"))
+            thread["last_action_at"] = local_timestamp
+            thread["status"] = "pending"
+            if normalized_source == "manual":
+                thread["owner"] = self._normalize_thread_owner(thread.get("owner") or "manual")
+                thread["manual_lock"] = bool(thread.get("manual_lock")) or thread.get("owner") == "manual"
             thread["unread_count"] = 0
             thread["needs_reply"] = 1 if metrics["needs_reply"] else 0
-            thread["last_synced_at"] = time.time()
+            thread["last_synced_at"] = now
+            thread["updated_at"] = now
             self._upsert_thread_record(thread)
             self._save_blocks(clean_key, blocks)
             self._conn.commit()
@@ -1160,11 +2290,13 @@ class InboxStorage:
                 if str(block.get("message_id") or "").strip() != local_id:
                     continue
                 block["delivery_status"] = next_status
+                block["sent_status"] = self._normalize_job_state(status)
                 block["error_message"] = str(error_message or "").strip()
                 changed = True
                 break
             if not changed:
                 return
+            blocks = self._canonicalize_blocks(blocks)
             self._save_blocks(clean_key, blocks)
             self._conn.commit()
 
@@ -1185,25 +2317,38 @@ class InboxStorage:
             current = self._load_thread_record(clean_key) or self._thread_shell(clean_key)
             blocks = self._load_blocks(clean_key)
             changed = False
+            resolved_created_at: float | None = None
             for block in blocks:
                 if str(block.get("message_id") or "").strip() != local_id:
                     continue
+                resolved_created_at = self._coerce_timestamp(block.get("created_at"))
                 if error_message:
                     block["delivery_status"] = "error"
+                    block["sent_status"] = "failed"
                     block["error_message"] = str(error_message).strip()
                 else:
                     block["delivery_status"] = "sent"
+                    block["sent_status"] = "confirmed"
                     block["error_message"] = ""
                     block["local_echo"] = False
-                    if final_message_id:
+                    resolved_message_id = str(final_message_id or "").strip()
+                    if resolved_message_id and not self._is_synthetic_message_id(resolved_message_id):
                         block["message_id"] = str(final_message_id).strip()
                         block["block_id"] = str(final_message_id).strip()
-                    if sent_timestamp:
-                        block["timestamp"] = self._coerce_timestamp(sent_timestamp)
+                        block["external_message_id"] = str(final_message_id).strip()
+                    elif resolved_message_id:
+                        block["external_message_id"] = resolved_message_id
+                    resolved_timestamp = self._coerce_timestamp(sent_timestamp)
+                    if resolved_timestamp is not None:
+                        block["timestamp"] = resolved_timestamp
+                        block["confirmed_at"] = resolved_timestamp
+                    else:
+                        block["confirmed_at"] = self._coerce_timestamp(block.get("confirmed_at"))
                 changed = True
                 break
             if not changed:
                 return
+            blocks = self._canonicalize_blocks(blocks)
             metrics = self._derive_thread_metrics(
                 blocks,
                 current_unread_count=max(0, int(current.get("unread_count") or 0)),
@@ -1211,17 +2356,87 @@ class InboxStorage:
             )
             latest = metrics["latest_message"]
             thread = self._thread_shell(clean_key, current=current)
+            latest_timestamp = self._message_display_timestamp(latest) if latest is not None else None
             if latest is not None:
                 thread["last_message_text"] = str(latest.get("text") or "").strip()
-                thread["last_message_timestamp"] = self._coerce_timestamp(latest.get("timestamp"))
                 thread["last_message_direction"] = str(latest.get("direction") or "unknown").strip()
                 thread["last_message_id"] = str(latest.get("message_id") or "").strip()
+                if latest_timestamp is not None:
+                    thread["last_message_timestamp"] = latest_timestamp
+            else:
+                thread["last_message_text"] = ""
+                thread["last_message_direction"] = "unknown"
+                thread["last_message_id"] = ""
+                thread["last_message_timestamp"] = None
             thread["needs_reply"] = 1 if metrics["needs_reply"] else 0
-            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"]
+            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"] or self._coerce_timestamp(
+                current.get("latest_customer_message_at")
+            )
+            resolved_ts = (
+                self._coerce_timestamp(sent_timestamp)
+                or latest_timestamp
+                or resolved_created_at
+                or time.time()
+            )
             thread["last_synced_at"] = time.time()
+            thread["last_outbound_at"] = resolved_ts
+            thread["last_action_at"] = resolved_ts
+            thread["status"] = "failed" if error_message else "replied"
+            thread["updated_at"] = time.time()
             self._upsert_thread_record(thread)
             self._save_blocks(clean_key, blocks[-self._MAX_MESSAGES_PER_THREAD :])
             self._conn.commit()
+
+    def delete_message_local(self, thread_key: str, message_ref: dict[str, Any]) -> bool:
+        clean_key = str(thread_key or "").strip()
+        payload = dict(message_ref or {})
+        if not clean_key or not payload:
+            return False
+        with self._lock:
+            current = self._load_thread_record(clean_key) or self._thread_shell(clean_key)
+            blocks = self._load_blocks(clean_key)
+            changed = False
+            for block in blocks:
+                if not self._block_matches_message_ref(block, payload):
+                    continue
+                if self._coerce_timestamp(block.get("hidden_at")) is not None:
+                    return False
+                block["hidden_at"] = time.time()
+                changed = True
+                break
+            if not changed:
+                return False
+            blocks = self._canonicalize_blocks(blocks)
+            metrics = self._derive_thread_metrics(
+                blocks,
+                current_unread_count=max(0, int(current.get("unread_count") or 0)),
+                mark_read=False,
+            )
+            latest = metrics["latest_message"]
+            thread = self._thread_shell(clean_key, current=current)
+            latest_timestamp = self._message_display_timestamp(latest) if latest is not None else None
+            if latest is not None:
+                thread["last_message_text"] = str(latest.get("text") or "").strip()
+                thread["last_message_direction"] = str(latest.get("direction") or "unknown").strip()
+                thread["last_message_id"] = str(latest.get("message_id") or "").strip()
+                thread["last_message_timestamp"] = latest_timestamp
+            else:
+                thread["last_message_text"] = ""
+                thread["last_message_direction"] = "unknown"
+                thread["last_message_id"] = ""
+                thread["last_message_timestamp"] = None
+            thread["last_inbound_at"] = metrics["latest_customer_message_at"]
+            if latest is not None and str(latest.get("direction") or "").strip().lower() == "outbound":
+                thread["last_outbound_at"] = latest_timestamp
+            thread["latest_customer_message_at"] = metrics["latest_customer_message_at"]
+            thread["needs_reply"] = 1 if metrics["needs_reply"] else 0
+            thread["unread_count"] = int(metrics["unread_count"] or 0)
+            thread["last_synced_at"] = time.time()
+            thread["updated_at"] = time.time()
+            self._upsert_thread_record(thread)
+            self._save_blocks(clean_key, blocks[-self._MAX_MESSAGES_PER_THREAD :])
+            self._conn.commit()
+            return True
 
     def update_thread_state(self, thread_key: str, updates: dict[str, Any]) -> None:
         clean_key = str(thread_key or "").strip()
@@ -1229,9 +2444,139 @@ class InboxStorage:
             return
         with self._lock:
             state = self._load_thread_state(clean_key)
-            state.update(copy.deepcopy(updates))
-            self._save_thread_state(clean_key, state)
+            incoming = copy.deepcopy(updates)
+            if "status" in incoming and "ui_status" not in incoming:
+                incoming["ui_status"] = incoming.get("status")
+            incoming.pop("status", None)
+            self._merge_thread_state_updates(state, incoming)
+            current = self._load_thread_record(clean_key)
+            reconciled = (
+                self._reconcile_thread_state_locked(clean_key, thread=current, state=state)
+                if isinstance(current, dict)
+                else self._normalize_thread_state_payload(state)
+            )
+            self._save_thread_state(clean_key, reconciled)
             self._conn.commit()
+
+    def update_thread_record(self, thread_key: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or not isinstance(updates, dict):
+            return None
+        with self._lock:
+            current = self._load_thread_record(clean_key)
+            if not isinstance(current, dict):
+                return None
+            incoming = copy.deepcopy(updates)
+            if "operational_status" in incoming and "status" not in incoming:
+                incoming["status"] = incoming.get("operational_status")
+            incoming.pop("operational_status", None)
+            state_updates = {
+                key: incoming.pop(key)
+                for key in list(incoming.keys())
+                if key not in self._THREAD_RECORD_FIELDS
+            }
+            current.update(incoming)
+            current["updated_at"] = time.time()
+            self._upsert_thread_record(current)
+            self._sync_latest_outbound_block_stage_locked(
+                clean_key,
+                stage_id=incoming.get("stage_id"),
+                thread_updates=incoming,
+            )
+            state = self._load_thread_state(clean_key)
+            if state_updates:
+                self._merge_thread_state_updates(state, state_updates)
+            reconciled_state = self._reconcile_thread_state_locked(
+                clean_key,
+                thread=current,
+                state=state,
+                stage_evidenced=True if "stage_id" in incoming or "followup_level" in incoming else None,
+            )
+            if state_updates or state or reconciled_state or "stage_id" in incoming or "followup_level" in incoming:
+                self._save_thread_state(clean_key, reconciled_state)
+            self._conn.commit()
+            refreshed = self._load_thread_record(clean_key)
+            return copy.deepcopy(refreshed) if isinstance(refreshed, dict) else None
+
+    def _sync_latest_outbound_block_stage_locked(
+        self,
+        thread_key: str,
+        *,
+        stage_id: Any,
+        thread_updates: dict[str, Any],
+    ) -> None:
+        clean_stage_id = str(stage_id or "").strip()
+        if not clean_stage_id:
+            return
+        has_outbound_context = bool(
+            "last_outbound_at" in thread_updates
+            or "last_action_type" in thread_updates
+            or str(thread_updates.get("last_message_direction") or "").strip().lower() == "outbound"
+        )
+        if not has_outbound_context:
+            return
+        target_message_id = str(thread_updates.get("last_message_id") or "").strip()
+        blocks = self._load_blocks(thread_key)
+        changed = False
+        for block in reversed(blocks):
+            if str(block.get("direction") or "").strip().lower() != "outbound":
+                continue
+            block_message_id = str(block.get("message_id") or "").strip()
+            block_external_id = str(block.get("external_message_id") or "").strip()
+            if target_message_id and target_message_id not in {block_message_id, block_external_id}:
+                continue
+            if str(block.get("stage_id") or "").strip() == clean_stage_id:
+                return
+            block["stage_id"] = clean_stage_id
+            changed = True
+            break
+        if not changed:
+            return
+        self._save_blocks(thread_key, self._canonicalize_blocks(blocks))
+
+    @staticmethod
+    def _merge_thread_state_updates(state: dict[str, Any], updates: dict[str, Any]) -> None:
+        for key, value in dict(updates or {}).items():
+            if value is None:
+                state.pop(str(key), None)
+                continue
+            state[str(key)] = value
+
+    def _cleanup_auto_reply_pending_state_locked(
+        self,
+        thread_key: str,
+        *,
+        job_type: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        clean_key = str(thread_key or "").strip()
+        clean_job_type = self._normalize_job_type(job_type)
+        if not clean_key or clean_job_type != "auto_reply":
+            return
+        state = self._load_thread_state(clean_key)
+        pending_reply = bool(state.get("pending_reply"))
+        pending_inbound_id = str(state.get("pending_inbound_id") or "").strip()
+        if not pending_reply and not pending_inbound_id:
+            return
+        clean_payload = dict(payload or {})
+        post_send_state_updates = dict(clean_payload.get("post_send_state_updates") or {})
+        inbound_id_hint = str(post_send_state_updates.get("last_inbound_id_seen") or clean_payload.get("latest_inbound_id") or "").strip()
+        if inbound_id_hint and pending_inbound_id and pending_inbound_id != inbound_id_hint:
+            return
+        self._merge_thread_state_updates(
+            state,
+            {
+                "pending_reply": False,
+                "pending_inbound_id": None,
+            },
+        )
+        current = self._load_thread_record(clean_key)
+        reconciled = (
+            self._reconcile_thread_state_locked(clean_key, thread=current, state=state)
+            if isinstance(current, dict)
+            else self._normalize_thread_state_payload(state)
+        )
+        self._save_thread_state(clean_key, reconciled)
 
     def mark_thread_opened(self, thread_key: str) -> None:
         clean_key = str(thread_key or "").strip()
@@ -1573,25 +2918,51 @@ class InboxStorage:
         account_id: str,
         payload: dict[str, Any],
         dedupe_key: str = "",
+        priority: int | None = None,
+        state: str = "queued",
+        scheduled_at: float | None = None,
     ) -> int:
-        clean_type = str(task_type or "").strip()
-        if not clean_type:
+        clean_job_type = self._normalize_job_type(task_type)
+        if not clean_job_type:
             return 0
         now = time.time()
+        job_priority = self._priority_for_job_type(clean_job_type) if priority is None else int(priority)
+        scheduled = self._coerce_timestamp(scheduled_at) or now
         with self._lock:
+            clean_dedupe = str(dedupe_key or "").strip()
+            if clean_dedupe:
+                existing = self._conn.execute(
+                    """
+                    SELECT id
+                    FROM inbox_send_queue_jobs
+                    WHERE dedupe_key = ?
+                      AND state IN ('queued', 'processing')
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (clean_dedupe,),
+                ).fetchone()
+                if existing is not None:
+                    return int(self._row_value(existing, "id", 0) or 0)
             cursor = self._conn.execute(
                 """
                 INSERT INTO inbox_send_queue_jobs(
-                    task_type, dedupe_key, thread_key, account_id, payload_json, state, error_message, created_at, updated_at
+                    task_type, job_type, dedupe_key, thread_key, account_id, payload_json,
+                    priority, state, attempt_count, scheduled_at, started_at, finished_at,
+                    error_message, failure_reason, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, 'pending', '', ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, '', '', ?, ?)
                 """,
                 (
-                    clean_type,
-                    str(dedupe_key or "").strip(),
+                    clean_job_type,
+                    clean_job_type,
+                    clean_dedupe,
                     str(thread_key or "").strip(),
                     self._clean_account_id(account_id),
                     self._encode_json(dict(payload or {})),
+                    int(job_priority),
+                    self._normalize_job_state(state),
+                    scheduled,
                     now,
                     now,
                 ),
@@ -1599,24 +2970,92 @@ class InboxStorage:
             self._conn.commit()
             return int(cursor.lastrowid or 0)
 
-    def update_send_queue_job(self, job_id: int, *, state: str, error_message: str = "") -> None:
+    def update_send_queue_job(
+        self,
+        job_id: int,
+        *,
+        state: str,
+        error_message: str = "",
+        failure_reason: str = "",
+        started_at: float | None = None,
+        finished_at: float | None = None,
+        increment_attempt: bool = False,
+    ) -> None:
         if int(job_id or 0) <= 0:
             return
+        next_state = self._normalize_job_state(state)
         with self._lock:
+            updates = [
+                "state = ?",
+                "error_message = ?",
+                "failure_reason = ?",
+                "started_at = COALESCE(?, started_at)",
+                "finished_at = COALESCE(?, finished_at)",
+                "updated_at = ?",
+                "job_type = COALESCE(NULLIF(job_type, ''), task_type)",
+            ]
+            if increment_attempt:
+                updates.append("attempt_count = attempt_count + 1")
+            query = (
+                "UPDATE inbox_send_queue_jobs SET "
+                + ", ".join(updates)
+                + " WHERE id = ?"
+            )
             self._conn.execute(
-                """
-                UPDATE inbox_send_queue_jobs
-                SET state = ?, error_message = ?, updated_at = ?
-                WHERE id = ?
-                """,
+                query,
                 (
-                    self._normalize_delivery_status(state),
+                    next_state,
                     str(error_message or "").strip(),
+                    str(failure_reason or error_message or "").strip(),
+                    self._coerce_timestamp(started_at),
+                    self._coerce_timestamp(finished_at),
                     time.time(),
                     int(job_id),
                 ),
             )
             self._conn.commit()
+
+    def get_send_queue_job(self, job_id: int) -> dict[str, Any] | None:
+        if int(job_id or 0) <= 0:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, task_type, job_type, dedupe_key, thread_key, account_id, payload_json,
+                       priority, state, attempt_count, scheduled_at, started_at, finished_at,
+                       error_message, failure_reason, created_at, updated_at
+                FROM inbox_send_queue_jobs
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(job_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        raw_payload = str(self._row_value(row, "payload_json", "") or "").strip()
+        try:
+            decoded_payload = json.loads(raw_payload) if raw_payload else {}
+        except Exception:
+            decoded_payload = {}
+        return {
+            "id": int(self._row_value(row, "id", 0) or 0),
+            "task_type": str(self._row_value(row, "task_type", "") or "").strip(),
+            "job_type": self._normalize_job_type(self._row_value(row, "job_type", self._row_value(row, "task_type", ""))),
+            "dedupe_key": str(self._row_value(row, "dedupe_key", "") or "").strip(),
+            "thread_key": str(self._row_value(row, "thread_key", "") or "").strip(),
+            "account_id": self._clean_account_id(self._row_value(row, "account_id", "")),
+            "payload": decoded_payload if isinstance(decoded_payload, dict) else {},
+            "priority": int(self._row_value(row, "priority", 0) or 0),
+            "state": self._normalize_job_state(self._row_value(row, "state", "queued")),
+            "attempt_count": int(self._row_value(row, "attempt_count", 0) or 0),
+            "scheduled_at": self._coerce_timestamp(self._row_value(row, "scheduled_at")),
+            "started_at": self._coerce_timestamp(self._row_value(row, "started_at")),
+            "finished_at": self._coerce_timestamp(self._row_value(row, "finished_at")),
+            "error_message": str(self._row_value(row, "error_message", "") or "").strip(),
+            "failure_reason": str(self._row_value(row, "failure_reason", "") or "").strip(),
+            "created_at": self._coerce_timestamp(self._row_value(row, "created_at")),
+            "updated_at": self._coerce_timestamp(self._row_value(row, "updated_at")),
+        }
 
     def list_send_queue_jobs(
         self,
@@ -1626,12 +3065,14 @@ class InboxStorage:
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, int(limit or 100))
         clean_states = [
-            self._normalize_delivery_status(item)
+            self._normalize_job_state(item)
             for item in (states or [])
-            if self._normalize_delivery_status(item)
+            if self._normalize_job_state(item)
         ]
         query = """
-            SELECT id, task_type, dedupe_key, thread_key, account_id, payload_json, state, error_message, created_at, updated_at
+            SELECT id, task_type, job_type, dedupe_key, thread_key, account_id, payload_json,
+                   priority, state, attempt_count, scheduled_at, started_at, finished_at,
+                   error_message, failure_reason, created_at, updated_at
             FROM inbox_send_queue_jobs
         """
         params: list[Any] = []
@@ -1639,7 +3080,7 @@ class InboxStorage:
             placeholders = ",".join("?" for _ in clean_states)
             query += f" WHERE state IN ({placeholders})"
             params.extend(clean_states)
-        query += " ORDER BY created_at ASC, id ASC LIMIT ?"
+        query += " ORDER BY priority DESC, scheduled_at ASC, created_at ASC, id ASC LIMIT ?"
         params.append(safe_limit)
         with self._lock:
             rows = self._conn.execute(query, tuple(params)).fetchall()
@@ -1654,17 +3095,437 @@ class InboxStorage:
                 {
                     "id": int(row["id"] or 0),
                     "task_type": str(row["task_type"] or "").strip(),
+                    "job_type": self._normalize_job_type(self._row_value(row, "job_type", row["task_type"])),
                     "dedupe_key": str(row["dedupe_key"] or "").strip(),
                     "thread_key": str(row["thread_key"] or "").strip(),
                     "account_id": self._clean_account_id(row["account_id"]),
                     "payload": decoded_payload if isinstance(decoded_payload, dict) else {},
-                    "state": self._normalize_delivery_status(row["state"]),
+                    "priority": int(self._row_value(row, "priority", 0) or 0),
+                    "state": self._normalize_job_state(row["state"]),
+                    "attempt_count": int(self._row_value(row, "attempt_count", 0) or 0),
+                    "scheduled_at": self._coerce_timestamp(self._row_value(row, "scheduled_at")),
+                    "started_at": self._coerce_timestamp(self._row_value(row, "started_at")),
+                    "finished_at": self._coerce_timestamp(self._row_value(row, "finished_at")),
                     "error_message": str(row["error_message"] or "").strip(),
+                    "failure_reason": str(self._row_value(row, "failure_reason", "") or "").strip(),
                     "created_at": self._coerce_timestamp(row["created_at"]),
                     "updated_at": self._coerce_timestamp(row["updated_at"]),
                 }
             )
         return payload
+
+    def claim_next_send_queue_job(
+        self,
+        account_id: str,
+        *,
+        allowed_states: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        clean_account = self._clean_account_id(account_id)
+        if not clean_account:
+            return None
+        candidate_states = allowed_states or ["queued"]
+        normalized_states = [self._normalize_job_state(item) for item in candidate_states if self._normalize_job_state(item)]
+        if not normalized_states:
+            normalized_states = ["queued"]
+        placeholders = ",".join("?" for _ in normalized_states)
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                f"""
+                SELECT id
+                FROM inbox_send_queue_jobs
+                WHERE account_id = ?
+                  AND state IN ({placeholders})
+                  AND COALESCE(scheduled_at, created_at) <= ?
+                ORDER BY priority DESC, scheduled_at ASC, created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (clean_account, *normalized_states, now),
+            ).fetchone()
+            if row is None:
+                return None
+            job_id = int(self._row_value(row, "id", 0) or 0)
+            self.update_send_queue_job(
+                job_id,
+                state="processing",
+                started_at=now,
+                increment_attempt=True,
+            )
+        jobs = self.list_send_queue_jobs(states=["processing"], limit=200)
+        for job in jobs:
+            if int(job.get("id") or 0) == job_id:
+                return job
+        return None
+
+    def cancel_send_queue_jobs(
+        self,
+        *,
+        thread_key: str = "",
+        account_id: str = "",
+        alias_id: str = "",
+        job_types: list[str] | None = None,
+        states: list[str] | None = None,
+        reason: str = "cancelled",
+    ) -> int:
+        clean_thread = str(thread_key or "").strip()
+        clean_account = self._clean_account_id(account_id)
+        clean_alias = str(alias_id or "").strip()
+        normalized_job_types = [
+            self._normalize_job_type(item)
+            for item in (job_types or [])
+            if self._normalize_job_type(item)
+        ]
+        normalized_states = [
+            self._normalize_job_state(item)
+            for item in (states or ["queued", "processing"])
+            if self._normalize_job_state(item)
+        ]
+        if not clean_thread and not clean_account and not clean_alias:
+            return 0
+        if not normalized_states:
+            normalized_states = ["queued", "processing"]
+        filters: list[str] = []
+        params: list[Any] = []
+        if clean_thread:
+            filters.append("jobs.thread_key = ?")
+            params.append(clean_thread)
+        if clean_account:
+            filters.append("jobs.account_id = ?")
+            params.append(clean_account)
+        if clean_alias:
+            filters.append("LOWER(COALESCE(NULLIF(threads.alias_id, ''), NULLIF(threads.account_alias, ''))) = ?")
+            params.append(clean_alias.lower())
+        if normalized_job_types:
+            placeholders = ",".join("?" for _ in normalized_job_types)
+            filters.append(f"jobs.job_type IN ({placeholders})")
+            params.extend(normalized_job_types)
+        state_placeholders = ",".join("?" for _ in normalized_states)
+        filters.append(f"jobs.state IN ({state_placeholders})")
+        params.extend(normalized_states)
+        query = (
+            "SELECT jobs.id, jobs.thread_key, jobs.job_type, jobs.payload_json "
+            "FROM inbox_send_queue_jobs AS jobs "
+            "LEFT JOIN inbox_threads AS threads ON threads.thread_key = jobs.thread_key "
+            "WHERE "
+            + " AND ".join(filters)
+            + " ORDER BY jobs.id ASC"
+        )
+        with self._lock:
+            rows = self._conn.execute(query, tuple(params)).fetchall()
+            if not rows:
+                return 0
+            now = time.time()
+            cancelled = 0
+            for row in rows:
+                payload = self._decode_json_dict(self._row_value(row, "payload_json", "{}"))
+                local_message_id = str(payload.get("local_message_id") or "").strip()
+                job_thread_key = str(self._row_value(row, "thread_key", "") or "").strip()
+                job_type = self._normalize_job_type(self._row_value(row, "job_type", ""))
+                self._conn.execute(
+                    """
+                    UPDATE inbox_send_queue_jobs
+                    SET state = 'cancelled',
+                        error_message = ?,
+                        failure_reason = ?,
+                        finished_at = COALESCE(finished_at, ?),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(reason or "cancelled").strip(),
+                        str(reason or "cancelled").strip(),
+                        now,
+                        now,
+                        int(self._row_value(row, "id", 0) or 0),
+                    ),
+                )
+                if job_thread_key and local_message_id:
+                    self.set_local_outbound_status(
+                        job_thread_key,
+                        local_message_id,
+                        status="failed",
+                        error_message=str(reason or "cancelled").strip(),
+                    )
+                if job_thread_key:
+                    self._cleanup_auto_reply_pending_state_locked(
+                        job_thread_key,
+                        job_type=job_type,
+                        payload=payload,
+                    )
+                cancelled += 1
+            self._conn.commit()
+        return cancelled
+
+    def add_thread_event(
+        self,
+        thread_key: str,
+        event_type: str,
+        *,
+        account_id: str = "",
+        alias_id: str = "",
+        payload: dict[str, Any] | None = None,
+        created_at: float | None = None,
+    ) -> None:
+        clean_key = str(thread_key or "").strip()
+        clean_event = str(event_type or "").strip().lower()
+        if not clean_key or not clean_event:
+            return
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO inbox_thread_events(thread_key, account_id, alias_id, event_type, payload_json, created_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_key,
+                    self._clean_account_id(account_id),
+                    str(alias_id or "").strip(),
+                    clean_event,
+                    self._encode_json(dict(payload or {})),
+                    self._coerce_timestamp(created_at) or time.time(),
+                ),
+            )
+            self._conn.commit()
+
+    def list_thread_events(self, thread_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key:
+            return []
+        safe_limit = max(1, int(limit or 50))
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT thread_key, account_id, alias_id, event_type, payload_json, created_at
+                FROM inbox_thread_events
+                WHERE thread_key = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (clean_key, safe_limit),
+            ).fetchall()
+        payload: list[dict[str, Any]] = []
+        for row in rows:
+            payload.append(
+                {
+                    "thread_key": str(self._row_value(row, "thread_key", "") or "").strip(),
+                    "account_id": self._clean_account_id(self._row_value(row, "account_id", "")),
+                    "alias_id": str(self._row_value(row, "alias_id", "") or "").strip(),
+                    "event_type": str(self._row_value(row, "event_type", "") or "").strip(),
+                    "payload": self._decode_json_dict(self._row_value(row, "payload_json", "{}")),
+                    "created_at": self._coerce_timestamp(self._row_value(row, "created_at")),
+                }
+            )
+        return payload
+
+    def get_runtime_alias_state(self, alias_id: str) -> dict[str, Any]:
+        clean_alias = str(alias_id or "").strip()
+        if not clean_alias:
+            return {}
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM runtime_alias_state WHERE alias_id = ?",
+                (clean_alias,),
+            ).fetchone()
+        if row is None:
+            return {}
+        return self._runtime_alias_row_to_payload(row)
+
+    def upsert_runtime_alias_state(self, alias_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        clean_alias = str(alias_id or "").strip()
+        if not clean_alias or not isinstance(updates, dict):
+            return {}
+        current = self.get_runtime_alias_state(clean_alias)
+
+        def _string_field(name: str) -> str:
+            if name in updates:
+                return str(updates.get(name) or "").strip()
+            return str(current.get(name) or "").strip()
+
+        merged = {
+            "alias_id": clean_alias,
+            "is_running": bool(updates.get("is_running", current.get("is_running", False))),
+            "worker_state": str(updates.get("worker_state") or current.get("worker_state") or "stopped").strip() or "stopped",
+            "current_account_id": _string_field("current_account_id"),
+            "current_turn_count": max(0, int(updates.get("current_turn_count", current.get("current_turn_count", 0)) or 0)),
+            "max_turns_per_account": max(1, int(updates.get("max_turns_per_account", current.get("max_turns_per_account", 1)) or 1)),
+            "delay_min_ms": max(0, int(updates.get("delay_min_ms", current.get("delay_min_ms", 0)) or 0)),
+            "delay_max_ms": max(0, int(updates.get("delay_max_ms", current.get("delay_max_ms", 0)) or 0)),
+            "mode": self._normalize_runtime_mode(updates.get("mode") or current.get("mode") or "both"),
+            "next_account_id": _string_field("next_account_id"),
+            "last_heartbeat_at": self._coerce_timestamp(updates.get("last_heartbeat_at") or current.get("last_heartbeat_at")),
+            "last_error": _string_field("last_error"),
+            "stats": dict(updates.get("stats") or current.get("stats") or {}),
+            "updated_at": self._coerce_timestamp(updates.get("updated_at")) or time.time(),
+        }
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO runtime_alias_state(
+                    alias_id, is_running, worker_state, current_account_id, current_turn_count,
+                    max_turns_per_account, delay_min_ms, delay_max_ms, mode,
+                    next_account_id, last_heartbeat_at, last_error, stats_json, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(alias_id) DO UPDATE SET
+                    is_running = excluded.is_running,
+                    worker_state = excluded.worker_state,
+                    current_account_id = excluded.current_account_id,
+                    current_turn_count = excluded.current_turn_count,
+                    max_turns_per_account = excluded.max_turns_per_account,
+                    delay_min_ms = excluded.delay_min_ms,
+                    delay_max_ms = excluded.delay_max_ms,
+                    mode = excluded.mode,
+                    next_account_id = excluded.next_account_id,
+                    last_heartbeat_at = excluded.last_heartbeat_at,
+                    last_error = excluded.last_error,
+                    stats_json = excluded.stats_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    clean_alias,
+                    1 if merged["is_running"] else 0,
+                    merged["worker_state"],
+                    merged["current_account_id"],
+                    merged["current_turn_count"],
+                    merged["max_turns_per_account"],
+                    merged["delay_min_ms"],
+                    merged["delay_max_ms"],
+                    merged["mode"],
+                    merged["next_account_id"],
+                    merged["last_heartbeat_at"],
+                    merged["last_error"],
+                    self._encode_json(merged["stats"]),
+                    merged["updated_at"],
+                ),
+            )
+            self._conn.commit()
+        return merged
+
+    def list_runtime_alias_states(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM runtime_alias_state ORDER BY alias_id ASC").fetchall()
+        return [self._runtime_alias_row_to_payload(row) for row in rows]
+
+    def delete_runtime_alias_state(self, alias_id: str) -> bool:
+        clean_alias = str(alias_id or "").strip()
+        if not clean_alias:
+            return False
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM runtime_alias_state WHERE alias_id = ?",
+                (clean_alias,),
+            )
+            self._conn.commit()
+        return int(cursor.rowcount or 0) > 0
+
+    def _runtime_alias_row_to_payload(self, row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+        return {
+            "alias_id": str(self._row_value(row, "alias_id", "") or "").strip(),
+            "is_running": bool(self._row_value(row, "is_running", 0)),
+            "worker_state": str(self._row_value(row, "worker_state", "stopped") or "stopped").strip() or "stopped",
+            "current_account_id": self._clean_account_id(self._row_value(row, "current_account_id", "")),
+            "current_turn_count": max(0, int(self._row_value(row, "current_turn_count", 0) or 0)),
+            "max_turns_per_account": max(1, int(self._row_value(row, "max_turns_per_account", 1) or 1)),
+            "delay_min_ms": max(0, int(self._row_value(row, "delay_min_ms", 0) or 0)),
+            "delay_max_ms": max(0, int(self._row_value(row, "delay_max_ms", 0) or 0)),
+            "mode": self._normalize_runtime_mode(self._row_value(row, "mode", "both")),
+            "next_account_id": self._clean_account_id(self._row_value(row, "next_account_id", "")),
+            "last_heartbeat_at": self._coerce_timestamp(self._row_value(row, "last_heartbeat_at")),
+            "last_error": str(self._row_value(row, "last_error", "") or "").strip(),
+            "stats": self._decode_json_dict(self._row_value(row, "stats_json", "{}")),
+            "updated_at": self._coerce_timestamp(self._row_value(row, "updated_at")),
+        }
+
+    def get_session_connector_state(self, account_id: str) -> dict[str, Any]:
+        clean_account = self._clean_account_id(account_id)
+        if not clean_account:
+            return {}
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM session_connector_state WHERE account_id = ?",
+                (clean_account,),
+            ).fetchone()
+        if row is None:
+            return {}
+        return {
+            "account_id": clean_account,
+            "alias_id": str(self._row_value(row, "alias_id", "") or "").strip(),
+            "state": str(self._row_value(row, "state", "offline") or "offline").strip(),
+            "proxy_key": str(self._row_value(row, "proxy_key", "") or "").strip(),
+            "last_heartbeat_at": self._coerce_timestamp(self._row_value(row, "last_heartbeat_at")),
+            "last_error": str(self._row_value(row, "last_error", "") or "").strip(),
+            "updated_at": self._coerce_timestamp(self._row_value(row, "updated_at")),
+        }
+
+    def list_session_connector_states(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM session_connector_state ORDER BY alias_id ASC, account_id ASC"
+            ).fetchall()
+        return [
+            {
+                "account_id": self._clean_account_id(self._row_value(row, "account_id", "")),
+                "alias_id": str(self._row_value(row, "alias_id", "") or "").strip(),
+                "state": str(self._row_value(row, "state", "offline") or "offline").strip(),
+                "proxy_key": str(self._row_value(row, "proxy_key", "") or "").strip(),
+                "last_heartbeat_at": self._coerce_timestamp(self._row_value(row, "last_heartbeat_at")),
+                "last_error": str(self._row_value(row, "last_error", "") or "").strip(),
+                "updated_at": self._coerce_timestamp(self._row_value(row, "updated_at")),
+            }
+            for row in rows
+        ]
+
+    def upsert_session_connector_state(self, account_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        clean_account = self._clean_account_id(account_id)
+        if not clean_account or not isinstance(updates, dict):
+            return {}
+        current = self.get_session_connector_state(clean_account)
+        merged = {
+            "account_id": clean_account,
+            "alias_id": str(updates.get("alias_id") or current.get("alias_id") or "").strip(),
+            "state": str(updates.get("state") or current.get("state") or "offline").strip() or "offline",
+            "proxy_key": str(updates.get("proxy_key") or current.get("proxy_key") or "").strip(),
+            "last_heartbeat_at": self._coerce_timestamp(updates.get("last_heartbeat_at") or current.get("last_heartbeat_at")),
+            "last_error": str(updates.get("last_error") or current.get("last_error") or "").strip(),
+            "updated_at": self._coerce_timestamp(updates.get("updated_at")) or time.time(),
+        }
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO session_connector_state(account_id, alias_id, state, proxy_key, last_heartbeat_at, last_error, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    alias_id = excluded.alias_id,
+                    state = excluded.state,
+                    proxy_key = excluded.proxy_key,
+                    last_heartbeat_at = excluded.last_heartbeat_at,
+                    last_error = excluded.last_error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    clean_account,
+                    merged["alias_id"],
+                    merged["state"],
+                    merged["proxy_key"],
+                    merged["last_heartbeat_at"],
+                    merged["last_error"],
+                    merged["updated_at"],
+                ),
+            )
+            self._conn.commit()
+        return merged
+
+    def delete_session_connector_state(self, account_id: str) -> bool:
+        clean_account = self._clean_account_id(account_id)
+        if not clean_account:
+            return False
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM session_connector_state WHERE account_id = ?",
+                (clean_account,),
+            )
+            self._conn.commit()
+        return int(cursor.rowcount or 0) > 0
 
     def append_thread_tag(self, thread_key: str, tag: str) -> list[str]:
         clean_key = str(thread_key or "").strip()
@@ -1689,6 +3550,10 @@ class InboxStorage:
                 return False
             tags = self._normalize_tags(list(thread.get("tags") or []) + [self._LOCAL_TAG_FOLLOW_UP])
             thread["tags"] = tags
+            thread["status"] = "pending"
+            thread["last_action_type"] = "followup_marked"
+            thread["last_action_at"] = time.time()
+            thread["updated_at"] = time.time()
             self._upsert_thread_record(thread)
             state = self._load_thread_state(clean_key)
             state["follow_up_marked_at"] = time.time()
@@ -1711,7 +3576,10 @@ class InboxStorage:
             if not isinstance(thread, dict):
                 return False
             self._remember_deleted_thread_locked(thread)
-            self._drop_thread_locked(clean_key)
+            thread["is_deleted_from_view"] = True
+            thread["trash_at"] = time.time()
+            thread["updated_at"] = time.time()
+            self._upsert_thread_record(thread)
             self._conn.commit()
             return True
 
@@ -1721,6 +3589,12 @@ class InboxStorage:
             return
         with self._lock:
             self._clear_deleted_thread_locked(clean_key)
+            thread = self._load_thread_record(clean_key)
+            if isinstance(thread, dict):
+                thread["is_deleted_from_view"] = False
+                thread["trash_at"] = None
+                thread["updated_at"] = time.time()
+                self._upsert_thread_record(thread)
             self._conn.commit()
 
     def allow_deleted_thread_recreate(
@@ -1742,6 +3616,12 @@ class InboxStorage:
                 deleted_activity is None or incoming_activity > (deleted_activity + 0.000001)
             ):
                 self._clear_deleted_thread_locked(clean_key)
+                thread = self._load_thread_record(clean_key)
+                if isinstance(thread, dict):
+                    thread["is_deleted_from_view"] = False
+                    thread["trash_at"] = None
+                    thread["updated_at"] = time.time()
+                    self._upsert_thread_record(thread)
                 self._conn.commit()
                 return True
         return False

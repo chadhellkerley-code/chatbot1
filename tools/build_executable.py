@@ -71,6 +71,7 @@ def _copy_project(src: Path, dest: Path) -> None:
         ".pytest_cache",
         "*.log",
         ".sessions",
+        "sessions",
         "browser_sessions",
         "browsers",
         "ms-playwright",
@@ -102,7 +103,7 @@ def _copy_project(src: Path, dest: Path) -> None:
         except Exception:
             relative_parts = ()
 
-        if relative_parts == ("runtime",):
+        if relative_parts and relative_parts[0] == "runtime":
             ignored.update(name for name in names if name in _RUNTIME_TRANSIENT_DIRS)
         if relative_parts == ("tools",) and "build_artifacts" in names:
             ignored.add("build_artifacts")
@@ -216,19 +217,21 @@ _HIDDEN_IMPORTS = [
     "core.session_store",
     "state_view",
     "src.analytics.stats_engine",
-    "src.image_attribute_filter",
-    "src.image_prompt_parser",
-    "src.image_rule_evaluator",
-    "src.leads_filter_pipeline",
-    "src.vision.face_detector_scrfd",
-    "src.vision.fairface_analyzer",
-    "src.vision.gender_age_analyzer",
     "core.storage",
     "core.totp_store",
     "ui",
     "update_system",
     "utils",
     "automation.whatsapp",
+]
+
+_AI_HIDDEN_IMPORTS = [
+    "src.image_attribute_filter",
+    "src.image_prompt_parser",
+    "src.image_rule_evaluator",
+    "src.vision.face_detector_scrfd",
+    "src.vision.fairface_analyzer",
+    "src.vision.gender_age_analyzer",
 ]
 
 # Dependencias requeridas por pkg_resources/pyi_rth_pkgres
@@ -239,12 +242,14 @@ _EXTRA_HIDDEN_IMPORTS = [
     "jaraco.functools",
     "pkg_resources",
     "setuptools",
+]
+
+_AI_EXTRA_HIDDEN_IMPORTS = [
     "onnxruntime",
 ]
 
 _COLLECT_ALL_BASE = [
     "openpyxl",
-    "PySide6",
 ]
 
 _DEFAULT_EXCLUDES = [
@@ -267,6 +272,7 @@ _HEAVY_EXCLUDES = [
     "pandas",
     "scipy",
     "matplotlib",
+    "cv2",
     "h5py",
 ]
 
@@ -491,6 +497,23 @@ def _parse_excludes() -> list[str]:
     return combined
 
 
+def _include_ai_modules() -> bool:
+    return os.environ.get("PYINSTALLER_INCLUDE_AI", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+
+
+def _parse_hidden_imports() -> list[str]:
+    combined = list(_HIDDEN_IMPORTS) + list(_EXTRA_HIDDEN_IMPORTS)
+    if _include_ai_modules():
+        combined.extend(_AI_HIDDEN_IMPORTS)
+        combined.extend(_AI_EXTRA_HIDDEN_IMPORTS)
+    return combined
+
+
 def _parse_collect_all_modules() -> list[str]:
     override = os.environ.get("PYINSTALLER_COLLECT_ALL", "").strip()
     if override:
@@ -499,12 +522,7 @@ def _parse_collect_all_modules() -> list[str]:
         items = [item.strip() for item in override.split(",") if item.strip()]
         return items
     modules = list(_COLLECT_ALL_BASE)
-    include_ai = os.environ.get("PYINSTALLER_INCLUDE_AI", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-    }
+    include_ai = _include_ai_modules()
     if include_ai:
         modules.extend(_COLLECT_ALL_AI)
     extra = os.environ.get("PYINSTALLER_COLLECT_ALL_EXTRA", "").strip()
@@ -843,7 +861,12 @@ def build_for_license(
         for module in collect_all_modules:
             command.extend(["--collect-all", module])
 
-        for module in _HIDDEN_IMPORTS + _EXTRA_HIDDEN_IMPORTS:
+        hidden_imports = _parse_hidden_imports()
+        if _include_ai_modules():
+            _log_step("PyInstaller AI stack: habilitado")
+        else:
+            _log_step("PyInstaller AI stack: omitido (usa PYINSTALLER_INCLUDE_AI=1 para incluirlo)")
+        for module in hidden_imports:
             command.extend(["--hidden-import", module])
 
         for module in _parse_excludes():

@@ -9,7 +9,7 @@ from typing import Any
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication
 
 from gui.page_base import GuiState, PageContext
 from gui.pages_automation import AutomationAutoresponderPage, AutomationConfigPage
@@ -188,9 +188,11 @@ def _build_ctx() -> tuple[PageContext, QueryManager]:
     logs = LogStore()
     tasks = TaskManager(logs)
     queries = QueryManager()
+    route_calls: list[tuple[str, Any | None]] = []
     services = SimpleNamespace(
         accounts=_FakeAccountsService(),
         automation=_FakeAutomationService(),
+        route_calls=route_calls,
     )
     ctx = PageContext(
         services=services,
@@ -198,7 +200,7 @@ def _build_ctx() -> tuple[PageContext, QueryManager]:
         logs=logs,
         queries=queries,
         state=GuiState(active_alias="default"),
-        open_route=lambda route, payload=None: None,
+        open_route=lambda route, payload=None: route_calls.append((route, payload)),
         go_back=lambda: None,
         can_go_back=lambda: False,
     )
@@ -252,11 +254,8 @@ def test_automation_config_page_imports_prompt_txt(monkeypatch, tmp_path):
         queries.shutdown()
 
 
-def test_autoresponder_page_switches_to_monitor_and_accepts_log_updates(monkeypatch):
-    from gui import pages_automation_autoresponder as autoresponder_module
-
+def test_autoresponder_page_redirects_start_and_stop_to_inbox_without_starting_runtime():
     _app()
-    monkeypatch.setattr(autoresponder_module.AutomationMessageDialog, "exec", lambda self: QDialog.Accepted)
     ctx, queries = _build_ctx()
     page = AutomationAutoresponderPage(ctx)
     try:
@@ -264,59 +263,47 @@ def test_autoresponder_page_switches_to_monitor_and_accepts_log_updates(monkeypa
         assert _wait_until(lambda: page._alias_combo.count() == 2)
         assert page._concurrency.maximum() == 2
         page._start()
-        assert page._stack.currentWidget() is page._monitor_view
-        ctx.logs.append("[INFO] Account loaded\n")
-        ctx.logs.append(
-            'AR_EVENT {"event":"PROGRESS","account":"cuenta_1","outcome":"respondio","reason":"ok"}\n'
+        assert ctx.services.automation.start_calls == []
+        assert ctx.tasks.is_running("autoresponder") is False
+        assert ctx.services.route_calls[-1] == (
+            "inbox_page",
+            {"source": "automation_autoresponder", "alias_id": "default"},
         )
-        _pump_events(4)
-        assert "[INFO] Account loaded" in page._log.toPlainText()
-        assert "@cuenta_1 respondio (ok)" in page._log.toPlainText()
-        assert "AR_EVENT" not in page._log.toPlainText()
-        assert _wait_until(lambda: not ctx.tasks.is_running("autoresponder"), timeout=3.0)
         page._stop()
-        assert ctx.services.automation.stop_reasons[-1] == "stop solicitado desde GUI"
+        assert ctx.services.automation.stop_reasons == []
+        assert ctx.services.route_calls[-1] == (
+            "inbox_page",
+            {"source": "automation_autoresponder", "alias_id": "default"},
+        )
     finally:
         page.close()
         queries.shutdown()
 
 
-def test_autoresponder_page_keeps_monitor_open_while_start_is_pending(monkeypatch):
-    from gui import pages_automation_autoresponder as autoresponder_module
-
+def test_autoresponder_page_keeps_monitor_view_for_active_runtime_snapshot():
     _app()
-    monkeypatch.setattr(autoresponder_module.AutomationMessageDialog, "exec", lambda self: QDialog.Accepted)
     ctx, queries = _build_ctx()
-
-    def _slow_start(payload: dict[str, Any]) -> dict[str, Any]:
-        ctx.services.automation.start_calls.append(dict(payload))
-        ctx.services.automation.task_active = True
-        time.sleep(0.2)
-        ctx.services.automation.task_active = False
-        return ctx.services.automation.autoresponder_snapshot(str(payload.get("alias") or "default"))
-
-    ctx.services.automation.start_autoresponder = _slow_start  # type: ignore[method-assign]
     page = AutomationAutoresponderPage(ctx)
     try:
-        page.on_navigate_to()
-        assert _wait_until(lambda: page._alias_combo.count() == 2)
-        page._start()
-        assert page._stack.currentWidget() is page._monitor_view
-        idle_snapshot = ctx.services.automation.autoresponder_snapshot("default")
-        idle_snapshot["task_active"] = False
-        idle_snapshot["status"] = "Idle"
+        active_snapshot = ctx.services.automation.autoresponder_snapshot("default")
+        active_snapshot["task_active"] = True
+        active_snapshot["status"] = "Running"
         page._apply_snapshot(
             {
                 "aliases": ["default", "ventas"],
                 "selected_alias": "default",
-                "snapshot": idle_snapshot,
-                "task_active": False,
+                "snapshot": active_snapshot,
+                "task_active": True,
                 "alias_accounts": ctx.services.automation.alias_account_rows("default"),
                 "max_concurrency": ctx.services.automation.max_alias_concurrency("default"),
             }
         )
         assert page._stack.currentWidget() is page._monitor_view
-        assert _wait_until(lambda: not ctx.tasks.is_running("autoresponder"), timeout=3.0)
+        page._stop()
+        assert ctx.services.route_calls[-1] == (
+            "inbox_page",
+            {"source": "automation_autoresponder", "alias_id": "default"},
+        )
     finally:
         page.close()
         queries.shutdown()
@@ -381,7 +368,8 @@ def test_autoresponder_page_surfaces_account_safety_reason_before_start(monkeypa
         assert page._active_accounts.item(0, 2).text() == "Re-login requerido"
         assert "1 cuenta bloqueada por seguridad" in page._capacity_hint.text()
         assert page._start_button is not None
-        assert page._start_button.isEnabled() is False
+        assert page._start_button.text() == "Abrir Inbox"
+        assert page._start_button.isEnabled() is True
     finally:
         page.close()
         queries.shutdown()

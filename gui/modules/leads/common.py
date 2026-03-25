@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 import traceback
 from pathlib import Path
 from typing import Any
 
-from core import leads as leads_module
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -24,51 +22,6 @@ from PySide6.QtWidgets import (
 
 from gui.page_base import BasePage
 
-
-FILTER_STATE_ITEMS = [
-    ("Indispensable", leads_module.FILTER_STATE_REQUIRED),
-    ("Indiferente", leads_module.FILTER_STATE_INDIFFERENT),
-    ("Desactivar", leads_module.FILTER_STATE_DISABLED),
-]
-
-PRIVACY_ITEMS = [
-    ("Cualquiera", "any"),
-    ("Publica", "public"),
-    ("Privada", "private"),
-]
-
-LINK_ITEMS = [
-    ("Cualquiera", "any"),
-    ("Con link", "yes"),
-    ("Sin link", "no"),
-]
-
-LANGUAGE_ITEMS = [
-    ("Cualquiera", "any"),
-    ("Espanol", "es"),
-    ("Portugues", "pt"),
-    ("Ingles", "en"),
-]
-
-BROWSER_MODE_ITEMS = [
-    ("Headless", True),
-    ("Visible", False),
-]
-
-TEXT_INFO = (
-    "Texto inteligente evalua la bio, nombre y descripcion del perfil. "
-    "Usa prompts concretos, evita ambiguedad y describe con claridad el lead ideal."
-)
-
-IMAGE_INFO = (
-    "Prompt visual evalua atributos detectables en la foto de perfil. "
-    "Describe rasgos visibles y evita instrucciones abstractas o contradictorias."
-)
-
-FILTER_RESULT_RE = re.compile(
-    r"^@(?P<account>[^ ]+)\s+-->\s+@(?P<username>[^ ]+)\s+\(filtrado\)\s+-->\s+"
-    r"(?P<result>.+?)\s+-->\s+(?P<reason>.+)$"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -152,42 +105,6 @@ QDialogButtonBox {
 
 def template_variants(text: str) -> list[str]:
     return [line.strip() for line in str(text or "").splitlines() if line.strip()]
-
-
-def keywords_to_text(values: Any) -> str:
-    if not isinstance(values, (list, tuple)):
-        return ""
-    return "\n".join(str(item).strip() for item in values if str(item).strip())
-
-
-def text_to_keywords(text: str) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for raw in str(text or "").splitlines():
-        candidate = str(raw or "").strip()
-        key = candidate.lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        ordered.append(candidate)
-    return ordered
-
-
-def filter_state_label(state: str) -> str:
-    value = str(state or "").strip().lower()
-    if value == leads_module.FILTER_STATE_REQUIRED:
-        return "Indispensable"
-    if value == leads_module.FILTER_STATE_INDIFFERENT:
-        return "Indiferente"
-    return "Desactivar"
-
-
-def browser_mode_label(value: Any) -> str:
-    if value is True:
-        return "Headless"
-    if value is False:
-        return "Visible"
-    return "Automatico"
 
 
 def page_host(widget: QWidget | None) -> BasePage | None:
@@ -342,33 +259,3 @@ def configure_data_table(table: QTableWidget, *, primary_column: int = 0) -> Non
         mode = QHeaderView.Stretch if column == primary_column else QHeaderView.ResizeToContents
         header.setSectionResizeMode(column, mode)
     header.setStretchLastSection(False)
-
-
-def format_filter_log_line(line: str) -> str | None:
-    text = str(line or "").strip()
-    if not text:
-        return None
-    match = FILTER_RESULT_RE.match(text)
-    if match:
-        result_label = str(match.group("result") or "").strip().upper()
-        return (
-            f"{match.group('account')} analizando perfil @{match.group('username')}\n"
-            f"Resultado: {result_label}\n"
-            f"Motivo: {match.group('reason')}"
-        )
-    prefixes = (
-        "progreso:",
-        "fin de filtrado:",
-        "imagenes:",
-        "preparando sesiones:",
-        "cuentas listas:",
-        "cuentas disponibles:",
-        "sesion no disponible para",
-        "no se pudo iniciar session de",
-    )
-    lowered = text.lower()
-    if any(lowered.startswith(prefix) for prefix in prefixes):
-        return text.capitalize()
-    if "[task:leads_filter]" in lowered:
-        return text
-    return None

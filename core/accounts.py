@@ -8,14 +8,11 @@ import contextlib
 import csv
 import getpass
 import io
-import json
-import random
 import re
 import sys
 import time
 import zipfile
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock, RLock
 from pathlib import Path
@@ -34,12 +31,7 @@ from core.alias_identity import (
     normalize_alias_id,
 )
 from core.accounts_helpers.csv_utils import (
-    _CSV_HEADERS,
-    _compose_proxy_url,
     _extract_totp_entries_from_csv,
-    _parse_accounts_csv,
-    _pick_csv_column,
-    _safe_username_key,
 )
 from core.accounts_helpers.password_cache import (
     _clear_login_failure,
@@ -55,12 +47,27 @@ from core.storage_atomic import (
     atomic_write_text,
     load_json_file,
     load_jsonl_entries,
+    path_lock,
 )
-from core.proxy_preflight import account_proxy_preflight, preflight_accounts_for_proxy_runtime
-from core.proxy_registry import ProxyResolutionError, get_proxy_by_id, sync_account_proxy_links, upsert_proxy_record
+from core.proxy_preflight import account_proxy_preflight
+from core.proxy_registry import (
+    ProxyResolutionError,
+    get_proxy_by_id,
+    load_proxy_audit_entries,
+    proxy_audit_path,
+    sync_account_proxy_links,
+    upsert_proxy_record,
+)
 from src.auth.persistent_login import ensure_logged_in_async
+from src.browser_profile_paths import normalize_browser_profile_username
 from src.browser_telemetry import log_browser_stage
+from src.playwright_service import BASE_PROFILES
 from src.transport.session_manager import ManagedSession, SessionManager
+from src.transport.session_manager_factory import get_session_manager
+
+
+def _noop_log_event(*_args: Any, **_kwargs: Any) -> None:
+    return
 
 
 def _ask_secret(prompt: str) -> str:
@@ -125,10 +132,11 @@ from core.session_store import has_session, remove as remove_session
 from core.totp_store import generate_code as generate_totp_code
 from core.totp_store import get_secret as get_totp_secret
 from core.totp_store import has_secret as has_totp_secret
+from core.totp_store import normalize_username as normalize_totp_username
 from core.totp_store import remove_secret as remove_totp_secret
 from core.totp_store import rename_secret as rename_totp_secret
 from core.totp_store import save_secret as save_totp_secret
-from utils import ask, ask_int, banner, em, ok, press_enter, title, warn
+from utils import ask, ask_int, ok, press_enter, warn
 from paths import accounts_root, runtime_base, storage_root
 from src.browser_profile_paths import browser_storage_state_path
 from src.playwright_service import BASE_PROFILES
@@ -138,10 +146,12 @@ BASE.mkdir(parents=True, exist_ok=True)
 DATA = accounts_root(BASE)
 FILE = DATA / "accounts.json"
 _PASSWORD_FILE = DATA / "passwords.json"
+_TRASH_ACCOUNTS_FILE = DATA / "trash_accounts.json"
+_TRASH_RETENTION = timedelta(days=15)
 _ACCOUNT_STORE_LOCK = RLock()
 _ACCOUNT_PROXY_LINK_SYNC_LOCK = Lock()
-_ACCOUNT_PROXY_LINK_SYNC_TOKEN: tuple[int, int] | None = None
 _MANAGED_ACCOUNT_PROXY_PREFIX = "acct:"
+_PROXY_ASSIGN_AUDIT_LOOKBACK = 5000
 
 _LOGIN_FAILURE_BACKOFF = timedelta(minutes=5)
 _configure_password_cache(_PASSWORD_FILE, login_failure_backoff=_LOGIN_FAILURE_BACKOFF)
@@ -191,6 +201,13 @@ def _isoformat_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def normalize_alias(value: str | None) -> str:
+    if not value:
+        return "default"
+    normalized = str(value).strip().lower()
+    return normalized if normalized else "default"
+
+
 def _parse_datetime(value: object) -> Optional[datetime]:
     if not value:
         return None
@@ -206,6 +223,75 @@ def _parse_datetime(value: object) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _ensure_trash_accounts_file() -> None:
+    try:
+        if _TRASH_ACCOUNTS_FILE.exists():
+            return
+    except Exception:
+        return
+    try:
+        atomic_write_json(_TRASH_ACCOUNTS_FILE, [])
+    except Exception:
+        return
+
+
+def _append_deleted_account_to_trash(username: str) -> None:
+    _ensure_trash_accounts_file()
+    clean_username = str(username or "").strip()
+    if not clean_username:
+        return
+    entry = {"username": clean_username, "deleted_at": _isoformat_utc(_now_utc())}
+    try:
+        with path_lock(_TRASH_ACCOUNTS_FILE):
+            existing = load_json_file(_TRASH_ACCOUNTS_FILE, [], label="accounts.trash")
+            if not isinstance(existing, list):
+                existing = []
+            deduped = [
+                item
+                for item in existing
+                if not (
+                    isinstance(item, dict)
+                    and str(item.get("username") or "").strip().lower() == clean_username.lower()
+                )
+            ]
+            deduped.append(entry)
+            atomic_write_json(_TRASH_ACCOUNTS_FILE, deduped)
+    except Exception:
+        return
+
+
+def cleanup_deleted_accounts() -> None:
+    try:
+        if not _TRASH_ACCOUNTS_FILE.exists():
+            return
+    except Exception:
+        return
+    try:
+        now = _now_utc()
+        with path_lock(_TRASH_ACCOUNTS_FILE):
+            payload = load_json_file(_TRASH_ACCOUNTS_FILE, [], label="accounts.trash")
+            if not isinstance(payload, list):
+                payload = []
+            kept: list[dict[str, Any]] = []
+            changed = False
+            for item in payload:
+                if not isinstance(item, dict):
+                    changed = True
+                    continue
+                deleted_at = _parse_datetime(item.get("deleted_at"))
+                if deleted_at is None:
+                    kept.append(item)
+                    continue
+                if now - deleted_at > _TRASH_RETENTION:
+                    changed = True
+                    continue
+                kept.append(item)
+            if changed:
+                atomic_write_json(_TRASH_ACCOUNTS_FILE, kept)
+    except Exception:
+        return
 
 
 def _settings_value(name: str, default: int) -> int:
@@ -413,7 +499,8 @@ def _normalize_account(record: Dict) -> Dict:
     alias_id, alias_display_name = _account_alias_fields(result)
     result["alias_id"] = alias_id
     result["alias_display_name"] = alias_display_name
-    result["alias"] = alias_display_name
+    if not result.get("alias"):
+        result["alias"] = alias_display_name
     result.setdefault("active", True)
     result.setdefault("connected", False)
     result.setdefault("password", "")
@@ -470,24 +557,28 @@ def _prepare_for_save(record: Dict) -> Dict:
     alias_id, alias_display_name = _account_alias_fields(stored)
     stored["alias_id"] = alias_id
     stored["alias_display_name"] = alias_display_name
-    stored.pop("alias", None)
+    stored["alias"] = normalize_alias(stored.get("alias"))
+    if not stored["alias"]:
+        stored["alias"] = DEFAULT_ALIAS_ID
     stored.pop("password", None)
     assigned_proxy_id = str(stored.get("assigned_proxy_id") or "").strip()
     if assigned_proxy_id:
         stored["assigned_proxy_id"] = assigned_proxy_id
     else:
         stored.pop("assigned_proxy_id", None)
-    if stored.get("proxy_url"):
+
+    stored.pop("proxy_url", None)
+    stored.pop("proxy_user", None)
+    stored.pop("proxy_pass", None)
+
+    if assigned_proxy_id:
+        sticky_default = SETTINGS.proxy_sticky_minutes or 10
         try:
-            stored["proxy_sticky_minutes"] = int(
-                stored.get("proxy_sticky_minutes", SETTINGS.proxy_sticky_minutes)
-            )
+            sticky_value = int(stored.get("proxy_sticky_minutes", sticky_default))
         except Exception:
-            stored["proxy_sticky_minutes"] = SETTINGS.proxy_sticky_minutes
+            sticky_value = sticky_default
+        stored["proxy_sticky_minutes"] = max(1, sticky_value)
     else:
-        stored.pop("proxy_url", None)
-        stored.pop("proxy_user", None)
-        stored.pop("proxy_pass", None)
         stored.pop("proxy_sticky_minutes", None)
     stored.pop("has_totp", None)
     stored.pop("recent_activity_count", None)
@@ -512,6 +603,40 @@ def _prepare_for_save(record: Dict) -> Dict:
 
 def _proxy_registry_store_path() -> Path:
     return Path(FILE).with_name("proxies.json")
+
+
+def _latest_proxy_assignments_from_audit() -> Dict[str, str]:
+    assignments: Dict[str, str] = {}
+    try:
+        audit_rows = load_proxy_audit_entries(
+            limit=_PROXY_ASSIGN_AUDIT_LOOKBACK,
+            path=proxy_audit_path(BASE),
+        )
+    except Exception:
+        logger.exception("No se pudo leer la auditoria de proxies para reconstruir asignaciones.")
+        return assignments
+
+    for row in audit_rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("event") or "").strip().lower() != "proxy_assign":
+            continue
+        if str(row.get("status") or "").strip().lower() != "ok":
+            continue
+        proxy_id = str(row.get("proxy_id") or "").strip()
+        if not proxy_id:
+            continue
+        meta = row.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        accounts = meta.get("accounts")
+        if not isinstance(accounts, list):
+            continue
+        for account in accounts:
+            username = str(account or "").strip().lstrip("@").lower()
+            if username:
+                assignments[username] = proxy_id
+    return assignments
 
 
 def _validate_assigned_proxy_reference(proxy_id: Any) -> None:
@@ -559,6 +684,36 @@ def _ensure_managed_account_proxy(record: Dict[str, Any], *, strict: bool) -> tu
     return payload, changed
 
 
+def _recover_proxy_assignment_from_audit(
+    record: Dict[str, Any],
+    *,
+    audit_assignments: Dict[str, str] | None = None,
+) -> tuple[Dict[str, Any], bool]:
+    payload = dict(record)
+    username = str(payload.get("username") or "").strip().lstrip("@")
+    if not username:
+        return payload, False
+    if str(payload.get("assigned_proxy_id") or "").strip():
+        return payload, False
+    if str(payload.get("proxy_url") or "").strip():
+        return payload, False
+
+    assignment_map = audit_assignments or {}
+    proxy_id = str(assignment_map.get(username.lower()) or "").strip()
+    if not proxy_id:
+        return payload, False
+    if get_proxy_by_id(proxy_id, active_only=False, path=_proxy_registry_store_path()) is None:
+        return payload, False
+
+    payload["assigned_proxy_id"] = proxy_id
+    logger.warning(
+        "Se recupero proxy asignado desde auditoria para @%s -> %s.",
+        username,
+        proxy_id,
+    )
+    return payload, True
+
+
 def _account_store_token() -> tuple[int, int] | None:
     target = Path(FILE)
     if not target.exists():
@@ -570,14 +725,11 @@ def _account_store_token() -> tuple[int, int] | None:
     return int(stat.st_mtime_ns), int(stat.st_size)
 
 
-def _sync_account_proxy_links(records: List[Dict], *, force: bool = False) -> None:
-    global _ACCOUNT_PROXY_LINK_SYNC_TOKEN
+def _sync_account_proxy_links(records: List[Dict]) -> None:
     token = _account_store_token()
     if token is None:
         return
     with _ACCOUNT_PROXY_LINK_SYNC_LOCK:
-        if not force and _ACCOUNT_PROXY_LINK_SYNC_TOKEN == token:
-            return
         try:
             sync_account_proxy_links(
                 [dict(item) for item in records if isinstance(item, dict)],
@@ -585,12 +737,12 @@ def _sync_account_proxy_links(records: List[Dict], *, force: bool = False) -> No
             )
         except Exception:
             logger.exception("No se pudo sincronizar la integridad cuenta-proxy.")
-            return
-        _ACCOUNT_PROXY_LINK_SYNC_TOKEN = token
+            raise
 
 
 def _load() -> List[Dict]:
     with _ACCOUNT_STORE_LOCK:
+        cleanup_deleted_accounts()
         if not FILE.exists():
             return []
         try:
@@ -599,14 +751,47 @@ def _load() -> List[Dict]:
             return []
         normalized: List[Dict] = []
         migrated_passwords: Dict[str, str] = {}
+        audit_assignments = _latest_proxy_assignments_from_audit()
         changed = False
         for item in data:
             if not isinstance(item, dict):
                 continue
+            raw_alias = item.get("alias")
+            normalized_alias = normalize_alias(raw_alias)
+            if not normalized_alias:
+                normalized_alias = normalize_alias(
+                    item.get("alias_display_name") or item.get("alias_id") or DEFAULT_ALIAS_ID
+                )
+            if normalized_alias != str(raw_alias or ""):
+                item = dict(item)
+                item["alias"] = normalized_alias
+                changed = True
             normalized_item = _normalize_account(item)
             normalized_item, managed_changed = _ensure_managed_account_proxy(normalized_item, strict=False)
+            normalized_item, recovered_from_audit = _recover_proxy_assignment_from_audit(
+                normalized_item,
+                audit_assignments=audit_assignments,
+            )
+            assigned_proxy_id = str(normalized_item.get("assigned_proxy_id") or "").strip()
+            if assigned_proxy_id:
+                if get_proxy_by_id(
+                    assigned_proxy_id,
+                    active_only=False,
+                    path=_proxy_registry_store_path(),
+                ) is None:
+                    username = str(normalized_item.get("username") or "").strip().lstrip("@")
+                    logger.warning(
+                        "Proxy asignado inexistente para @%s: %s. Se limpiara assigned_proxy_id.",
+                        username or "-",
+                        assigned_proxy_id,
+                    )
+                    normalized_item = dict(normalized_item)
+                    normalized_item["assigned_proxy_id"] = None
+                    changed = True
             normalized.append(normalized_item)
             if managed_changed:
+                changed = True
+            if recovered_from_audit:
                 changed = True
             if normalize_alias_id(item.get("alias_id"), default="") != normalized_item.get("alias_id"):
                 changed = True
@@ -615,8 +800,6 @@ def _load() -> List[Dict]:
                 default="",
             )
             if original_alias_display_name != normalized_item.get("alias_display_name"):
-                changed = True
-            if "alias" in item:
                 changed = True
             if item.get("first_seen") != normalized_item.get("first_seen"):
                 changed = True
@@ -660,11 +843,43 @@ def _save(items: List[Dict]) -> None:
             normalized.append(normalized_item)
         cleaned = [_prepare_for_save(item) for item in normalized]
         atomic_write_json(FILE, cleaned)
-        _sync_account_proxy_links(normalized, force=True)
+        _sync_account_proxy_links(normalized)
 
 
 def list_all() -> List[Dict]:
     return _load()
+
+
+def get_accounts() -> List[Any]:
+    from types import SimpleNamespace
+
+    def _is_active(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"0", "false", "no", "off", "inactive", "disabled"}:
+            return False
+        if text in {"1", "true", "yes", "on", "active", "enabled"}:
+            return True
+        return bool(value)
+
+    accounts: List[Any] = []
+    for item in list_all():
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or "").strip().lstrip("@")
+        if not username:
+            continue
+        accounts.append(
+            SimpleNamespace(
+                username=username,
+                active=_is_active(item.get("active", True)),
+                data=dict(item),
+            )
+        )
+    return accounts
 
 
 def _find(items: List[Dict], username: str) -> Optional[Dict]:
@@ -681,7 +896,7 @@ def get_account(username: str) -> Optional[Dict]:
     return _normalize_account(account) if account else None
 
 
-def update_account(username: str, updates: Dict) -> bool:
+def update_account(username: str, updates: Dict, *, invalidate_health: bool = False) -> bool:
     with _ACCOUNT_STORE_LOCK:
         items = _load()
         username_norm = username.lower()
@@ -695,7 +910,8 @@ def update_account(username: str, updates: Dict) -> bool:
                 normalized_updated, _changed = _ensure_managed_account_proxy(normalized_updated, strict=True)
                 items[idx] = normalized_updated
                 _save(items)
-                _invalidate_health(username)
+                if invalidate_health:
+                    _invalidate_health(username)
                 return True
         return False
 
@@ -777,6 +993,7 @@ def _account_has_proxy(payload: Optional[Dict[str, Any]]) -> bool:
     return bool(_playwright_proxy_payload(payload))
 
 def _refresh_totp_export_cache(force: bool = False) -> None:
+    """Legacy helper kept for manual TOTP repair/migration outside login runtime."""
     global _TOTP_EXPORT_CACHE
     global _TOTP_EXPORT_CACHE_TIMESTAMP
     now = time.time()
@@ -784,7 +1001,7 @@ def _refresh_totp_export_cache(force: bool = False) -> None:
         return
 
     candidates: List[Path] = []
-    for directory in (BASE / "storage", Path.home() / "Desktop" / "archivos CSV"):
+    for directory in (storage_root(BASE), Path.home() / "Desktop" / "archivos CSV"):
         try:
             if directory.exists():
                 candidates.extend(path for path in directory.glob("*.csv") if path.is_file())
@@ -806,23 +1023,10 @@ def _refresh_totp_export_cache(force: bool = False) -> None:
 
 
 def _ensure_totp_for_playwright(username: str, *, force_refresh: bool = False) -> bool:
-    if has_totp_secret(username):
-        return True
-
-    _refresh_totp_export_cache(force=force_refresh)
-    key = _password_key(username)
-    safe_key = _safe_username_key(username)
-    secret = _TOTP_EXPORT_CACHE.get(key) or _TOTP_EXPORT_CACHE.get(safe_key)
-    if not secret:
+    del force_refresh
+    if not has_totp_secret(username):
         return False
-
-    try:
-        save_totp_secret(username, secret)
-        logger.info("Se recuperÃ³ TOTP para @%s desde export CSV local.", username)
-    except Exception as exc:
-        logger.warning("No se pudo recuperar TOTP para @%s desde CSV local: %s", username, exc)
-        return False
-    return has_totp_secret(username)
+    return bool(get_totp_secret(username))
 
 
 def _playwright_account_payload(
@@ -832,6 +1036,7 @@ def _playwright_account_payload(
     *,
     force_totp_refresh: bool = False,
 ) -> Dict[str, Any]:
+    del force_totp_refresh
     payload: Dict[str, Any] = {
         "username": username,
         "password": password,
@@ -839,11 +1044,11 @@ def _playwright_account_payload(
     proxy_payload = _playwright_proxy_payload(proxy_settings)
     if proxy_payload:
         payload["proxy"] = proxy_payload
-    if _ensure_totp_for_playwright(username, force_refresh=force_totp_refresh):
+    if _ensure_totp_for_playwright(username):
         secret = get_totp_secret(username)
         if secret:
             payload["totp_secret"] = secret
-        payload["totp_callback"] = lambda _ignored, target=username: generate_totp_code(target)
+            payload["totp_callback"] = lambda _ignored, target=username: generate_totp_code(target)
     return payload
 
 
@@ -863,11 +1068,10 @@ def _build_playwright_login_payload(
     totp_secret: Optional[str] = None,
     row_number: Optional[int] = None,
 ) -> Dict[str, Any]:
+    del totp_secret
     payload = _playwright_account_payload(username, password, proxy_settings)
     payload["alias"] = alias
     payload["disable_safe_browser_recovery"] = True
-    if totp_secret:
-        payload["totp_secret"] = totp_secret
     if row_number is not None:
         payload["row_number"] = row_number
     return payload
@@ -881,10 +1085,7 @@ def playwright_login_queue_concurrency() -> int:
 def login_accounts_with_playwright(
     alias: str,
     accounts: List[Dict[str, Any]],
-    *,
-    concurrency: int = 1,
 ) -> List[Dict[str, Any]]:
-    del concurrency
     try:
         from src.auth.onboarding import login_account_playwright, write_onboarding_results
     except Exception as exc:
@@ -943,10 +1144,7 @@ def login_accounts_with_playwright(
 def relogin_accounts_with_playwright(
     alias: str,
     accounts: List[Dict[str, Any]],
-    *,
-    concurrency: int = 1,
 ) -> List[Dict[str, Any]]:
-    del concurrency
     """
     Fuerza un relogin visible con Playwright/Chrome real para las cuentas indicadas y
     persiste storage_state.json en runtime/browser_profiles/<username>/storage_state.json.
@@ -977,7 +1175,6 @@ def relogin_accounts_with_playwright(
         return entered
 
     payloads: List[Dict[str, Any]] = []
-    _refresh_totp_export_cache(force=True)
     for acct in accounts:
         username = (acct.get("username") or "").strip().lstrip("@")
         if not username:
@@ -990,7 +1187,6 @@ def relogin_accounts_with_playwright(
             username,
             password,
             acct,
-            force_totp_refresh=True,
         )
         payload["alias"] = alias
         payload["strict_login"] = True
@@ -998,7 +1194,7 @@ def relogin_accounts_with_playwright(
         payload["disable_safe_browser_recovery"] = True
         if not payload.get("totp_secret") and not callable(payload.get("totp_callback")):
             logger.warning(
-                "Relogin @%s sin TOTP disponible en store ni CSV local (username actual).",
+                "Relogin @%s sin TOTP disponible en store canónico.",
                 username,
             )
         payloads.append(payload)
@@ -1101,7 +1297,18 @@ def sync_alias_metadata(alias: str, *, alias_id: str | None = None, display_name
 
 def remove_account(username: str) -> None:
     items = _load()
-    new_items = [it for it in items if it.get("username", "").lower() != username.lower()]
+    removed_username: str | None = None
+    new_items: list[dict] = []
+    username_norm = username.lower()
+    for item in items:
+        if item.get("username", "").lower() == username_norm:
+            if removed_username is None:
+                removed_username = str(item.get("username") or "").strip() or None
+            continue
+        new_items.append(item)
+    _ensure_trash_accounts_file()
+    if removed_username:
+        _append_deleted_account_to_trash(removed_username)
     _save(new_items)
     remove_session(username)
     remove_totp_secret(username)
@@ -1117,20 +1324,19 @@ def remove_account(username: str) -> None:
 
 def set_active(username: str, is_active: bool = True) -> None:
     if update_account(username, {"active": is_active}):
-        _invalidate_health(username)
         ok("Actualizada.")
     else:
         warn("No existe.")
 
 
-def mark_connected(username: str, connected: bool, *, invalidate_health: bool = True) -> None:
-    update_account(username, {"connected": connected})
+def mark_connected(username: str, connected: bool, *, invalidate_health: bool = False) -> None:
+    updated = update_account(username, {"connected": connected}, invalidate_health=invalidate_health)
     health_store.set_connected(
         username,
         connected,
         source="accounts.mark_connected",
     )
-    if invalidate_health:
+    if invalidate_health and not updated:
         _invalidate_health(username)
 
 
@@ -1248,114 +1454,6 @@ def _test_existing_proxy(account: Dict) -> None:
     except Exception as exc:
         warn(f"Error probando proxy: {exc}")
 
-_IG_INBOX_URL = "https://www.instagram.com/direct/inbox/"
-
-
-def _warn_proxy_preflight_blocked_accounts(
-    blocked_accounts: List[Dict[str, Any]],
-    *,
-    prefix: str = "Cuenta omitida por preflight de proxy",
-) -> None:
-    for blocked in blocked_accounts:
-        if not isinstance(blocked, dict):
-            continue
-        username = str(blocked.get("username") or "").strip().lstrip("@")
-        message = str(blocked.get("message") or "Proxy bloqueado.").strip() or "Proxy bloqueado."
-        warn(f"{prefix} @{username or '-'}: {message}.")
-
-
-def _filter_accounts_for_proxy_preflight(
-    accounts: List[Dict],
-    *,
-    warn_blocked: bool = True,
-    warning_prefix: str = "Cuenta omitida por preflight de proxy",
-) -> tuple[List[Dict], List[Dict[str, Any]]]:
-    payload = preflight_accounts_for_proxy_runtime(accounts)
-    ready_accounts = [
-        dict(item)
-        for item in (payload.get("ready_accounts") or [])
-        if isinstance(item, dict)
-    ]
-    blocked_accounts = [
-        dict(item)
-        for item in (payload.get("blocked_accounts") or [])
-        if isinstance(item, dict)
-    ]
-    if warn_blocked and blocked_accounts:
-        _warn_proxy_preflight_blocked_accounts(blocked_accounts, prefix=warning_prefix)
-    return ready_accounts, blocked_accounts
-
-
-def _launch_inbox(alias: str) -> None:
-    accounts = [acct for acct in _load() if acct.get("alias") == alias]
-    active_accounts = [acct for acct in accounts if acct.get("active")]
-    if not active_accounts:
-        warn("No hay cuentas activas en este alias.")
-        press_enter()
-        return
-    active_accounts, _blocked_accounts = _filter_accounts_for_proxy_preflight(active_accounts)
-    if not active_accounts:
-        warn("No hay cuentas utilizables tras el preflight de proxy.")
-        press_enter()
-        return
-
-    while True:
-        banner()
-        title("Inbox (Playwright)")
-        print()
-        print("SeleccionÃ¡ 1 cuenta activa (nÃºmero o username). Enter = volver.\n")
-        for idx, acct in enumerate(active_accounts, start=1):
-            sess = _session_label(acct["username"])
-            proxy_flag = _proxy_indicator(acct)
-            low_flag = _low_profile_indicator(acct)
-            totp_flag = _totp_indicator(acct)
-            print(f" {idx}) @{acct['username']} {sess} {proxy_flag}{low_flag}{totp_flag}")
-            if low_flag and acct.get("low_profile_reason"):
-                print(f"    â†³ {acct['low_profile_reason']}")
-
-        raw = ask("\nCuenta: ").strip()
-        if not raw:
-            return
-
-        chosen: Optional[Dict] = None
-        if raw.isdigit():
-            idx = int(raw)
-            if 1 <= idx <= len(active_accounts):
-                chosen = active_accounts[idx - 1]
-        else:
-            target = raw.lstrip("@").strip().lower()
-            for acct in active_accounts:
-                if str(acct.get("username") or "").strip().lower() == target:
-                    chosen = acct
-                    break
-
-        if not chosen:
-            warn("No se encontrÃ³ la cuenta con esos datos.")
-            press_enter()
-            continue
-
-        minutes_raw = ask("Tiempo en minutos (0 = hasta cerrar el navegador): ").strip() or "0"
-        try:
-            minutes = int(float(minutes_raw))
-        except Exception:
-            minutes = 0
-        minutes = max(0, minutes)
-        max_seconds = (minutes * 60) if minutes else None
-
-        _open_playwright_manual_session(
-            chosen,
-            start_url=_IG_INBOX_URL,
-            action_label="Entrar al inbox",
-            max_seconds=max_seconds,
-        )
-
-        print("\n1) Abrir inbox de otra cuenta")
-        print("2) Volver")
-        again = ask("OpciÃ³n: ").strip() or "2"
-        if again != "1":
-            return
-
-
 def _launch_content_publisher(alias: str) -> None:
     try:
         from automation.actions import content_publisher
@@ -1405,7 +1503,7 @@ def _login_and_save_session(
     except Exception as exc:
         if _account_has_proxy(account) and should_retry_proxy(exc):
             record_proxy_failure(username, exc)
-        mark_connected(username, False)
+        mark_connected(username, False, invalidate_health=False)
         _record_login_failure(username)
         warn(f"No se pudo iniciar sesiÃƒÂ³n para @{username}: {exc}")
         return False
@@ -1413,13 +1511,13 @@ def _login_and_save_session(
     status = str((result or {}).get("status") or "").strip().lower()
     message = str((result or {}).get("message") or "").strip()
     if status == "ok":
-        mark_connected(username, True)
+        mark_connected(username, True, invalidate_health=False)
         _clear_login_failure(username)
         account["has_totp"] = has_totp_secret(username)
         ok(f"SesiÃƒÂ³n Playwright guardada para {username}.")
         return True
 
-    mark_connected(username, False)
+    mark_connected(username, False, invalidate_health=False)
     _record_login_failure(username)
     warn(message or f"No se pudo iniciar sesiÃƒÂ³n para @{username}.")
     return False
@@ -1441,7 +1539,7 @@ def _session_active(
         account=account,
         strict=strict,
     )
-    mark_connected(username, connected)
+    mark_connected(username, connected, invalidate_health=False)
     if not connected:
         logger.debug(
             "La sesiÃƒÂ³n Playwright para @%s no estÃƒÂ¡ activa (%s).",
@@ -1567,7 +1665,8 @@ def _playwright_storage_state_path(username: str) -> Path:
 def _clear_playwright_storage_state(username: str) -> None:
     path = _playwright_storage_state_path(username)
     with contextlib.suppress(Exception):
-        path.unlink()
+        with path_lock(path):
+            path.unlink(missing_ok=True)
 
 
 def _sync_playwright_login_result(
@@ -1709,7 +1808,7 @@ def connected_status(
     current = bool(account.get("connected"))
     if current != connected:
         if persist:
-            mark_connected(username, connected)
+            mark_connected(username, connected, invalidate_health=False)
         account["connected"] = connected
 
     return connected
@@ -1723,6 +1822,9 @@ def _health_cached(username: str) -> tuple[str | None, bool]:
     return health_store.get_badge(username)
 
 
+ACCOUNT_UI_STATE_UNVERIFIED = "NO VERIFICADA"
+
+
 def _badge_for_display(account: Dict) -> tuple[str, bool]:
     username = str(account.get("username") or "").strip().lstrip("@")
     cached_state, expired = _health_cached(username)
@@ -1731,22 +1833,24 @@ def _badge_for_display(account: Dict) -> tuple[str, bool]:
 
     legacy_badge = str(account.get("health_badge") or "").strip()
     if legacy_badge:
+        # Read-only: legacy badge parsing for display only.
+        # Never persist derived health here.
         with contextlib.suppress(Exception):
-            return health_store.set_badge(username, legacy_badge), False
+            normalized = getattr(health_store, "_coerce_state", None)
+            if callable(normalized):
+                coerced = normalized(legacy_badge)
+                if coerced:
+                    return str(coerced), True
 
-    if not _has_playwright_session(username):
-        return (
-            health_store.mark_session_expired(username, reason="storage_state_missing"),
-            False,
-        )
+    has_api_session = has_session(username)
+    has_playwright_session = _has_playwright_session(username)
+    if not has_api_session and not has_playwright_session:
+        return health_store.HEALTH_STATE_INACTIVE, False
 
     if bool(account.get("connected")):
-        return health_store.mark_alive(username, reason="connected_flag"), False
+        return health_store.HEALTH_STATE_ALIVE, True
 
-    return (
-        health_store.mark_session_expired(username, reason="connected_flag_false"),
-        False,
-    )
+    return health_store.HEALTH_STATE_INACTIVE, True
 
 
 def _life_status_badge(account: Dict, badge: str) -> str:
@@ -1773,7 +1877,7 @@ def _account_status_from_badge(account: Dict, badge: str) -> str:
     return "no activa"
 
 
-def _proxy_status_from_badge(account: Dict, badge: str) -> str:
+def _proxy_status_from_badge(badge: str) -> str:
     lowered = (badge or "").lower()
     if "proxy" in lowered and any(term in lowered for term in ("caÃƒÂ­do", "caido", "bloqueado")):
         return "bloqueado"
@@ -1841,11 +1945,11 @@ def _export_paths(alias: str) -> tuple[Path, Path]:
 
 def _totp_store_dir() -> Path:
     # Reusa el mismo BASE/runtime_base que totp_store.py para apuntar al mismo storage.
-    return BASE / "storage" / "totp"
+    return storage_root(BASE) / "totp"
 
 
 def _totp_record_path(username: str) -> Path:
-    safe = re.sub(r"[^a-z0-9_-]", "_", (username or "").strip().lstrip("@").lower())
+    safe = normalize_totp_username(username)
     return _totp_store_dir() / f"{safe}.json"
 
 
@@ -1882,7 +1986,8 @@ def _export_totp_backup_zip(usernames: List[str], destination: Path) -> int:
                 path = _totp_record_path(username)
                 if not path.exists():
                     continue
-                arcname = str(Path("storage") / "totp" / path.name)
+                arcname_root = storage_root(BASE, scoped=False, honor_env=False).name
+                arcname = str(Path(arcname_root) / "totp" / path.name)
                 zf.write(path, arcname=arcname)
                 written += 1
     except Exception as exc:
@@ -1955,7 +2060,7 @@ def _export_accounts_csv(alias: str) -> None:
         username = (account.get("username") or "").strip()
         badge, _ = _badge_for_display(account)
         account_status = _account_status_from_badge(account, badge)
-        proxy_status = _proxy_status_from_badge(account, badge)
+        proxy_status = _proxy_status_from_badge(badge)
         proxy_ip, proxy_port, proxy_user, proxy_pass = _proxy_components(account)
         row = [
             username,
@@ -2030,51 +2135,6 @@ def _prompt_destination_alias(current_alias: str) -> Optional[str]:
         if create == "s":
             ok(f"Alias '{destination}' creado.")
             return destination
-
-
-def _move_accounts_to_alias(alias: str) -> None:
-    usernames = _select_usernames_for_modifications(alias)
-    if not usernames:
-        return
-
-    destination = _prompt_destination_alias(alias)
-    if not destination:
-        warn("OperaciÃƒÂ³n cancelada.")
-        press_enter()
-        return
-
-    selected = {username.lower() for username in usernames if username}
-    if not selected:
-        warn("No se seleccionaron cuentas vÃƒÂ¡lidas.")
-        press_enter()
-        return
-
-    items = _load()
-    moved: set[str] = set()
-    for idx, item in enumerate(items):
-        username = (item.get("username") or "").strip()
-        if not username:
-            continue
-        if item.get("alias") != alias:
-            continue
-        if username.lower() not in selected:
-            continue
-        updated = dict(item)
-        updated["alias"] = destination
-        items[idx] = _normalize_account(updated)
-        moved.add(username)
-
-    if not moved:
-        warn("No se movieron cuentas.")
-        press_enter()
-        return
-
-    _save(items)
-    for username in moved:
-        _invalidate_health(username)
-
-    ok(f"Se movieron {len(moved)} cuenta(s) al alias '{destination}'.")
-    press_enter()
 
 
 def _import_accounts_from_csv(alias: str) -> None:
@@ -2177,7 +2237,6 @@ def _import_accounts_from_csv(alias: str) -> None:
             password,
             proxy_data,
             alias=alias,
-            totp_secret=totp_value or None,
             row_number=row_number,
         )
         accounts_to_login.append(payload)
@@ -2187,7 +2246,6 @@ def _import_accounts_from_csv(alias: str) -> None:
         results = login_accounts_with_playwright(
             alias,
             accounts_to_login,
-            concurrency=requested_concurrency,
         )
         for result in results:
             status = (result.get("status") or "failed").lower()
@@ -2211,126 +2269,6 @@ def _import_accounts_from_csv(alias: str) -> None:
             label = f"Fila {row_number}" if row_number else "Fila desconocida"
             print(f" - {label}: {message}")
     press_enter()
-
-
-def _select_usernames_for_modifications(alias: str) -> List[str]:
-    group = [acct for acct in _load() if acct.get("alias") == alias]
-    if not group:
-        warn("No hay cuentas disponibles en este alias.")
-        press_enter()
-        return []
-
-    print("SeleccionÃƒÂ¡ cuentas por nÃƒÂºmero o username (coma separada, * para todas):")
-    alias_map: Dict[str, str] = {}
-    for idx, acct in enumerate(group, start=1):
-        username = (acct.get("username") or "").strip()
-        if not username:
-            continue
-        alias_map[username.lower()] = username
-        sess = _session_label(username)
-        proxy_flag = _proxy_indicator(acct)
-        low_flag = _low_profile_indicator(acct)
-        totp_flag = _totp_indicator(acct)
-        print(f" {idx}) @{username} {sess} {proxy_flag}{low_flag}{totp_flag}")
-        if low_flag and acct.get("low_profile_reason"):
-            print(f"    Ã¢â€ Â³ {acct['low_profile_reason']}")
-
-    raw = ask("SelecciÃƒÂ³n: ").strip()
-    if not raw:
-        warn("Sin selecciÃƒÂ³n.")
-        press_enter()
-        return []
-
-    if raw == "*":
-        return [acct.get("username") for acct in group if acct.get("username")]
-
-    chosen: List[str] = []
-    seen: set[str] = set()
-    for part in raw.split(","):
-        chunk = part.strip()
-        if not chunk:
-            continue
-        if chunk.isdigit():
-            idx = int(chunk)
-            if 1 <= idx <= len(group):
-                username = group[idx - 1].get("username")
-                if username:
-                    key = username.lower()
-                    if key not in seen:
-                        seen.add(key)
-                        chosen.append(username)
-        else:
-            normalized = chunk.lstrip("@").lower()
-            username = alias_map.get(normalized)
-            if username and normalized not in seen:
-                seen.add(normalized)
-                chosen.append(username)
-
-    if not chosen:
-        warn("No se encontraron cuentas con esos datos.")
-        press_enter()
-        return []
-
-    return chosen
-
-
-def _resolve_accounts_for_modifications(
-    alias: str, usernames: List[str]
-) -> List[Optional[Dict]]:
-    if not usernames:
-        return []
-
-    records = [acct for acct in _load() if acct.get("alias") == alias]
-    mapping: Dict[str, Dict] = {}
-    for acct in records:
-        username = (acct.get("username") or "").strip()
-        if username:
-            mapping[username.lower()] = acct
-
-    resolved: List[Optional[Dict]] = []
-    missing: List[str] = []
-    resolved_accounts: List[Dict] = []
-    for username in usernames:
-        key = (username or "").strip().lstrip("@").lower()
-        acct = mapping.get(key)
-        if acct:
-            resolved_accounts.append(acct)
-        else:
-            missing.append(username)
-
-    ready_accounts, blocked_accounts = _filter_accounts_for_proxy_preflight(
-        resolved_accounts,
-        warn_blocked=False,
-        warning_prefix="Cuenta omitida por preflight de proxy",
-    )
-    ready_by_username = {
-        str(item.get("username") or "").strip().lstrip("@").lower(): item
-        for item in ready_accounts
-        if str(item.get("username") or "").strip()
-    }
-    blocked_by_username = {
-        str(item.get("username") or "").strip().lstrip("@").lower(): item
-        for item in blocked_accounts
-        if str(item.get("username") or "").strip()
-    }
-
-    for username in usernames:
-        key = (username or "").strip().lstrip("@").lower()
-        if key in ready_by_username:
-            resolved.append(ready_by_username[key])
-            continue
-        resolved.append(None)
-        if key in mapping and key not in blocked_by_username:
-            missing.append(username)
-
-    if missing:
-        formatted = ", ".join(f"@{name}" for name in missing if name)
-        if formatted:
-            warn(f"No se encontraron estas cuentas: {formatted}")
-    if blocked_accounts:
-        _warn_proxy_preflight_blocked_accounts(blocked_accounts)
-
-    return resolved
 
 
 def _ask_delay_seconds(default: float = 5.0) -> float:
@@ -2438,10 +2376,16 @@ def _rename_account_record(old_username: str, new_username: str) -> str:
     if changed:
         _save(items)
 
-    if old_clean:
-        _invalidate_health(old_clean)
-    if new_clean:
-        _invalidate_health(new_clean)
+    if changed and old_clean and new_clean and old_clean.lower() != new_clean.lower():
+        try:
+            health_store.rename_account(old_clean, new_clean)
+        except Exception as exc:
+            logger.warning(
+                "No se pudo trasladar runtime state de @%s a @%s: %s",
+                old_clean,
+                new_clean,
+                exc,
+            )
 
     try:
         rename_totp_secret(old_clean, new_clean)
@@ -2460,14 +2404,6 @@ def _rename_account_record(old_username: str, new_username: str) -> str:
         pass
 
     return new_clean
-
-
-_IG_EDIT_PROFILE_URL = "https://www.instagram.com/accounts/edit/"
-
-
-def _ig_profile_url(username: str) -> str:
-    handle = (username or "").strip().lstrip("@")
-    return f"https://www.instagram.com/{handle}/" if handle else "https://www.instagram.com/"
 
 
 def _fallback_playwright_proxy(account: Optional[Dict]) -> Optional[Dict[str, str]]:
@@ -2529,8 +2465,8 @@ class _ManualPlaywrightLifecycle:
             headless=False,
             keep_browser_open_per_account=True,
             profiles_root=str(BASE_PROFILES),
-            normalize_username=lambda value: str(value or "").strip().lstrip("@"),
-            log_event=lambda *_args, **_kwargs: None,
+            normalize_username=normalize_browser_profile_username,
+            log_event=_noop_log_event,
         )
 
     _INBOX_READY_SELECTORS: tuple[str, ...] = (
@@ -2621,17 +2557,12 @@ class _ManualPlaywrightLifecycle:
         if not force and (now - last_sync) < self._STORAGE_SYNC_INTERVAL_SECONDS:
             return
         session = self._sessions.get(key)
-        ctx = self._contexts.get(key)
         storage_state = self._storage_state_path(username)
         storage_state.parent.mkdir(parents=True, exist_ok=True)
         saved = False
         if session is not None and self._context_alive(getattr(session, "ctx", None)):
             with contextlib.suppress(Exception):
                 await self._session_manager.save_storage_state(session, username)
-                saved = True
-        if not saved and ctx is not None and self._context_alive(ctx):
-            with contextlib.suppress(Exception):
-                await ctx.storage_state(path=str(storage_state))
                 saved = True
         if saved:
             self._last_storage_sync[key] = time.monotonic()
@@ -2652,7 +2583,6 @@ class _ManualPlaywrightLifecycle:
         account: Dict[str, Any],
         username: str,
         proxy_payload: Optional[Dict[str, str]],
-        storage_state: Optional[Path],
     ) -> Any:
         key = username.lower()
         desired_proxy_key = _proxy_signature(proxy_payload)
@@ -2824,7 +2754,6 @@ class _ManualPlaywrightLifecycle:
         *,
         username: str,
         ctx: Any,
-        page: Any,
         start_url: str,
         max_seconds: Optional[int],
         restore_page_if_closed: bool,
@@ -2953,8 +2882,8 @@ class _ManualPlaywrightLifecycle:
         if not proxy_payload:
             proxy_payload = _fallback_playwright_proxy(account)
 
-        storage_state = browser_storage_state_path(username, profiles_root=BASE_PROFILES)
-        storage_state.parent.mkdir(parents=True, exist_ok=True)
+        storage_state_dir = browser_storage_state_path(username, profiles_root=BASE_PROFILES).parent
+        storage_state_dir.mkdir(parents=True, exist_ok=True)
 
         log_browser_stage(
             component="manual_account_action",
@@ -2970,7 +2899,6 @@ class _ManualPlaywrightLifecycle:
                 account=account,
                 username=username,
                 proxy_payload=proxy_payload,
-                storage_state=storage_state,
             )
             try:
                 page = await self._ensure_page(username=username, ctx=ctx)
@@ -2982,7 +2910,6 @@ class _ManualPlaywrightLifecycle:
                     account=account,
                     username=username,
                     proxy_payload=proxy_payload,
-                    storage_state=storage_state,
                 )
                 page = await self._ensure_page(username=username, ctx=ctx)
         except Exception as exc:
@@ -3076,7 +3003,6 @@ class _ManualPlaywrightLifecycle:
             await self._wait_until_manual_end(
                 username=username,
                 ctx=ctx,
-                page=page,
                 start_url=start_url,
                 max_seconds=max_seconds,
                 restore_page_if_closed=restore_page_if_closed,
@@ -3086,9 +3012,6 @@ class _ManualPlaywrightLifecycle:
             with contextlib.suppress(Exception):
                 await storage_sync_task
 
-        if self._context_alive(ctx):
-            with contextlib.suppress(Exception):
-                await self._persist_storage_state(username, force=True)
         return {
             "opened": True,
             "username": username,
@@ -3239,598 +3162,6 @@ def _open_playwright_manual_session(
         return _run_async(_runner(), ignore_stop=True)
     except Exception as exc:
         raise RuntimeError(f"Failed to open manual browser for @{username}: {exc}") from exc
-
-
-def _change_usernames_flow(alias: str, selected: List[str]) -> List[str]:
-    resolved = _resolve_accounts_for_modifications(alias, selected)
-    if not any(resolved):
-        warn("No hay cuentas vÃƒÂ¡lidas seleccionadas.")
-        press_enter()
-        return selected
-
-    total = 0
-    successes = 0
-    for idx, acct in enumerate(resolved):
-        if not acct:
-            continue
-        total += 1
-        current = (acct.get("username") or "").strip().lstrip("@")
-        _open_playwright_manual_session(
-            acct,
-            start_url=_IG_EDIT_PROFILE_URL,
-            action_label="Cambiar username",
-        )
-        desired = ask(f"Nuevo username para @{current} (Enter = sin cambios): ").strip().lstrip("@")
-        if not desired:
-            continue
-
-        existing = get_account(desired)
-        if existing and (existing.get("username") or "").strip().lstrip("@").lower() != current.lower():
-            warn(f"Ya existe una cuenta con @{desired}. Se omite este cambio.")
-            continue
-
-        updated = _rename_account_record(current, desired)
-        normalized_current = current.strip().lstrip("@")
-        normalized_updated = (updated or "").strip().lstrip("@")
-        if not normalized_updated:
-            continue
-
-        # Solo cuenta como cambio si efectivamente quedo distinto (o cambio de mayusculas/minusculas).
-        if (
-            normalized_updated.lower() != normalized_current.lower()
-            or normalized_updated != normalized_current
-        ):
-            successes += 1
-            selected[idx] = normalized_updated
-            _record_profile_edit(normalized_updated, "username")
-
-    print(f"Usernames actualizados (manual): {successes}/{total}")
-    press_enter()
-    return selected
-
-
-def _change_full_name_flow(alias: str, selected: List[str]) -> None:
-    resolved = _resolve_accounts_for_modifications(alias, selected)
-    if not any(resolved):
-        warn("No hay cuentas vÃƒÂ¡lidas seleccionadas.")
-        press_enter()
-        return
-    total = 0
-    successes = 0
-    for acct in resolved:
-        if not acct:
-            continue
-        total += 1
-        username = (acct.get("username") or "").strip().lstrip("@")
-        _open_playwright_manual_session(
-            acct,
-            start_url=_IG_EDIT_PROFILE_URL,
-            action_label="Cambiar full name",
-        )
-        new_value = ask(
-            f"Nuevo full name para @{username} (Enter = sin cambios): "
-        ).strip()
-        if not new_value:
-            continue
-        successes += 1
-        _record_profile_edit(username, "full_name")
-
-    print(f"Nombres completos actualizados (manual): {successes}/{total}")
-    press_enter()
-
-
-def _change_bio_flow(alias: str, selected: List[str]) -> None:
-    resolved = _resolve_accounts_for_modifications(alias, selected)
-    if not any(resolved):
-        warn("No hay cuentas vÃƒÂ¡lidas seleccionadas.")
-        press_enter()
-        return
-    total = 0
-    successes = 0
-    for acct in resolved:
-        if not acct:
-            continue
-        total += 1
-        username = (acct.get("username") or "").strip().lstrip("@")
-        _open_playwright_manual_session(
-            acct,
-            start_url=_IG_EDIT_PROFILE_URL,
-            action_label="Cambiar bio",
-        )
-
-        changed = (
-            ask(f"Confirmas que cambiaste la bio de @{username}? (s/N): ").strip().lower()
-        )
-        if changed != "s":
-            continue
-
-        # No persistimos la bio localmente; solo registramos el cambio.
-        _ = ask(
-            f"Nueva bio para @{username} (Enter = dejar en blanco/eliminar): "
-        )
-        successes += 1
-        _record_profile_edit(username, "bio")
-
-    print(f"Bios actualizadas/eliminadas (manual): {successes}/{total}")
-    press_enter()
-
-
-def _profile_photo_flow(alias: str, selected: List[str]) -> None:
-    resolved = _resolve_accounts_for_modifications(alias, selected)
-    if not any(resolved):
-        warn("No hay cuentas vÃƒÂ¡lidas seleccionadas.")
-        press_enter()
-        return
-    total = 0
-    changes = 0
-    for acct in resolved:
-        if not acct:
-            continue
-        total += 1
-        username = (acct.get("username") or "").strip().lstrip("@")
-        _open_playwright_manual_session(
-            acct,
-            start_url=_IG_EDIT_PROFILE_URL,
-            action_label="Cambiar/eliminar foto de perfil",
-        )
-
-        print("\nQue hiciste con la foto de perfil?")
-        print("1) Subi/cambie la foto")
-        print("2) Elimine la foto")
-        print("3) No hice cambios")
-        choice = ask("Opcion: ").strip() or "3"
-        if choice in {"1", "2"}:
-            changes += 1
-            _record_profile_edit(username, "profile_picture")
-
-    print(f"Fotos de perfil actualizadas/eliminadas (manual): {changes}/{total}")
-    press_enter()
-
-
-def _delete_highlights_flow(alias: str, selected: List[str]) -> None:
-    resolved = _resolve_accounts_for_modifications(alias, selected)
-    if not any(resolved):
-        warn("No hay cuentas vÃƒÂ¡lidas seleccionadas.")
-        press_enter()
-        return
-    total = 0
-    successes = 0
-    for acct in resolved:
-        if not acct:
-            continue
-        total += 1
-        username = (acct.get("username") or "").strip().lstrip("@")
-        _open_playwright_manual_session(
-            acct,
-            start_url=_ig_profile_url(username),
-            action_label="Eliminar historias destacadas",
-        )
-        changed = (
-            ask(
-                f"Confirmas que eliminaste historias destacadas de @{username}? (s/N): "
-            )
-            .strip()
-            .lower()
-        )
-        if changed == "s":
-            successes += 1
-
-    print(f"Cuentas con historias destacadas eliminadas (manual): {successes}/{total}")
-    press_enter()
-
-
-def _delete_posts_flow(alias: str, selected: List[str]) -> None:
-    resolved = _resolve_accounts_for_modifications(alias, selected)
-    if not any(resolved):
-        warn("No hay cuentas vÃƒÂ¡lidas seleccionadas.")
-        press_enter()
-        return
-    total = 0
-    successes = 0
-    for acct in resolved:
-        if not acct:
-            continue
-        total += 1
-        username = (acct.get("username") or "").strip().lstrip("@")
-        _open_playwright_manual_session(
-            acct,
-            start_url=_ig_profile_url(username),
-            action_label="Eliminar publicaciones",
-        )
-        changed = (
-            ask(f"Confirmas que eliminaste publicaciones de @{username}? (s/N): ")
-            .strip()
-            .lower()
-        )
-        if changed == "s":
-            successes += 1
-
-    print(f"Cuentas con publicaciones eliminadas (manual): {successes}/{total}")
-    press_enter()
-
-
-def _modification_menu(alias: str) -> None:
-    selected: List[str] = []
-    while True:
-        banner()
-        title(f"ModificaciÃƒÂ³n de cuentas de Instagram - Alias: {alias}")
-        if selected:
-            print("Cuentas seleccionadas: " + ", ".join(f"@{name}" for name in selected))
-        else:
-            print("Cuentas seleccionadas: (ninguna)")
-
-        print("\n1) Seleccionar cuentas a modificar")
-        print("2) Cambiar usernames")
-        print("3) Cambiar nombres completos (Full name)")
-        print("4) Cambiar o eliminar biografÃƒÂ­a (bio)")
-        print("5) Cambiar o eliminar foto de perfil")
-        print("6) Eliminar historias destacadas")
-        print("7) Eliminar publicaciones existentes")
-        print("8) Volver\n")
-
-        choice = ask("OpciÃƒÂ³n: ").strip() or "8"
-
-        if choice == "1":
-            selected = _select_usernames_for_modifications(alias)
-        elif choice == "2":
-            if not selected:
-                warn("SeleccionÃƒÂ¡ cuentas primero.")
-                press_enter()
-                continue
-            selected = _change_usernames_flow(alias, selected)
-        elif choice == "3":
-            if not selected:
-                warn("SeleccionÃƒÂ¡ cuentas primero.")
-                press_enter()
-                continue
-            _change_full_name_flow(alias, selected)
-        elif choice == "4":
-            if not selected:
-                warn("SeleccionÃƒÂ¡ cuentas primero.")
-                press_enter()
-                continue
-            _change_bio_flow(alias, selected)
-        elif choice == "5":
-            if not selected:
-                warn("SeleccionÃƒÂ¡ cuentas primero.")
-                press_enter()
-                continue
-            _profile_photo_flow(alias, selected)
-        elif choice == "6":
-            if not selected:
-                warn("SeleccionÃƒÂ¡ cuentas primero.")
-                press_enter()
-                continue
-            _delete_highlights_flow(alias, selected)
-        elif choice == "7":
-            if not selected:
-                warn("SeleccionÃƒÂ¡ cuentas primero.")
-                press_enter()
-                continue
-            _delete_posts_flow(alias, selected)
-        elif choice == "8":
-            break
-        else:
-            warn("OpciÃƒÂ³n invÃƒÂ¡lida.")
-            press_enter()
-
-
-def menu_accounts():
-    while True:
-        banner()
-        print("1) Seleccionar alias o crear uno nuevo")
-        print("2) Volver atrÃƒÂ¡s (ENTER para volver)\n")
-        choice = ask("OpciÃƒÂ³n: ").strip()
-        if not choice or choice == "2":
-            return
-        if choice != "1":
-            continue
-        items = _load()
-        aliases = sorted(set([it.get("alias", "default") for it in items]) | {"default"})
-        title("Alias disponibles: " + ", ".join(aliases))
-        try:
-            alias = _validate_user_alias_display(
-                ask("Alias / grupo (ej default, ventas, matias): ").strip() or "default",
-                allow_default=True,
-            )
-        except ValueError as exc:
-            warn(str(exc))
-            press_enter()
-            continue
-        alias = next((existing for existing in aliases if existing.lower() == alias.lower()), alias)
-
-        print(f"\nCuentas del alias: {alias}")
-        group = [it for it in items if it.get("alias") == alias]
-        if not group:
-            print("(no hay cuentas aÃƒÂºn)")
-        else:
-            for it in group:
-                flag = em("Ã°Å¸Å¸Â¢") if it.get("active") else em("Ã¢Å¡Âª")
-                is_connected = connected_status(
-                    it,
-                    strict=False,
-                    reason="menu-display-status",
-                    fast=True,
-                    persist=False,
-                )
-                conn = "[conectada]" if is_connected else "[no conectada]"
-                sess = _session_label(it["username"])
-                proxy_flag = _proxy_indicator(it)
-                totp_flag = _totp_indicator(it)
-                badge, _needs_refresh = _badge_for_display(it)
-                life_badge = _life_status_badge(it, badge)
-                print(
-                    f" - @{it['username']} {conn} {sess} {flag} {proxy_flag}{totp_flag} Ã¢â‚¬Â¢ {life_badge}"
-                )
-
-        print("\n1) Agregar cuenta")
-        print("2) Agregar cuentas mediante archivo CSV")
-        print("3) Eliminar cuenta")
-        print("4) Activar/Desactivar / Proxy")
-        print("5) Iniciar sesiÃƒÂ³n y guardar sesiÃƒÂ³nid (auto en TODAS del alias)")
-        print("6) Iniciar sesiÃƒÂ³n y guardar sesiÃƒÂ³n ID (seleccionar cuenta)")
-        print("7) Entrar al inbox")
-        print("8) Subir contenidos (Historias / Post / Reels)")
-        print("9) Interacciones (Ver & Like Reels)")
-        print("10) ModificaciÃƒÂ³n de cuentas de Instagram")
-        print("11) Exportar cuentas a CSV")
-        print("12) Mover cuentas a otro alias")
-        print("13) Volver\n")
-
-        op = ask("OpciÃƒÂ³n: ").strip()
-        if op == "1":
-            if not _onboarding_backend_ready():
-                _print_onboarding_backend_help()
-                fallback = (
-                    ask("Agregar cuenta sin Playwright y usar login clasico? (s/N): ")
-                    .strip()
-                    .lower()
-                )
-                if fallback != "s":
-                    press_enter()
-                    continue
-                u = ask("Username (sin @): ").strip().lstrip("@")
-                if not u:
-                    continue
-                if get_account(u):
-                    warn("Ya existe.")
-                    press_enter()
-                    continue
-                proxy_data = _prompt_proxy_settings()
-                totp_saved = _prompt_totp(u)
-                if add_account(u, alias, proxy_data):
-                    if not totp_saved:
-                        remove_totp_secret(u)
-                    ok("Cuenta agregada. Iniciando login clasico...")
-                    prompt_login(u, interactive=True)
-                else:
-                    if totp_saved:
-                        remove_totp_secret(u)
-                press_enter()
-                continue
-            u = ask("Username (sin @): ").strip().lstrip("@")
-            if not u:
-                continue
-            if get_account(u):
-                warn("Ya existe.")
-                press_enter()
-                continue
-            proxy_data = _prompt_proxy_settings()
-            totp_saved = _prompt_totp(u)
-            if add_account(u, alias, proxy_data):
-                if not totp_saved:
-                    remove_totp_secret(u)
-                password = _ask_secret(f"Password @{u}: ")
-                if not password:
-                    warn("No se ingresÃƒÂ³ password; la cuenta quedÃƒÂ³ sin sesiÃƒÂ³n.")
-                else:
-                    payload = _build_playwright_login_payload(
-                        u,
-                        password,
-                        proxy_data,
-                        alias=alias,
-                    )
-                    results = login_accounts_with_playwright(alias, [payload])
-                    if results and results[0].get("status") == "ok":
-                        _store_account_password(u, password)
-
-            else:
-                if totp_saved:
-                    remove_totp_secret(u)
-            press_enter()
-        elif op == "2":
-            if not _onboarding_backend_ready():
-                _print_onboarding_backend_help()
-                press_enter()
-                continue
-            _import_accounts_from_csv(alias)
-        elif op == "3":
-            if not group:
-                warn("No hay cuentas para eliminar en este alias.")
-                press_enter()
-                continue
-            print("\nÃ‚Â¿QuerÃƒÂ©s eliminar una cuenta, varias o todas las del alias?")
-            print("1) Una")
-            print("2) Varias (selecciÃƒÂ³n mÃƒÂºltiple)")
-            print("3) Todas las del alias")
-            mode = ask("OpciÃƒÂ³n: ").strip() or "1"
-            if mode == "1":
-                u = ask("Username a eliminar: ").strip().lstrip("@")
-                if not u:
-                    warn("No se ingresÃƒÂ³ username.")
-                else:
-                    remove_account(u)
-                press_enter()
-            elif mode == "2":
-                print("SeleccionÃƒÂ¡ cuentas por nÃƒÂºmero o username (coma separada):")
-                for idx, acct in enumerate(group, start=1):
-                    low_flag = _low_profile_indicator(acct)
-                    label = f" {idx}) @{acct['username']}"
-                    if low_flag:
-                        label += f" {low_flag}"
-                    print(label)
-                    if low_flag and acct.get("low_profile_reason"):
-                        print(f"    Ã¢â€ Â³ {acct['low_profile_reason']}")
-                raw = ask("SelecciÃƒÂ³n: ").strip()
-                if not raw:
-                    warn("Sin selecciÃƒÂ³n.")
-                    press_enter()
-                    continue
-                chosen = set()
-                for part in raw.split(","):
-                    part = part.strip()
-                    if not part:
-                        continue
-                    if part.isdigit():
-                        idx = int(part)
-                        if 1 <= idx <= len(group):
-                            chosen.add(group[idx - 1]["username"])
-                    else:
-                        chosen.add(part.lstrip("@"))
-                if not chosen:
-                    warn("No se encontraron cuentas con esos datos.")
-                    press_enter()
-                    continue
-                for acct in group:
-                    if acct["username"] in chosen:
-                        remove_account(acct["username"])
-                press_enter()
-            elif mode == "3":
-                confirm = ask(
-                    "Ã‚Â¿ConfirmÃƒÂ¡s eliminar TODAS las cuentas de este alias? (s/N): "
-                ).strip().lower()
-                if confirm == "s":
-                    for acct in group:
-                        remove_account(acct["username"])
-                else:
-                    warn("OperaciÃƒÂ³n cancelada.")
-                press_enter()
-            else:
-                warn("OpciÃƒÂ³n invÃƒÂ¡lida.")
-                press_enter()
-        elif op == "4":
-            u = ask("Username: ").strip().lstrip("@")
-            account = get_account(u)
-            if not account:
-                warn("No existe la cuenta.")
-                press_enter()
-                continue
-            print("\n1) Activar/Desactivar")
-            print("2) Editar proxy")
-            print("3) Probar proxy")
-            print("4) Configurar/Reemplazar TOTP")
-            print("5) Eliminar TOTP")
-            print("6) Volver")
-            choice = ask("OpciÃƒÂ³n: ").strip() or "6"
-            if choice == "1":
-                val = ask("1=activar, 0=desactivar: ").strip()
-                set_active(u, val == "1")
-                press_enter()
-            elif choice == "2":
-                updates = _prompt_proxy_settings(account)
-                update_account(u, updates)
-                record_proxy_failure(u)
-                ok("Proxy actualizado.")
-                press_enter()
-            elif choice == "3":
-                _test_existing_proxy(account)
-                press_enter()
-            elif choice == "4":
-                configured = _prompt_totp(u)
-                if not configured:
-                    warn("No se configurÃƒÂ³ TOTP.")
-                press_enter()
-                account = get_account(u) or account
-            elif choice == "5":
-                if has_totp_secret(u):
-                    remove_totp_secret(u)
-                    ok("Se eliminÃƒÂ³ el TOTP almacenado.")
-                else:
-                    warn("La cuenta no tenÃƒÂ­a TOTP guardado.")
-                press_enter()
-                account = get_account(u) or account
-            else:
-                continue
-        elif op == "5":
-            group = [x for x in _load() if x.get("alias") == alias]
-            if not group:
-                warn("No hay cuentas para iniciar sesiÃƒÂ³n.")
-                press_enter()
-                continue
-            print("Relogin automÃƒÂ¡tico con Playwright (segundo plano) para TODAS las cuentas del alias.")
-            print("Se guardarÃƒÂ¡ la sesiÃƒÂ³n en runtime/browser_profiles/<username>/storage_state.json.")
-            results = relogin_accounts_with_playwright(alias, group, concurrency=1)
-            ok_count = sum(1 for r in results if str(r.get("status") or "").lower() == "ok")
-            fail_count = sum(1 for r in results if str(r.get("status") or "").lower() != "ok")
-            skipped = max(0, len(group) - len(results))
-            print(f"Relogin Playwright: ok={ok_count} failed={fail_count} omitidas={skipped}")
-            press_enter()
-        elif op == "6":
-            group = [x for x in _load() if x.get("alias") == alias]
-            if not group:
-                warn("No hay cuentas para iniciar sesiÃƒÂ³n.")
-                press_enter()
-                continue
-            print("SeleccionÃƒÂ¡ cuentas por nÃƒÂºmero o username (coma separada, * para todas):")
-            for idx, acct in enumerate(group, start=1):
-                sess = _session_label(acct["username"])
-
-                proxy_flag = _proxy_indicator(acct)
-                low_flag = _low_profile_indicator(acct)
-                totp_flag = _totp_indicator(acct)
-                print(f" {idx}) @{acct['username']} {sess} {proxy_flag}{low_flag}{totp_flag}")
-                if low_flag and acct.get("low_profile_reason"):
-                    print(f"    Ã¢â€ Â³ {acct['low_profile_reason']}")
-            raw = ask("SelecciÃƒÂ³n: ").strip()
-            if not raw:
-                warn("Sin selecciÃƒÂ³n.")
-                press_enter()
-                continue
-            targets: List[Dict] = []
-            if raw == "*":
-                targets = group
-            else:
-                chosen = set()
-                for part in raw.split(","):
-                    part = part.strip()
-                    if not part:
-                        continue
-                    if part.isdigit():
-                        idx = int(part)
-                        if 1 <= idx <= len(group):
-                            chosen.add(group[idx - 1]["username"])
-                    else:
-                        chosen.add(part.lstrip("@"))
-                targets = [acct for acct in group if acct["username"] in chosen]
-            if not targets:
-                warn("No se encontraron cuentas con esos datos.")
-                press_enter()
-                continue
-            print("Relogin automÃƒÂ¡tico con Playwright (segundo plano) para cuentas seleccionadas.")
-            print("Se guardarÃƒÂ¡ la sesiÃƒÂ³n en runtime/browser_profiles/<username>/storage_state.json.")
-            results = relogin_accounts_with_playwright(alias, targets, concurrency=1)
-            ok_count = sum(1 for r in results if str(r.get("status") or "").lower() == "ok")
-            fail_count = sum(1 for r in results if str(r.get("status") or "").lower() != "ok")
-            skipped = max(0, len(targets) - len(results))
-            print(f"Relogin Playwright: ok={ok_count} failed={fail_count} omitidas={skipped}")
-            press_enter()
-        elif op == "7":
-            _launch_inbox(alias)
-        elif op == "8":
-            _launch_content_publisher(alias)
-        elif op == "9":
-            _launch_interactions(alias)
-        elif op == "10":
-            _modification_menu(alias)
-        elif op == "11":
-            _export_accounts_csv(alias)
-        elif op == "12":
-            _move_accounts_to_alias(alias)
-        elif op == "13":
-            break
-        else:
-            warn("OpciÃƒÂ³n invÃƒÂ¡lida.")
-            press_enter()
 
 
 # Mantener compatibilidad con importaciÃƒÂ³n dinÃƒÂ¡mica

@@ -1944,6 +1944,7 @@ class AccountsPage(AccountsSectionPage):
     RELOGIN_TASK = "accounts_relogin"
     LOGIN_TASKS = {LOGIN_TASK, RELOGIN_TASK}
     IMPORT_TASK = "accounts_import"
+    HEALTH_REFRESH_TASK = "accounts_health_refresh"
 
     def __init__(self, ctx: PageContext, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -2000,7 +2001,7 @@ class AccountsPage(AccountsSectionPage):
         login_alias_button.clicked.connect(self._login_alias)
         refresh_button = QPushButton("Refrescar")
         refresh_button.setObjectName("SecondaryButton")
-        refresh_button.clicked.connect(self.refresh_table)
+        refresh_button.clicked.connect(self._refresh_health)
 
         toolbar_layout.addWidget(QLabel("Alias activo"), 0, 0)
         toolbar_layout.addWidget(self._alias_filter, 0, 1)
@@ -2122,6 +2123,12 @@ class AccountsPage(AccountsSectionPage):
                 result=result,
             )
             return
+        if task_name == self.HEALTH_REFRESH_TASK:
+            summary = self._summarize_health_refresh(ok=ok, message=message, result=result)
+            if summary:
+                self._queue_after_snapshot(lambda text=summary: self.set_status(text))
+            self.refresh_table()
+            return
         if task_name != self.IMPORT_TASK:
             return
         request = dict(self._pending_import_request or {})
@@ -2202,6 +2209,46 @@ class AccountsPage(AccountsSectionPage):
         if missing_password:
             summary += f" Sin password guardado: {missing_password}."
         return summary
+
+    def _summarize_health_refresh(self, *, ok: bool, message: str, result: object) -> str:
+        if not ok:
+            return message or "No se pudo refrescar health."
+        payload = dict(result) if isinstance(result, dict) else {}
+        eligible = int(payload.get("eligible") or 0)
+        refreshed = int(payload.get("refreshed") or 0)
+        if eligible <= 0:
+            return "No hay cuentas conectadas para refrescar health."
+        summary = (
+            f"Health refrescado: {refreshed}/{eligible} conectadas revisadas"
+            f" | VIVA {int(payload.get('alive') or 0)}"
+            f" | NO ACTIVA {int(payload.get('inactive') or 0)}"
+            f" | MUERTA {int(payload.get('dead') or 0)}"
+        )
+        errors = int(payload.get("errors") or 0)
+        if errors:
+            summary += f" | errores {errors}"
+        return summary
+
+    def _refresh_health(self) -> None:
+        if self._ctx.tasks.is_running(self.HEALTH_REFRESH_TASK):
+            self.set_status("El refresh de health ya esta en ejecucion.")
+            return
+        alias = self._current_alias() or self._ctx.state.active_alias
+        clean_alias = str(alias or "").strip()
+        if not clean_alias:
+            self.show_error("Selecciona un alias.")
+            return
+        self._set_active_alias(clean_alias)
+        try:
+            self._ctx.tasks.start_task(
+                self.HEALTH_REFRESH_TASK,
+                lambda alias=clean_alias: self._ctx.services.accounts.refresh_connected_health(alias),
+                metadata={"alias": clean_alias},
+            )
+        except Exception as exc:
+            self.show_exception(exc, "No se pudo iniciar el refresh de health.")
+            return
+        self.set_status("Refrescando health de cuentas conectadas...")
 
     def _refresh_alias_combo(self, aliases: list[str] | None = None) -> None:
         alias_rows = list(aliases or [])

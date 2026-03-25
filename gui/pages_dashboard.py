@@ -23,7 +23,6 @@ class DashboardPage(BasePage):
         "messages_error_today": "system_logs_page",
         "replies_received_today": "inbox_page",
         "active_campaigns": "campaign_monitor_page",
-        "leads_processed_today": "leads_filter_page",
     }
 
     def __init__(self, ctx: PageContext, parent=None) -> None:
@@ -46,7 +45,6 @@ class DashboardPage(BasePage):
             ("messages_error_today", "Errores hoy"),
             ("replies_received_today", "Respuestas hoy"),
             ("active_campaigns", "Campanas activas"),
-            ("leads_processed_today", "Leads procesados hoy"),
         ]
         for index, (key, label_text) in enumerate(labels):
             card = ClickableMetricCard(label_text)

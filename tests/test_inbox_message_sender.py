@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 
 from src.inbox.conversation_sync import _wait_for_any_selector
-from src.inbox.message_sender import TaskDirectClient, _wait_for_visible_locator_async
+from src.inbox.message_sender import (
+    TaskDirectClient,
+    _wait_for_visible_locator_async,
+    send_pack_messages,
+)
 
 
 class _FakeLocatorItem:
@@ -101,6 +105,49 @@ def test_task_direct_client_send_text_with_ack_respects_account_quota(monkeypatc
     }
 
 
+def test_task_direct_client_send_text_with_ack_bypasses_quota_for_manual_inbox(monkeypatch) -> None:
+    page = _FakePage({})
+    runtime = _FakeRuntime(page)
+    client = TaskDirectClient(
+        runtime,
+        {"username": "acct-1", "messages_per_account": 2},
+        thread_id="123",
+        thread_href="https://www.instagram.com/direct/t/123/",
+        bypass_account_quota=True,
+    )
+    composer = _FakeComposer()
+    quota_calls = {"count": 0}
+
+    def _fake_quota(**_kwargs):
+        quota_calls["count"] += 1
+        return (False, 2, 2)
+
+    monkeypatch.setattr("src.inbox.message_sender.can_send_message_for_account", _fake_quota)
+    monkeypatch.setattr(client, "ensure_thread_ready_strict", lambda *_args, **_kwargs: (True, "ok"))
+    monkeypatch.setattr(
+        client,
+        "get_outbound_baseline",
+        lambda *_args, **_kwargs: {"ok": True, "item_id": "", "timestamp": None, "reason": "baseline_empty"},
+    )
+
+    async def _fake_wait_for_visible(*_args, **_kwargs):
+        return composer
+
+    monkeypatch.setattr("src.inbox.message_sender._wait_for_visible_locator_async", _fake_wait_for_visible)
+    monkeypatch.setattr(
+        client,
+        "confirm_new_outbound_after_baseline",
+        lambda *_args, **_kwargs: {"ok": True, "item_id": "msg-manual-1", "reason": "dom_confirmed"},
+    )
+
+    result = client.send_text_with_ack("123", "hola")
+
+    assert result == {"ok": True, "item_id": "msg-manual-1", "reason": "dom_confirmed"}
+    assert composer.filled == ["hola"]
+    assert composer.pressed == ["Enter"]
+    assert quota_calls["count"] == 0
+
+
 def test_wait_for_any_selector_ignores_hidden_matches() -> None:
     page = _FakePage(
         {
@@ -195,3 +242,119 @@ def test_task_direct_client_reconciles_send_via_thread_read_after_refresh(monkey
     assert composer.filled == ["hola"]
     assert composer.pressed == ["Enter"]
     assert call_order == ["confirm", "refresh", "confirm", "thread_read"]
+
+
+def test_send_pack_messages_aborts_before_opening_client_when_quota_cannot_cover_pack(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.inbox.message_sender.can_send_message_for_account",
+        lambda **_kwargs: (True, 5, 6),
+    )
+
+    def _unexpected_client(*_args, **_kwargs):
+        raise AssertionError("TaskDirectClient should not be created when quota is insufficient for the full pack")
+
+    monkeypatch.setattr("src.inbox.message_sender.TaskDirectClient", _unexpected_client)
+
+    result = send_pack_messages(
+        object(),
+        {"username": "acct-1", "messages_per_account": 6},
+        {
+            "thread_id": "123",
+            "thread_href": "https://www.instagram.com/direct/t/123/",
+            "recipient_username": "lead",
+        },
+        {
+            "id": "pack-1",
+            "actions": [
+                {"type": "text_fixed", "content": "uno"},
+                {"type": "text_fixed", "content": "dos"},
+                {"type": "text_fixed", "content": "tres"},
+            ],
+        },
+        conversation_text="",
+        flow_config={},
+    )
+
+    assert result == {
+        "ok": False,
+        "completed": False,
+        "sent_count": 0,
+        "reason": "pack_quota_insufficient:5/6:need=3",
+        "error": "pack_quota_insufficient:5/6:need=3",
+    }
+
+
+def test_send_pack_messages_executes_pack_when_quota_covers_full_sequence(monkeypatch) -> None:
+    class _FakePackClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_client = _FakePackClient()
+    execute_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "src.inbox.message_sender.can_send_message_for_account",
+        lambda **_kwargs: (True, 3, 6),
+    )
+    monkeypatch.setattr("src.inbox.message_sender.TaskDirectClient", lambda *_args, **_kwargs: fake_client)
+    monkeypatch.setattr("src.inbox.message_sender.responder_module._get_account_memory", lambda _account_id: {})
+    monkeypatch.setattr("src.inbox.message_sender.responder_module._resolve_ai_api_key", lambda: "api-key")
+
+    def _fake_execute_pack(pack, account_id, memory, **kwargs):
+        execute_calls.append(
+            {
+                "pack": dict(pack),
+                "account_id": account_id,
+                "memory": dict(memory),
+                "thread_id": kwargs.get("thread_id"),
+                "client": kwargs.get("client"),
+            }
+        )
+        return {"completed": True, "sent_count": 3}
+
+    monkeypatch.setattr("src.inbox.message_sender.responder_module.execute_pack", _fake_execute_pack)
+
+    result = send_pack_messages(
+        object(),
+        {"username": "acct-1", "messages_per_account": 6},
+        {
+            "thread_id": "123",
+            "thread_href": "https://www.instagram.com/direct/t/123/",
+            "recipient_username": "lead",
+        },
+        {
+            "id": "pack-1",
+            "type": "PEACH_A",
+            "actions": [
+                {"type": "text_fixed", "content": "uno"},
+                {"type": "text_fixed", "content": "dos"},
+                {"type": "text_fixed", "content": "tres"},
+            ],
+        },
+        conversation_text="historial",
+        flow_config={},
+    )
+
+    assert result["ok"] is True
+    assert result["sent_count"] == 3
+    assert execute_calls == [
+        {
+            "pack": {
+                "id": "pack-1",
+                "type": "PEACH_A",
+                "actions": [
+                    {"type": "text_fixed", "content": "uno"},
+                    {"type": "text_fixed", "content": "dos"},
+                    {"type": "text_fixed", "content": "tres"},
+                ],
+            },
+            "account_id": "acct-1",
+            "memory": {},
+            "thread_id": "123",
+            "client": fake_client,
+        }
+    ]
+    assert fake_client.closed is True

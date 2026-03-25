@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -11,6 +12,7 @@ from typing import Any
 
 from core.disk_monitor import emit_disk_warnings
 from core.log_rotation import run_retention_maintenance
+from license_identity import apply_client_identity_env, set_client_isolation_enabled
 from paths import (
     accounts_root,
     app_root,
@@ -37,6 +39,8 @@ from .observability import (
 )
 
 _BOOTSTRAP_CACHE: dict[str, "BootstrapContext"] = {}
+_POST_SHOW_HOUSEKEEPING_STATUS: dict[str, str] = {}
+_POST_SHOW_HOUSEKEEPING_LOCK = threading.RLock()
 _STALE_FILE_PATTERNS = ("*.tmp", "*.partial", "*.part", "*.staged", "*.download")
 _STALE_RUNTIME_SECONDS = 24 * 3600
 _STALE_UPDATE_SECONDS = 6 * 3600
@@ -110,7 +114,7 @@ def _new_context(mode: str, *, app_root_hint: Path | None = None, install_root_h
     app_dir = _resolve_app_root(install, app_root_hint=app_root_hint).resolve()
     if client_layout:
         data_dir = (install / "data").resolve()
-        runtime_dir = (install / "runtime").resolve()
+        runtime_dir = runtime_root(install).resolve()
         logs_dir = (install / "logs").resolve()
         updates_dir = (install / "updates").resolve()
         layout = "client-layout"
@@ -152,6 +156,10 @@ def _export_env(ctx: BootstrapContext) -> None:
     os.environ["APP_DATA_ROOT"] = str(ctx.install_root)
     if ctx.layout == "client-layout":
         os.environ["INSTACRM_FORCE_CLIENT_LAYOUT"] = "1"
+
+
+def _cache_key_for_context(ctx: BootstrapContext) -> str:
+    return f"{ctx.mode}|{ctx.install_root}"
 
 
 def _ensure_directories(ctx: BootstrapContext) -> None:
@@ -313,61 +321,71 @@ def _run_cleanup(ctx: BootstrapContext) -> dict[str, Any]:
     }
 
 
-def bootstrap_application(
-    mode: str | None,
-    *,
-    app_root_hint: Path | None = None,
-    install_root_hint: Path | None = None,
-    force: bool = False,
-) -> BootstrapContext:
-    ctx = _new_context(str(mode or ""), app_root_hint=app_root_hint, install_root_hint=install_root_hint)
-    cache_key = f"{ctx.mode}|{ctx.install_root}"
-    if not force and cache_key in _BOOTSTRAP_CACHE:
-        return _BOOTSTRAP_CACHE[cache_key]
-
-    _export_env(ctx)
-    _ensure_directories(ctx)
-    record_system_event(
-        ctx.install_root,
-        "bootstrap_started",
-        payload={
-            "mode": ctx.mode,
-            "layout": ctx.layout,
-            "startup_id": ctx.startup_id,
-            "frozen": ctx.frozen,
-        },
-    )
-
-    cleanup_summary = _run_cleanup(ctx)
-    recovery_summary = _recover_update_state(ctx)
-    validation_summary = _validate_state(ctx)
-
-    preflight_summary: dict[str, Any] = {}
-    try:
-        from runtime.runtime_parity import bootstrap_runtime_env, run_runtime_preflight
-
-        bootstrap_runtime_env(ctx.mode, app_root_hint=ctx.install_root, force=True)
-        preflight_summary = run_runtime_preflight(ctx.mode, strict=False, sync_connected=True)
-    except Exception as exc:
-        preflight_summary = {
-            "critical_count": 1,
-            "warning_count": 0,
-            "issues": [
-                {
-                    "level": "critical",
-                    "code": "bootstrap_preflight_failed",
-                    "message": str(exc),
-                }
-            ],
+def _run_boot_state_sweep(ctx: BootstrapContext) -> dict[str, Any]:
+    database_path = ctx.data_root / "inbox_rm.sqlite3"
+    if not database_path.exists():
+        return {
+            "ran": False,
+            "reason": "missing_database",
+            "runtime_alias_state": {"checked": 0, "cleaned": 0, "deleted": 0, "details": []},
+            "session_connector_state": {"checked": 0, "cleaned": 0, "deleted": 0, "details": []},
         }
-        record_critical_error(
-            ctx.install_root,
-            "bootstrap_preflight_failed",
-            error=exc,
-            payload={"mode": ctx.mode, "startup_id": ctx.startup_id},
-        )
+    from core import accounts as accounts_module
+    from src.inbox.inbox_storage import InboxStorage
+    from src.runtime.alias_runtime_scheduler import AliasRuntimeScheduler
+    from src.runtime.session_connector_registry import SessionConnectorRegistry
 
-    warnings = emit_disk_warnings(ctx.install_root)
+    def _account_id(value: Any) -> str:
+        return str(value or "").strip().lstrip("@").lower()
+
+    account_rows = [dict(row) for row in accounts_module.list_all() if isinstance(row, dict)]
+    accounts_by_id: dict[str, dict[str, Any]] = {}
+    existing_aliases: set[str] = set()
+    active_alias_accounts: dict[str, set[str]] = {}
+    for account in account_rows:
+        account_id = _account_id(account.get("username"))
+        alias_id = str(account.get("alias") or "").strip().lower()
+        if alias_id:
+            existing_aliases.add(alias_id)
+        if not account_id:
+            continue
+        accounts_by_id[account_id] = dict(account)
+        if alias_id and bool(account.get("active", True)):
+            active_alias_accounts.setdefault(alias_id, set()).add(account_id)
+
+    storage = InboxStorage(ctx.install_root)
+    try:
+        runtime_summary = AliasRuntimeScheduler.sweep_boot_persisted_states(
+            store=storage,
+            existing_aliases=existing_aliases,
+            active_alias_accounts=active_alias_accounts,
+        )
+        connector_summary = SessionConnectorRegistry.sweep_boot_persisted_states(
+            store=storage,
+            accounts_by_id=accounts_by_id,
+        )
+    finally:
+        storage.shutdown()
+    return {
+        "ran": True,
+        "database_path": str(database_path),
+        "runtime_alias_state": runtime_summary,
+        "session_connector_state": connector_summary,
+    }
+
+
+def _build_startup_diagnostic(
+    ctx: BootstrapContext,
+    *,
+    cleanup_summary: dict[str, Any],
+    recovery_summary: dict[str, Any],
+    validation_summary: dict[str, Any],
+    preflight_summary: dict[str, Any],
+    disk_warnings: list[str],
+    housekeeping_deferred: bool,
+    housekeeping_completed: bool,
+    time_to_window_show_seconds: float | None = None,
+) -> dict[str, Any]:
     diagnostic = {
         "timestamp": time.time(),
         "startup_id": ctx.startup_id,
@@ -383,8 +401,38 @@ def bootstrap_application(
         "recovery": recovery_summary,
         "validation": validation_summary,
         "preflight": preflight_summary,
-        "disk_warnings": warnings,
+        "disk_warnings": list(disk_warnings or []),
+        "housekeeping_deferred": bool(housekeeping_deferred),
+        "housekeeping_completed": bool(housekeeping_completed),
     }
+    if time_to_window_show_seconds is not None:
+        diagnostic["time_to_window_show_seconds"] = float(time_to_window_show_seconds)
+    return diagnostic
+
+
+def _finalize_bootstrap_observability(
+    ctx: BootstrapContext,
+    *,
+    cleanup_summary: dict[str, Any],
+    recovery_summary: dict[str, Any],
+    validation_summary: dict[str, Any],
+    preflight_summary: dict[str, Any],
+    disk_warnings: list[str],
+    housekeeping_deferred: bool,
+    housekeeping_completed: bool,
+    time_to_window_show_seconds: float | None = None,
+) -> dict[str, Any]:
+    diagnostic = _build_startup_diagnostic(
+        ctx,
+        cleanup_summary=cleanup_summary,
+        recovery_summary=recovery_summary,
+        validation_summary=validation_summary,
+        preflight_summary=preflight_summary,
+        disk_warnings=disk_warnings,
+        housekeeping_deferred=housekeeping_deferred,
+        housekeeping_completed=housekeeping_completed,
+        time_to_window_show_seconds=time_to_window_show_seconds,
+    )
     write_startup_diagnostic(ctx.install_root, diagnostic)
     build_support_diagnostic_bundle(ctx.install_root, extra=diagnostic)
     update_local_heartbeat(
@@ -405,8 +453,294 @@ def bootstrap_application(
             + len(cleanup_summary.get("update_removed") or []),
             "recovery_issues": len(recovery_summary.get("issues") or []),
             "preflight_critical_count": int(preflight_summary.get("critical_count", 0)),
+            "housekeeping_deferred": bool(housekeeping_deferred),
+            "housekeeping_completed": bool(housekeeping_completed),
         },
     )
+    return diagnostic
+
+
+def _run_post_show_bootstrap_tasks_impl(
+    ctx: BootstrapContext,
+    *,
+    time_to_window_show_seconds: float | None = None,
+) -> dict[str, Any]:
+    cleanup_summary = ctx.cleanup_summary
+    preflight_summary = ctx.preflight_summary
+    housekeeping_was_deferred = bool(cleanup_summary.get("deferred"))
+    cleanup_summary["was_deferred"] = housekeeping_was_deferred
+    cleanup_summary.setdefault(
+        "boot_state_sweep",
+        {"ran": False, "status": "pending"},
+    )
+    cleanup_summary["completed"] = False
+    cleanup_summary["started_at"] = time.time()
+
+    try:
+        cleanup_result = _run_cleanup(ctx)
+    except Exception as exc:
+        cleanup_result = {
+            "retention": {},
+            "runtime_removed": [],
+            "update_removed": [],
+            "error": str(exc),
+        }
+        record_critical_error(
+            ctx.install_root,
+            "bootstrap_cleanup_failed",
+            error=exc,
+            payload={"mode": ctx.mode, "startup_id": ctx.startup_id},
+        )
+    cleanup_summary.update(cleanup_result)
+
+    disk_warnings: list[str] = []
+    try:
+        disk_warnings = emit_disk_warnings(ctx.install_root)
+    except Exception as exc:
+        cleanup_summary["disk_warnings_error"] = str(exc)
+        record_critical_error(
+            ctx.install_root,
+            "bootstrap_disk_warning_failed",
+            error=exc,
+            payload={"mode": ctx.mode, "startup_id": ctx.startup_id},
+        )
+
+    try:
+        cleanup_summary["boot_state_sweep"] = _run_boot_state_sweep(ctx)
+        cleanup_summary["boot_state_sweep"]["status"] = "completed"
+    except Exception as exc:
+        cleanup_summary["boot_state_sweep"] = {
+            "ran": False,
+            "status": "failed",
+            "error": str(exc),
+        }
+        record_critical_error(
+            ctx.install_root,
+            "bootstrap_state_sweep_failed",
+            error=exc,
+            payload={"mode": ctx.mode, "startup_id": ctx.startup_id},
+        )
+
+    try:
+        from runtime.runtime_parity import run_runtime_preflight
+
+        full_preflight_summary = run_runtime_preflight(
+            ctx.mode,
+            strict=False,
+            sync_connected=True,
+        )
+    except Exception as exc:
+        full_preflight_summary = {
+            "phase": "post_show_full",
+            "critical_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "level": "critical",
+                    "code": "bootstrap_preflight_failed",
+                    "message": str(exc),
+                }
+            ],
+            "report_path": "",
+        }
+        record_critical_error(
+            ctx.install_root,
+            "bootstrap_preflight_failed",
+            error=exc,
+            payload={"mode": ctx.mode, "startup_id": ctx.startup_id},
+        )
+    preflight_summary.clear()
+    preflight_summary.update(full_preflight_summary)
+
+    cleanup_summary["completed"] = True
+    cleanup_summary["completed_at"] = time.time()
+    cleanup_summary["disk_warnings"] = list(disk_warnings or [])
+    cleanup_summary["deferred"] = False
+
+    diagnostic = _finalize_bootstrap_observability(
+        ctx,
+        cleanup_summary=cleanup_summary,
+        recovery_summary=ctx.recovery_summary,
+        validation_summary=ctx.validation_summary,
+        preflight_summary=ctx.preflight_summary,
+        disk_warnings=disk_warnings,
+        housekeeping_deferred=housekeeping_was_deferred,
+        housekeeping_completed=True,
+        time_to_window_show_seconds=time_to_window_show_seconds,
+    )
+    return {
+        "cleanup": cleanup_summary,
+        "disk_warnings": disk_warnings,
+        "diagnostic": diagnostic,
+    }
+
+
+def run_post_show_bootstrap_tasks(
+    ctx: BootstrapContext,
+    *,
+    time_to_window_show_seconds: float | None = None,
+) -> dict[str, Any]:
+    cache_key = _cache_key_for_context(ctx)
+    with _POST_SHOW_HOUSEKEEPING_LOCK:
+        status = _POST_SHOW_HOUSEKEEPING_STATUS.get(cache_key)
+        if status == "completed":
+            return {
+                "cleanup": ctx.cleanup_summary,
+                "disk_warnings": list(ctx.cleanup_summary.get("disk_warnings") or []),
+                "status": status,
+            }
+        if status == "running":
+            return {
+                "cleanup": ctx.cleanup_summary,
+                "disk_warnings": [],
+                "status": status,
+            }
+        _POST_SHOW_HOUSEKEEPING_STATUS[cache_key] = "running"
+
+    try:
+        result = _run_post_show_bootstrap_tasks_impl(
+            ctx,
+            time_to_window_show_seconds=time_to_window_show_seconds,
+        )
+    finally:
+        with _POST_SHOW_HOUSEKEEPING_LOCK:
+            _POST_SHOW_HOUSEKEEPING_STATUS[cache_key] = "completed"
+    result["status"] = "completed"
+    return result
+
+
+def start_post_show_bootstrap_tasks(
+    ctx: BootstrapContext,
+    *,
+    time_to_window_show_seconds: float | None = None,
+) -> bool:
+    cache_key = _cache_key_for_context(ctx)
+    with _POST_SHOW_HOUSEKEEPING_LOCK:
+        status = _POST_SHOW_HOUSEKEEPING_STATUS.get(cache_key)
+        if status in {"running", "completed"}:
+            return False
+        _POST_SHOW_HOUSEKEEPING_STATUS[cache_key] = "running"
+
+    def _runner() -> None:
+        try:
+            _run_post_show_bootstrap_tasks_impl(
+                ctx,
+                time_to_window_show_seconds=time_to_window_show_seconds,
+            )
+        finally:
+            with _POST_SHOW_HOUSEKEEPING_LOCK:
+                _POST_SHOW_HOUSEKEEPING_STATUS[cache_key] = "completed"
+
+    thread = threading.Thread(
+        target=_runner,
+        name=f"bootstrap-housekeeping-{ctx.startup_id}",
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+def run_post_show_housekeeping(
+    ctx: BootstrapContext,
+    *,
+    time_to_window_show_seconds: float | None = None,
+) -> dict[str, Any]:
+    return run_post_show_bootstrap_tasks(
+        ctx,
+        time_to_window_show_seconds=time_to_window_show_seconds,
+    )
+
+
+def start_post_show_housekeeping(
+    ctx: BootstrapContext,
+    *,
+    time_to_window_show_seconds: float | None = None,
+) -> bool:
+    return start_post_show_bootstrap_tasks(
+        ctx,
+        time_to_window_show_seconds=time_to_window_show_seconds,
+    )
+
+
+def bootstrap_application(
+    mode: str | None,
+    *,
+    app_root_hint: Path | None = None,
+    install_root_hint: Path | None = None,
+    force: bool = False,
+    defer_housekeeping: bool = False,
+) -> BootstrapContext:
+    normalized_mode = "client" if str(mode or "").strip().lower() == "client" else "owner"
+    set_client_isolation_enabled(normalized_mode == "client")
+    if normalized_mode == "client":
+        apply_client_identity_env()
+    ctx = _new_context(str(mode or ""), app_root_hint=app_root_hint, install_root_hint=install_root_hint)
+    cache_key = _cache_key_for_context(ctx)
+    if not force and cache_key in _BOOTSTRAP_CACHE:
+        cached = _BOOTSTRAP_CACHE[cache_key]
+        if not defer_housekeeping:
+            run_post_show_bootstrap_tasks(cached)
+        return cached
+
+    with _POST_SHOW_HOUSEKEEPING_LOCK:
+        _POST_SHOW_HOUSEKEEPING_STATUS.pop(cache_key, None)
+
+    _export_env(ctx)
+    _ensure_directories(ctx)
+    try:
+        from core.totp_store import migrate_legacy_store
+
+        migrate_legacy_store()
+    except Exception:
+        pass
+    record_system_event(
+        ctx.install_root,
+        "bootstrap_started",
+        payload={
+            "mode": ctx.mode,
+            "layout": ctx.layout,
+            "startup_id": ctx.startup_id,
+            "frozen": ctx.frozen,
+        },
+    )
+
+    cleanup_summary: dict[str, Any] = {
+        "deferred": bool(defer_housekeeping),
+        "completed": False,
+        "boot_state_sweep": {
+            "ran": False,
+            "status": "pending" if defer_housekeeping else "scheduled_post_bootstrap",
+        },
+    }
+    recovery_summary = _recover_update_state(ctx)
+    validation_summary = _validate_state(ctx)
+
+    preflight_summary: dict[str, Any] = {}
+    try:
+        from runtime.runtime_parity import bootstrap_runtime_env, run_runtime_preflight_minimal
+
+        bootstrap_runtime_env(ctx.mode, app_root_hint=ctx.install_root, force=True)
+        preflight_summary = run_runtime_preflight_minimal(ctx.mode, strict=False)
+    except Exception as exc:
+        preflight_summary = {
+            "phase": "pre_show_minimal",
+            "critical_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "level": "critical",
+                    "code": "bootstrap_preflight_failed",
+                    "message": str(exc),
+                }
+            ],
+            "report_path": "",
+        }
+        record_critical_error(
+            ctx.install_root,
+            "bootstrap_preflight_failed",
+            error=exc,
+            payload={"mode": ctx.mode, "startup_id": ctx.startup_id},
+        )
 
     bootstrapped = replace(
         ctx,
@@ -415,6 +749,13 @@ def bootstrap_application(
         validation_summary=validation_summary,
         preflight_summary=preflight_summary,
     )
+    if defer_housekeeping:
+        with _POST_SHOW_HOUSEKEEPING_LOCK:
+            _POST_SHOW_HOUSEKEEPING_STATUS[cache_key] = "pending"
+    else:
+        _run_post_show_bootstrap_tasks_impl(bootstrapped)
+        with _POST_SHOW_HOUSEKEEPING_LOCK:
+            _POST_SHOW_HOUSEKEEPING_STATUS[cache_key] = "completed"
     _BOOTSTRAP_CACHE[cache_key] = bootstrapped
     return bootstrapped
 
@@ -424,15 +765,19 @@ def ensure_bootstrapped(
     *,
     app_root_hint: Path | None = None,
     install_root_hint: Path | None = None,
+    defer_housekeeping: bool = False,
 ) -> BootstrapContext:
     normalized_mode = "client" if str(mode or "").strip().lower() == "client" else "owner"
     install = _install_root(normalized_mode, install_root_hint=install_root_hint).resolve()
     cache_key = f"{normalized_mode}|{install}"
     if cache_key in _BOOTSTRAP_CACHE and os.environ.get("INSTACRM_BOOTSTRAPPED") == "1":
+        if not defer_housekeeping:
+            run_post_show_bootstrap_tasks(_BOOTSTRAP_CACHE[cache_key])
         return _BOOTSTRAP_CACHE[cache_key]
     return bootstrap_application(
         normalized_mode,
         app_root_hint=app_root_hint,
         install_root_hint=install_root_hint,
         force=False,
+        defer_housekeeping=defer_housekeeping,
     )

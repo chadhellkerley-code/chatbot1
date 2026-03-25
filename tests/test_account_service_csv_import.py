@@ -9,6 +9,8 @@ import application.services.account_service as account_service_module
 from application.services.account_service import AccountService
 from application.services.base import ServiceContext, ServiceError
 
+TOTP_SECRET = "JBSWY3DPEHPK3PXP"
+
 
 def _build_service(tmp_path: Path) -> AccountService:
     return AccountService(ServiceContext.default(tmp_path))
@@ -166,6 +168,77 @@ def test_import_accounts_csv_discards_rows_missing_username_or_password(
             "concurrency": 1,
         }
     ]
+
+
+def test_import_accounts_csv_without_header_uses_third_column_as_totp(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    csv_path = tmp_path / "accounts_no_header.csv"
+    csv_path.write_text(f"ok_one,secret-one,{TOTP_SECRET}\n", encoding="utf-8")
+
+    added_accounts: list[tuple[str, str, dict | None]] = []
+    stored_passwords: list[tuple[str, str]] = []
+    saved_totp: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(account_service_module.accounts_module, "list_all", lambda: [])
+
+    def _fake_add_account(username: str, alias: str, proxy: dict | None) -> bool:
+        added_accounts.append((username, alias, proxy))
+        return True
+
+    def _fake_store_password(username: str, password: str) -> None:
+        stored_passwords.append((username, password))
+
+    def _fake_save_totp_secret(username: str, secret: str) -> None:
+        saved_totp.append((username, secret))
+
+    monkeypatch.setattr(account_service_module.accounts_module, "add_account", _fake_add_account)
+    monkeypatch.setattr(account_service_module.accounts_module, "_store_account_password", _fake_store_password)
+    monkeypatch.setattr(account_service_module, "save_totp_secret", _fake_save_totp_secret)
+
+    result = service.import_accounts_csv("alias-a", csv_path)
+
+    assert result["added"] == 1
+    assert result["skipped"] == 0
+    assert result["imported_usernames"] == ["ok_one"]
+    assert added_accounts == [("ok_one", "alias-a", None)]
+    assert stored_passwords == [("ok_one", "secret-one")]
+    assert saved_totp == [("ok_one", TOTP_SECRET)]
+
+
+def test_import_accounts_csv_without_header_invalid_third_column_does_not_persist_totp(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    csv_path = tmp_path / "accounts_no_header_invalid_totp.csv"
+    csv_path.write_text("ok_one,secret-one,otpauth://bad\n", encoding="utf-8")
+
+    stored_passwords: list[tuple[str, str]] = []
+    saved_totp: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(account_service_module.accounts_module, "list_all", lambda: [])
+    monkeypatch.setattr(account_service_module.accounts_module, "add_account", lambda username, alias, proxy: True)
+    monkeypatch.setattr(
+        account_service_module.accounts_module,
+        "_store_account_password",
+        lambda username, password: stored_passwords.append((username, password)),
+    )
+    monkeypatch.setattr(
+        account_service_module,
+        "save_totp_secret",
+        lambda username, secret: saved_totp.append((username, secret)),
+    )
+
+    result = service.import_accounts_csv("alias-a", csv_path)
+
+    assert result["added"] == 1
+    assert result["skipped"] == 0
+    assert result["imported_usernames"] == ["ok_one"]
+    assert stored_passwords == [("ok_one", "secret-one")]
+    assert saved_totp == []
 
 
 @pytest.mark.parametrize(

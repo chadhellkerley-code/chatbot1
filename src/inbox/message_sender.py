@@ -39,6 +39,7 @@ class TaskDirectClient:
         telemetry_component: str = "inbox_message_sender",
         emit_spawn: bool = True,
         emit_session_telemetry: bool = True,
+        bypass_account_quota: bool = False,
     ) -> None:
         self._runtime = runtime
         self.account = dict(account or {})
@@ -51,6 +52,7 @@ class TaskDirectClient:
         self._last_open_thread_diag: dict[str, Any] = {}
         self._telemetry_component = str(telemetry_component or "inbox_message_sender").strip()
         self._emit_session_telemetry = bool(emit_session_telemetry)
+        self._bypass_account_quota = bool(bypass_account_quota)
         if emit_spawn:
             self._telemetry("spawn", "started", thread_id=self._thread_id)
 
@@ -321,25 +323,26 @@ class TaskDirectClient:
         if not content:
             self._telemetry("send_fail", "failed", thread_id=target_thread_id, reason="empty_text")
             return {"ok": False, "item_id": None, "reason": "empty_text"}
-        can_send, sent_today, limit = can_send_message_for_account(
-            account=self.account,
-            username=self.username,
-            default=None,
-        )
-        if not can_send:
-            self._telemetry(
-                "send_fail",
-                "failed",
-                thread_id=target_thread_id,
-                reason="account_quota_reached",
-                sent_today=sent_today,
-                limit=limit,
+        if not self._bypass_account_quota:
+            can_send, sent_today, limit = can_send_message_for_account(
+                account=self.account,
+                username=self.username,
+                default=None,
             )
-            return {
-                "ok": False,
-                "item_id": None,
-                "reason": f"account_quota_reached:{sent_today}/{limit}",
-            }
+            if not can_send:
+                self._telemetry(
+                    "send_fail",
+                    "failed",
+                    thread_id=target_thread_id,
+                    reason="account_quota_reached",
+                    sent_today=sent_today,
+                    limit=limit,
+                )
+                return {
+                    "ok": False,
+                    "item_id": None,
+                    "reason": f"account_quota_reached:{sent_today}/{limit}",
+                }
         ready_ok, ready_reason = self.ensure_thread_ready_strict(target_thread_id)
         if not ready_ok:
             self._telemetry(
@@ -516,16 +519,18 @@ class TaskDirectClient:
                     return {
                         "ok": True,
                         "item_id": str(latest.get("item_id") or "").strip() or f"confirmed-{int(time.time() * 1000)}",
+                        "timestamp": latest.get("timestamp"),
                         "reason": "endpoint_confirmed",
                     }
                 if allow_dom and normalized_expected and await _dom_has_recent_outbound_text(page, normalized_expected):
                     return {
                         "ok": True,
                         "item_id": f"dom-confirmed-{int(time.time() * 1000)}",
+                        "timestamp": None,
                         "reason": "dom_confirmed",
                     }
                 await page.wait_for_timeout(max(150, int(float(poll_interval_seconds or 0.8) * 1000.0)))
-            return {"ok": False, "item_id": None, "reason": "not_confirmed"}
+            return {"ok": False, "item_id": None, "timestamp": None, "reason": "not_confirmed"}
 
         return dict(self._runtime.run_async(_confirm()))
 
@@ -564,15 +569,17 @@ class TaskDirectClient:
                     "ok": True,
                     "item_id": str(latest.get("item_id") or "").strip()
                     or f"thread-read-confirmed-{int(time.time() * 1000)}",
+                    "timestamp": latest.get("timestamp"),
                     "reason": "thread_read_confirmed",
                 }
             if normalized_expected and await _dom_has_recent_outbound_text(page, normalized_expected):
                 return {
                     "ok": True,
                     "item_id": f"dom-confirmed-{int(time.time() * 1000)}",
+                    "timestamp": None,
                     "reason": "dom_confirmed",
                 }
-            return {"ok": False, "item_id": None, "reason": "thread_read_unconfirmed"}
+            return {"ok": False, "item_id": None, "timestamp": None, "reason": "thread_read_unconfirmed"}
 
         return dict(self._runtime.run_async(_confirm_from_thread()))
 
@@ -592,6 +599,7 @@ def send_manual_message(
         account,
         thread_id=thread.id,
         thread_href=thread.link,
+        bypass_account_quota=True,
     )
     try:
         result = client.send_text_with_ack(thread.id, content, timeout=4.0)
@@ -607,7 +615,7 @@ def send_manual_message(
             return {
                 "ok": True,
                 "message_id": message_id,
-                "timestamp": time.time(),
+                "timestamp": result.get("timestamp"),
                 "reason": str(result.get("reason") or "ok"),
             }
         return {
@@ -646,7 +654,7 @@ def reconcile_manual_message(
             return {
                 "ok": True,
                 "message_id": str(result.get("item_id") or "").strip(),
-                "timestamp": time.time(),
+                "timestamp": result.get("timestamp"),
                 "reason": str(result.get("reason") or "thread_read_confirmed"),
             }
         return {"ok": False, "reason": str(result.get("reason") or "thread_read_unconfirmed")}
@@ -663,6 +671,33 @@ def send_pack_messages(
     conversation_text: str,
     flow_config: dict[str, Any],
 ) -> dict[str, Any]:
+    sendable_actions = _count_pack_send_actions(pack)
+    account_id = str(account.get("username") or "").strip()
+    if sendable_actions <= 0:
+        return {
+            "ok": False,
+            "completed": False,
+            "sent_count": 0,
+            "reason": "pack_without_send_actions",
+            "error": "pack_without_send_actions",
+        }
+    can_send, sent_today, limit = can_send_message_for_account(
+        account=account,
+        username=account_id,
+        default=None,
+    )
+    if limit is not None:
+        remaining = max(0, int(limit or 0) - int(sent_today or 0))
+        if (not can_send) or remaining < sendable_actions:
+            reason = f"pack_quota_insufficient:{sent_today}/{limit}:need={sendable_actions}"
+            return {
+                "ok": False,
+                "completed": False,
+                "sent_count": 0,
+                "reason": reason,
+                "error": reason,
+            }
+
     thread = build_thread_like(thread_row)
     client = TaskDirectClient(
         runtime,
@@ -693,6 +728,22 @@ def send_pack_messages(
         return response
     finally:
         client.close()
+
+
+def _count_pack_send_actions(pack: dict[str, Any]) -> int:
+    actions = pack.get("actions")
+    if not isinstance(actions, list):
+        return 0
+    total = 0
+    for raw_action in actions:
+        if not isinstance(raw_action, dict):
+            continue
+        action_type = str(raw_action.get("type") or "").strip().lower()
+        if action_type == "text_fixed" and str(raw_action.get("content") or "").strip():
+            total += 1
+        elif action_type == "text_adaptive" and str(raw_action.get("instruction") or "").strip():
+            total += 1
+    return total
 
 
 def build_thread_like(thread_row: dict[str, Any]) -> ThreadLike:

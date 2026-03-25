@@ -25,7 +25,7 @@ from playwright.sync_api import sync_playwright
 
 from core.log_rotation import rotate_daily_file
 from core.storage_atomic import atomic_write_json
-from paths import runtime_base
+from paths import runtime_root, storage_root
 from src.runtime.playwright_resolver import (
     resolve_bundled_google_chrome_executable,
     resolve_google_chrome_executable,
@@ -51,6 +51,7 @@ PLAYWRIGHT_SAFE_MODE_ARGS = PLAYWRIGHT_BASE_FLAGS + [
 
 PLAYWRIGHT_BROWSER_MODE_DEFAULT = "default"
 PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY = "chrome_only"
+PLAYWRIGHT_BROWSER_MODE_MANAGED = "managed"
 
 _DRIVER_CRASH_TOKENS = (
     "connection closed while reading from the driver",
@@ -483,6 +484,17 @@ def _chrome_only_launch_candidates(
     return ordered
 
 
+def _managed_launch_executable(
+    executable_path: Optional[Union[str, Path]],
+    *,
+    headless: bool,
+) -> Optional[str]:
+    explicit = _normalized_executable(executable_path)
+    if explicit:
+        return explicit
+    return _normalized_executable(resolve_playwright_chromium_executable(headless=headless))
+
+
 def _browser_layer_failure(
     *,
     code: str,
@@ -545,6 +557,17 @@ async def _launch_browser(
         common_kwargs["proxy"] = dict(proxy)
 
     normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+    if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
+        managed_kwargs = dict(common_kwargs)
+        managed_executable = _managed_launch_executable(executable_path, headless=headless)
+        if managed_executable:
+            managed_kwargs["executable_path"] = managed_executable
+        browser = await playwright.chromium.launch(**managed_kwargs)
+        _emit_browser_layer_log(
+            f"Managed Playwright launch ok -> {managed_executable or 'default'}",
+            log_fn=log_fn,
+        )
+        return browser
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY:
         chrome_only_candidates = _chrome_only_launch_candidates(executable_path, headless=headless)
         if not chrome_only_candidates:
@@ -691,6 +714,17 @@ async def _launch_persistent_context(
         common_kwargs.update(kwargs)
 
     normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+    if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
+        managed_kwargs = dict(common_kwargs)
+        managed_executable = _managed_launch_executable(executable_path, headless=headless)
+        if managed_executable:
+            managed_kwargs["executable_path"] = managed_executable
+        context = await playwright.chromium.launch_persistent_context(**managed_kwargs)
+        _emit_browser_layer_log(
+            f"Managed Playwright persistent launch ok -> {managed_executable or 'default'}",
+            log_fn=log_fn,
+        )
+        return context
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY:
         chrome_only_candidates = _chrome_only_launch_candidates(executable_path, headless=headless)
         if not chrome_only_candidates:
@@ -810,6 +844,14 @@ def launch_sync_browser(
         launch_kwargs["proxy"] = dict(proxy)
     playwright = start_sync_playwright()
     normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+    if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
+        managed_kwargs = dict(launch_kwargs)
+        managed_executable = _managed_launch_executable(executable_path, headless=headless)
+        if managed_executable:
+            managed_kwargs["executable_path"] = managed_executable
+        browser = playwright.chromium.launch(**managed_kwargs)
+        _emit_browser_layer_log(f"Managed Playwright launch ok -> {managed_executable or 'default'}")
+        return browser
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY:
         chrome_only_candidates = _chrome_only_launch_candidates(executable_path, headless=headless)
         if not chrome_only_candidates:
@@ -916,6 +958,16 @@ def launch_sync_persistent_context(
         launch_kwargs.update(kwargs)
     playwright = start_sync_playwright()
     normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+    if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
+        managed_kwargs = dict(launch_kwargs)
+        managed_executable = _managed_launch_executable(executable_path, headless=headless)
+        if managed_executable:
+            managed_kwargs["executable_path"] = managed_executable
+        context = playwright.chromium.launch_persistent_context(**managed_kwargs)
+        _emit_browser_layer_log(
+            f"Managed Playwright persistent launch ok -> {managed_executable or 'default'}"
+        )
+        return context
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY:
         chrome_only_candidates = _chrome_only_launch_candidates(executable_path, headless=headless)
         if not chrome_only_candidates:
@@ -1030,7 +1082,7 @@ def _utc_now_iso() -> str:
 
 def _runtime_root() -> Path:
     default = Path(__file__).resolve().parents[2]
-    return runtime_base(default)
+    return runtime_root(default)
 
 
 class PlaywrightRuntime:
@@ -1042,7 +1094,7 @@ class PlaywrightRuntime:
     def __init__(self, *, headless: bool = False, owner_module: str = "") -> None:
         self.headless = bool(headless)
         self._root = _runtime_root()
-        self._storage_root = self._root / "storage"
+        self._storage_root = storage_root(Path(__file__).resolve().parents[2])
         self._storage_root.mkdir(parents=True, exist_ok=True)
         self._diagnostic_path = self._storage_root / "diagnostic_bundle.json"
         self._debug_log_path = self._storage_root / "playwright_debug.log"
@@ -1615,7 +1667,10 @@ class PlaywrightRuntime:
             return self._track_context(context)
         except Exception as exc:
             if is_driver_crash_error(exc) and not _retried:
-                if str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower() == PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY:
+                if str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower() in {
+                    PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+                    PLAYWRIGHT_BROWSER_MODE_MANAGED,
+                }:
                     await self._write_diagnostic_bundle(
                         executable_path=executable_path,
                         error=str(exc),

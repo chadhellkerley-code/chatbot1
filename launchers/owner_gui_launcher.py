@@ -13,7 +13,6 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from bootstrap import bootstrap_application
-from gui.gui_app import launch_gui_app
 
 
 def _has_owner_account_data(base: Path) -> bool:
@@ -53,5 +52,7 @@ if __name__ == "__main__":
     # El build owner no debe bloquearse por gate de licencia de distribucion.
     os.environ.setdefault("LICENSE_ALREADY_VALIDATED", "1")
     _maybe_reuse_owner_project_data()
-    bootstrap_application("owner")
+    bootstrap_application("owner", defer_housekeeping=True)
+    from gui.gui_app import launch_gui_app
+
     raise SystemExit(launch_gui_app(mode="owner"))

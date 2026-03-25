@@ -59,7 +59,8 @@ def test_create_authenticated_client_reuses_playwright_storage_state(tmp_path: P
         client.close()
 
 
-def test_create_authenticated_client_adds_instagram_headers_and_proxy_auth(tmp_path: Path) -> None:
+def test_create_authenticated_client_adds_instagram_headers_and_proxy_auth(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
     profiles_root = tmp_path / "profiles"
     storage_state = profiles_root / "worker_one" / "storage_state.json"
     storage_state.parent.mkdir(parents=True, exist_ok=True)
@@ -77,6 +78,19 @@ def test_create_authenticated_client_adds_instagram_headers_and_proxy_auth(tmp_p
         encoding="utf-8",
     )
 
+    import core.proxy_registry as proxy_registry  # type: ignore
+
+    proxy_registry.upsert_proxy_record(
+        {
+            "id": "proxy-1",
+            "server": "http://127.0.0.1:9000",
+            "user": "alice",
+            "pass": "secret",
+            "active": True,
+        },
+        tmp_path / "storage" / "accounts" / "proxies.json",
+    )
+
     client = create_authenticated_client(
         {
             "username": "worker_one",
@@ -84,9 +98,7 @@ def test_create_authenticated_client_adds_instagram_headers_and_proxy_auth(tmp_p
             "accept_language": "es-UY,es;q=0.9",
             "x_ig_app_id": "12345",
             "x_asbd_id": "67890",
-            "proxy_url": "http://127.0.0.1:9000",
-            "proxy_user": "alice",
-            "proxy_pass": "secret",
+            "assigned_proxy_id": "proxy-1",
         },
         reason="test",
         profiles_root=profiles_root,

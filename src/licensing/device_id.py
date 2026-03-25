@@ -53,7 +53,8 @@ def collect_device_identity(
         "unknown-user",
     )
     resolved_mac = _normalize_mac(mac_address if mac_address is not None else uuid.getnode())
-    seed = f"{resolved_hostname}|{resolved_user}|{resolved_mac}".encode("utf-8")
+    # Device identifier must be stable across username/hostname changes.
+    seed = resolved_mac.encode("utf-8")
     device_id = hashlib.sha256(seed).hexdigest()
     return DeviceIdentity(
         hostname=resolved_hostname,
@@ -74,3 +75,7 @@ def generate_device_id(
         os_user=os_user,
         mac_address=mac_address,
     ).device_id
+
+
+def get_device_id() -> str:
+    return generate_device_id()

@@ -19,5 +19,6 @@ if __name__ == "__main__":
         install_root_hint=_PROJECT_ROOT,
         app_root_hint=_PROJECT_ROOT,
         force=True,
+        defer_housekeeping=True,
     )
     raise SystemExit(launch_gui_app(mode="owner"))

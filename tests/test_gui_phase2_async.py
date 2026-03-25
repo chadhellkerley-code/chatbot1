@@ -16,7 +16,7 @@ from gui.main_window import MainWindow
 from gui.modules.leads.leads_page import LeadsHomePage
 from gui.page_base import GuiState, PageContext
 from gui.pages_automation_flow import AutomationFlowPage
-from gui.pages_system import SystemDiagnosticsPage
+from gui.pages_system import SystemConfigPage, SystemDiagnosticsPage
 from gui.query_runner import QueryManager
 from gui.task_runner import LogStore
 
@@ -65,13 +65,6 @@ class _FakeLeadsService:
     def list_lists(self) -> list[str]:
         return ["seed-list", "second-list"]
 
-    def list_filter_lists(self, *, status: str | None = None) -> list[dict[str, Any]]:
-        if status == "completed":
-            return [{"id": "done-1"}]
-        if status == "incomplete":
-            return [{"id": "pending-1"}, {"id": "pending-2"}]
-        return [{"id": "done-1"}, {"id": "pending-1"}, {"id": "pending-2"}]
-
 
 class _FakeSystemService:
     def __init__(self) -> None:
@@ -86,11 +79,6 @@ class _FakeSystemService:
 class _FakeInboxDiagnosticsService:
     def diagnostics(self) -> dict[str, Any]:
         return {"worker_count": 2, "queued_tasks": 3, "dedupe_pending": 1}
-
-
-class _FakeSystemLeadsService:
-    def list_filter_lists(self) -> list[dict[str, Any]]:
-        return [{"pending": 4}]
 
 
 class _FakeAutomationAccountsService:
@@ -175,7 +163,6 @@ def test_system_diagnostics_refresh_runs_off_main_thread(monkeypatch, tmp_path: 
     services = SimpleNamespace(
         system=_FakeSystemService(),
         inbox=_FakeInboxDiagnosticsService(),
-        leads=_FakeSystemLeadsService(),
         context=SimpleNamespace(root_dir=tmp_path),
     )
     ctx, queries = _build_ctx(services=services)
@@ -192,6 +179,36 @@ def test_system_diagnostics_refresh_runs_off_main_thread(monkeypatch, tmp_path: 
         assert all(thread_id != threading.get_ident() for thread_id in services.system.thread_ids)
     finally:
         page.on_navigate_from()
+        queries.shutdown()
+
+
+def test_system_config_page_renders_update_check_contract_without_nested_result() -> None:
+    _app()
+    services = SimpleNamespace(system=SimpleNamespace())
+    ctx, queries = _build_ctx(services=services)
+    page = SystemConfigPage(ctx)
+    try:
+        page._updates_request_id = 7
+        page._updates_loading = True
+
+        payload = {
+            "status": "up_to_date",
+            "checked": True,
+            "update_available": False,
+            "message": "Ya tienes la versión más reciente (1.0.0).",
+            "current_version": "1.0.0",
+            "latest_version": "1.0.0",
+            "update_info": {"version": "1.0.0"},
+            "github_repo": "demo/repo",
+        }
+
+        page._on_updates_loaded(7, payload)
+
+        rendered = page._updates_box.toPlainText()
+        assert '"status": "up_to_date"' in rendered
+        assert '"result"' not in rendered
+        assert page._status_label.text() == "Ya tienes la versión más reciente (1.0.0)."
+    finally:
         queries.shutdown()
 
 

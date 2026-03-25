@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -70,24 +69,9 @@ class _FakeDashboardSystem:
         }
 
 
-class _FakeDashboardLeads:
-    def list_filter_lists(self) -> list[dict[str, Any]]:
-        stamp = datetime.now(timezone.utc).isoformat()
-        return [
-            {
-                "items": [
-                    {"status": "DONE", "updated_at": stamp},
-                    {"status": "PENDING", "updated_at": stamp},
-                    {"status": "DONE", "updated_at": stamp},
-                ]
-            }
-        ]
-
-
 class _FakeDashboardServices:
     def __init__(self) -> None:
         self.system = _FakeDashboardSystem()
-        self.leads = _FakeDashboardLeads()
 
 
 class _FakeAccountsService:

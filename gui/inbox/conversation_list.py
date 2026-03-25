@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -130,108 +130,117 @@ class ConversationListDelegate(QStyledItemDelegate):
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        rect = option.rect.adjusted(6, 4, -6, -4)
+        rect = option.rect.adjusted(6, 3, -6, -3)
 
-        bg = QColor("#102038") if selected else QColor("#0d1727")
-        border = QColor("#4f86d6") if selected else QColor("#1f3550")
-        painter.setPen(QPen(border, 1.2))
+        bg = QColor("#11233a") if selected else QColor("#0d1728")
+        border = QColor("#52a8ff") if selected else QColor("#182a41")
+        painter.setPen(QPen(border, 1.0))
         painter.setBrush(bg)
-        painter.drawRoundedRect(rect, 16, 16)
+        painter.drawRoundedRect(rect, 14, 14)
 
-        avatar_rect = QRectF(rect.left() + 12, rect.top() + 12, 42, 42)
+        if selected:
+            accent_rect = QRectF(rect.left() + 1, rect.top() + 12, 3, rect.height() - 24)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#3cc7ff"))
+            painter.drawRoundedRect(accent_rect, 2, 2)
+
+        avatar_rect = QRectF(rect.left() + 12, rect.top() + 10, 36, 36)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#1f4e79") if selected else QColor("#173552"))
+        painter.setBrush(QColor("#1b4f79") if selected else QColor("#15324d"))
         painter.drawEllipse(avatar_rect)
 
-        painter.setPen(QColor("#f5f9ff"))
         avatar_font = QFont()
         avatar_font.setBold(True)
-        avatar_font.setPointSize(9)
+        avatar_font.setPointSize(8)
         painter.setFont(avatar_font)
+        painter.setPen(QColor("#f7fbff"))
         painter.drawText(avatar_rect, Qt.AlignCenter, _initials(str(row.get("display_name") or "")))
 
-        content_left = avatar_rect.right() + 12
+        content_left = avatar_rect.right() + 10
         content_right = rect.right() - 12
-        title_width = max(60.0, content_right - content_left - 54.0)
+        timestamp_rect = QRectF(content_right - 52, rect.top() + 10, 52, 16)
+        title_width = max(80.0, timestamp_rect.left() - content_left - 8.0)
 
         title_font = QFont()
         title_font.setBold(True)
-        title_font.setPointSize(10)
+        title_font.setPointSize(9)
         painter.setFont(title_font)
-        painter.setPen(QColor("#f5f9ff"))
+        painter.setPen(QColor("#f4f8ff"))
+        title = _title_text(row)
         painter.drawText(
-            QRectF(content_left, rect.top() + 10, title_width, 18),
+            QRectF(content_left, rect.top() + 8, title_width, 16),
             Qt.AlignLeft | Qt.AlignVCenter,
-            str(row.get("display_name") or "Conversacion").strip(),
+            _elided_text(title, painter.fontMetrics(), int(title_width)),
         )
 
         meta_font = QFont()
         meta_font.setPointSize(8)
         painter.setFont(meta_font)
-        painter.setPen(QColor("#8ea3bf"))
+        painter.setPen(QColor("#7d93ae"))
+        subtitle = _secondary_text(row)
         painter.drawText(
-            QRectF(content_left, rect.top() + 30, title_width, 16),
+            QRectF(content_left, rect.top() + 27, content_right - content_left, 14),
             Qt.AlignLeft | Qt.AlignVCenter,
-            f"desde @{str(row.get('account_id') or '-').strip() or '-'}",
+            _elided_text(subtitle, painter.fontMetrics(), int(content_right - content_left)),
         )
 
         preview_font = QFont()
-        preview_font.setPointSize(9)
+        preview_font.setPointSize(8)
         painter.setFont(preview_font)
-        painter.setPen(QColor("#d8e6f8"))
+        painter.setPen(QColor("#cfe0f4"))
+        preview = _preview_text(row)
         painter.drawText(
-            QRectF(content_left, rect.top() + 48, content_right - content_left, 38),
-            Qt.AlignLeft | Qt.TextWordWrap,
-            _preview_text(row),
+            QRectF(content_left, rect.top() + 45, content_right - content_left, 14),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            _elided_text(preview, painter.fontMetrics(), int(content_right - content_left)),
         )
 
         painter.setFont(meta_font)
-        painter.setPen(QColor("#9bb4d4"))
-        painter.drawText(
-            QRectF(content_right - 52, rect.top() + 12, 48, 14),
-            Qt.AlignRight | Qt.AlignVCenter,
-            _short_time(row.get("last_message_timestamp")),
-        )
+        painter.setPen(QColor("#8ea4be"))
+        painter.drawText(timestamp_rect, Qt.AlignRight | Qt.AlignVCenter, _short_time(row.get("last_message_timestamp")))
 
-        chip_y = rect.bottom() - 24
-        unread_count = _safe_int(row.get("unread_count"))
         badge_right = rect.right() - 12
+        unread_count = _safe_int(row.get("unread_count"))
         health_state = str(row.get("account_health") or "healthy").strip().lower()
-        if health_state != "healthy":
-            label = _health_badge_text(health_state)
-            width = max(64.0, min(112.0, 18.0 + (len(label) * 6.2)))
-            health_rect = QRectF(max(content_left, badge_right - width), rect.top() + 12, width, 18)
-            painter.setPen(QPen(QColor("#a85d2a"), 1.0))
-            painter.setBrush(QColor("#3f2618"))
-            painter.drawRoundedRect(health_rect, 9, 9)
-            painter.setPen(QColor("#ffd5ad"))
-            painter.drawText(health_rect, Qt.AlignCenter, label)
-            badge_right = health_rect.left() - 8
-        if unread_count > 0:
-            badge_rect = QRectF(badge_right - 28, chip_y, 28, 18)
-            painter.setPen(QPen(QColor("#335b96"), 1.0))
-            painter.setBrush(QColor("#14345d"))
-            painter.drawRoundedRect(badge_rect, 9, 9)
-            painter.setPen(QColor("#d9e8ff"))
-            painter.drawText(badge_rect, Qt.AlignCenter, str(unread_count))
-            badge_right -= 34
 
-        needs_reply = bool(row.get("needs_reply")) if "needs_reply" in row else (
-            str(row.get("last_message_direction") or "").strip().lower() == "inbound"
-        )
-        if needs_reply:
-            pending_rect = QRectF(max(content_left, badge_right - 88), chip_y, 84, 18)
-            painter.setPen(QPen(QColor("#2f5b98"), 1.0))
-            painter.setBrush(QColor("#102845"))
-            painter.drawRoundedRect(pending_rect, 9, 9)
-            painter.setPen(QColor("#9ec7ff"))
-            painter.drawText(pending_rect, Qt.AlignCenter, "Sin responder")
+        if unread_count > 0:
+            badge_right = _draw_badge(
+                painter,
+                badge_right=badge_right,
+                top=rect.top() + 44,
+                text=str(unread_count),
+                fill="#143760",
+                stroke="#2d5f93",
+                color="#deeeff",
+            )
+
+        if _needs_reply(row):
+            badge_right = _draw_badge(
+                painter,
+                badge_right=badge_right,
+                top=rect.top() + 44,
+                text="Sin responder",
+                fill="#0f2844",
+                stroke="#2d5a91",
+                color="#9ccaff",
+            )
+
+        if health_state != "healthy":
+            _draw_badge(
+                painter,
+                badge_right=rect.right() - 12,
+                top=rect.top() + 10,
+                text=_health_badge_text(health_state),
+                fill="#3e261b",
+                stroke="#9c6337",
+                color="#ffd4b0",
+            )
 
         painter.restore()
 
     def sizeHint(self, option, index: QModelIndex) -> QSize:  # type: ignore[override]
         del option, index
-        return QSize(280, 108)
+        return QSize(280, 76)
 
 
 class ConversationList(QWidget):
@@ -252,24 +261,29 @@ class ConversationList(QWidget):
         panel = QFrame()
         panel.setObjectName("InboxRailCard")
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(16, 16, 16, 16)
-        panel_layout.setSpacing(12)
+        panel_layout.setContentsMargins(14, 14, 14, 14)
+        panel_layout.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
 
         title = QLabel("Conversaciones")
         title.setObjectName("InboxSectionTitle")
-        panel_layout.addWidget(title)
+        title_row.addWidget(title, 1)
 
         self._summary = QLabel("Esperando sincronizacion")
         self._summary.setObjectName("InboxSummaryText")
-        panel_layout.addWidget(self._summary)
+        title_row.addWidget(self._summary, 0, Qt.AlignRight)
+        panel_layout.addLayout(title_row)
 
         filters = QHBoxLayout()
         filters.setContentsMargins(0, 0, 0, 0)
-        filters.setSpacing(8)
+        filters.setSpacing(6)
         self._filter_buttons = QButtonGroup(self)
         self._filter_buttons.setExclusive(True)
         for index, (label, value) in enumerate(
-            (("Todas", "all"), ("No leidas", "unread"), ("Sin responder", "pending"))
+            (("Todas", "all"), ("Agendar", "qualified"), ("Descalificadas", "disqualified"))
         ):
             button = QPushButton(label)
             button.setCheckable(True)
@@ -290,6 +304,7 @@ class ConversationList(QWidget):
         self._view.setSelectionMode(QListView.NoSelection)
         self._view.setVerticalScrollMode(QListView.ScrollPerPixel)
         self._view.setUniformItemSizes(False)
+        self._view.setSpacing(2)
         self._view.clicked.connect(self._handle_clicked)
         scrollbar = self._view.verticalScrollBar()
         scrollbar.valueChanged.connect(self._maybe_load_more)
@@ -302,10 +317,10 @@ class ConversationList(QWidget):
         if checked is None:
             return "all"
         text = str(checked.text() or "").strip().lower()
-        if "no leidas" in text or "no leidos" in text:
-            return "unread"
-        if "sin responder" in text:
-            return "pending"
+        if "agendar" in text or "calificadas" in text:
+            return "qualified"
+        if "descalificadas" in text:
+            return "disqualified"
         return "all"
 
     def set_threads(
@@ -318,18 +333,18 @@ class ConversationList(QWidget):
         visible_count = len(rows)
         overall = visible_count if total_count is None else max(visible_count, int(total_count))
         if visible_count == 0:
-            self._summary.setText("No hay conversaciones visibles para este filtro.")
+            self._summary.setText("Sin resultados")
         elif overall == visible_count:
-            self._summary.setText(f"{visible_count} conversaciones listas para gestionar.")
+            self._summary.setText(f"{visible_count} activas")
         else:
-            self._summary.setText(f"Mostrando {visible_count} de {overall} conversaciones.")
+            self._summary.setText(f"{visible_count}/{overall}")
 
         scrollbar = self._view.verticalScrollBar()
         previous_value = scrollbar.value()
         self._model.set_threads(rows, current_thread_key=current_thread_key)
         self._current_thread_key = str(current_thread_key or "").strip()
         if self._current_thread_key:
-            self._apply_selection(self._current_thread_key, emit_signal=False)
+            self._apply_selection(self._current_thread_key, emit_signal=False, scroll_into_view=False)
         else:
             self._model.set_current_thread("")
             self._view.clearSelection()
@@ -342,7 +357,7 @@ class ConversationList(QWidget):
             return
         self._apply_selection(thread_key, emit_signal=True)
 
-    def _apply_selection(self, thread_key: str, *, emit_signal: bool) -> None:
+    def _apply_selection(self, thread_key: str, *, emit_signal: bool, scroll_into_view: bool = True) -> None:
         clean_key = str(thread_key or "").strip()
         if not clean_key:
             return
@@ -352,7 +367,8 @@ class ConversationList(QWidget):
         if row >= 0:
             index = self._model.index(row, 0)
             self._view.setCurrentIndex(index)
-            self._view.scrollTo(index, QListView.PositionAtCenter)
+            if scroll_into_view:
+                self._view.scrollTo(index, QListView.PositionAtCenter)
         if emit_signal:
             self.conversationSelected.emit(clean_key)
 
@@ -366,6 +382,26 @@ class ConversationList(QWidget):
             scrollbar.setValue(value)
 
 
+def _draw_badge(
+    painter: QPainter,
+    *,
+    badge_right: float,
+    top: float,
+    text: str,
+    fill: str,
+    stroke: str,
+    color: str,
+) -> float:
+    width = max(24.0, min(108.0, 16.0 + (len(text) * 5.8)))
+    rect = QRectF(badge_right - width, top, width, 16)
+    painter.setPen(QPen(QColor(stroke), 1.0))
+    painter.setBrush(QColor(fill))
+    painter.drawRoundedRect(rect, 8, 8)
+    painter.setPen(QColor(color))
+    painter.drawText(rect, Qt.AlignCenter, text)
+    return rect.left() - 6
+
+
 def _initials(value: str) -> str:
     parts = [part for part in str(value or "").strip().split() if part]
     if not parts:
@@ -375,15 +411,32 @@ def _initials(value: str) -> str:
     return f"{parts[0][0]}{parts[1][0]}".upper()
 
 
+def _title_text(thread: dict[str, Any]) -> str:
+    return str(thread.get("display_name") or thread.get("recipient_username") or "Conversacion").strip() or "Conversacion"
+
+
+def _secondary_text(thread: dict[str, Any]) -> str:
+    recipient = str(thread.get("recipient_username") or "").strip()
+    if recipient:
+        return f"@{recipient}"
+    account_id = str(thread.get("account_id") or "").strip()
+    return f"Cuenta @{account_id}" if account_id else "Sin usuario"
+
+
 def _preview_text(thread: dict[str, Any]) -> str:
-    text = str(thread.get("last_message_text") or "").strip() or "Sin mensajes"
+    last_text = str(thread.get("last_message_text") or "").strip()
     direction = str(thread.get("last_message_direction") or "").strip().lower()
-    if direction == "outbound" and text != "Sin mensajes":
-        text = f"Tu: {text}"
-    compact = " ".join(text.split())
-    if len(compact) > 110:
-        return f"{compact[:107].rstrip()}..."
+    if not last_text:
+        return "Sin mensajes recientes"
+    prefix = "Tu: " if direction == "outbound" else ""
+    compact = f"{prefix}{last_text}"
+    if len(compact) > 140:
+        return f"{compact[:137].rstrip()}..."
     return compact
+
+
+def _elided_text(value: str, metrics: QFontMetrics, width: int) -> str:
+    return metrics.elidedText(str(value or "").strip(), Qt.ElideRight, max(12, int(width)))
 
 
 def _safe_int(value: Any) -> int:
@@ -391,6 +444,12 @@ def _safe_int(value: Any) -> int:
         return max(0, int(value or 0))
     except Exception:
         return 0
+
+
+def _needs_reply(thread: dict[str, Any]) -> bool:
+    return bool(thread.get("needs_reply")) if "needs_reply" in thread else (
+        str(thread.get("last_message_direction") or "").strip().lower() == "inbound"
+    )
 
 
 def _short_time(value: Any) -> str:
@@ -403,12 +462,7 @@ def _short_time(value: Any) -> str:
 
     stamp = datetime.fromtimestamp(timestamp)
     now = datetime.now()
-    delta_seconds = max(0, int((now - stamp).total_seconds()))
-
     if now.date() == stamp.date():
-        if delta_seconds < 3600:
-            minutes = max(1, delta_seconds // 60)
-            return f"{minutes}m"
         return stamp.strftime("%H:%M")
     if (now.date() - stamp.date()).days == 1:
         return "Ayer"

@@ -23,6 +23,12 @@ def _window() -> MainWindow:
     return MainWindow(mode="owner", services=services)
 
 
+def _client_window() -> MainWindow:
+    _app()
+    services = build_application_services(ROOT)
+    return MainWindow(mode="client", services=services)
+
+
 def _section_subnav_buttons(page: QWidget) -> list[QPushButton]:
     return [
         button
@@ -38,7 +44,7 @@ def test_main_window_uses_single_stacked_router_and_qwidgets():
         assert isinstance(window.router.stack, QStackedWidget)
         assert window.centralWidget() is not None
         assert window.router.current_route == "dashboard"
-        assert len(window.pages) >= 19
+        assert len(window.pages) >= 18
         assert "accounts_actions_page" in list(window.pages)
         assert all(isinstance(page, QWidget) for page in window.pages.values())
         assert not any(
@@ -125,9 +131,9 @@ def test_modular_sections_share_horizontal_subnav_pattern():
     try:
         expected = {
             "accounts_home": ["Alias", "Cuentas", "Proxies", "Acciones"],
-            "leads_home": ["Listas", "Plantillas", "Importar", "Filtrado"],
+            "leads_home": ["Listas", "Plantillas", "Importar"],
             "campaigns_home": ["Crear", "Monitor", "Historial"],
-            "automation_home": ["Config", "Autoresponder", "Packs", "Flow", "WhatsApp"],
+            "automation_home": ["Config", "Packs", "Flow"],
             "system_home": ["Licencias", "Logs", "Config", "Diagnostico"],
         }
 
@@ -145,7 +151,7 @@ def test_modular_sections_mark_active_subnav_on_inner_pages():
         cases = {
             "accounts_page": "Cuentas",
             "accounts_actions_page": "Acciones",
-            "leads_filter_page": "Filtrado",
+            "leads_import_page": "Importar",
             "campaign_monitor_page": "Monitor",
             "automation_packs_page": "Packs",
             "system_logs_page": "Logs",
@@ -160,6 +166,28 @@ def test_modular_sections_mark_active_subnav_on_inner_pages():
                 if bool(button.property("active"))
             ]
             assert active == [active_label]
+    finally:
+        window.close()
+
+
+def test_client_mode_hides_system_sidebar_and_routes():
+    window = _client_window()
+    try:
+        sidebar_labels = [button.text() for button in window._sidebar_buttons.values()]
+
+        assert "Sistema" not in sidebar_labels
+        assert "system_home" not in window._sidebar_buttons
+        assert "system_home" not in list(window.pages)
+        assert "system_license_page" not in list(window.pages)
+
+        window.open_route("accounts_home")
+        assert window.router.current_route == "accounts_home"
+
+        window.open_route("system_home")
+        assert window.router.current_route == "dashboard"
+
+        window.open_route("system_diagnostics_page")
+        assert window.router.current_route == "dashboard"
     finally:
         window.close()
 

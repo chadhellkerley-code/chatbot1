@@ -195,3 +195,191 @@ def test_new_context_for_account_migrates_legacy_profile_before_launch(monkeypat
     asyncio.run(service.new_context_for_account(profile_dir=profile_dir, storage_state=None, proxy=None))
 
     assert migrated == [profile_dir]
+
+
+def test_compute_visible_window_rects_tiles_two_windows_side_by_side() -> None:
+    area = playwright_service._WorkAreaRect(left=0, top=0, width=1440, height=900)
+
+    rects = playwright_service._compute_visible_window_rects(2, work_area=area)
+
+    assert len(rects) == 2
+    assert rects[0].top == rects[1].top
+    assert rects[0].left < rects[1].left
+    assert rects[0].width < area.width
+    assert rects[0].height <= area.height
+
+
+def test_compute_visible_window_rects_keeps_single_window_compact() -> None:
+    area = playwright_service._WorkAreaRect(left=0, top=0, width=1440, height=900)
+
+    rects = playwright_service._compute_visible_window_rects(1, work_area=area)
+
+    assert len(rects) == 1
+    assert rects[0].width <= 860
+    assert rects[0].height <= 760
+    assert rects[0].left > 0
+    assert rects[0].top > 0
+
+
+def test_visible_campaign_layout_manager_returns_initial_rect_for_single_window() -> None:
+    manager = playwright_service._VisibleCampaignLayoutManager()
+
+    config = asyncio.run(
+        manager.before_context_launch(
+            {
+                "scope": "campaign:single-window",
+                "target_count": 1,
+                "layout_policy": "compact",
+                "stagger_min_ms": 300,
+                "stagger_max_ms": 800,
+            }
+        )
+    )
+
+    assert config is not None
+    assert config["layout_policy"] == "compact"
+    assert isinstance(config["initial_rect"], playwright_service._WindowRect)
+    assert config["initial_rect"].width <= 860
+    assert config["initial_rect"].height <= 760
+
+
+def test_compute_visible_window_rects_uses_compact_cascade_for_dense_layouts() -> None:
+    area = playwright_service._WorkAreaRect(left=0, top=0, width=1440, height=900)
+
+    rects = playwright_service._compute_visible_window_rects(10, work_area=area)
+
+    assert len(rects) == 10
+    assert len({rect.width for rect in rects}) == 1
+    assert len({rect.height for rect in rects}) == 1
+    assert rects[0].left < rects[4].left < rects[8].left
+    assert rects[0].top < rects[4].top < rects[8].top
+
+
+def test_new_context_for_account_uses_visible_campaign_layout_manager(monkeypatch, tmp_path: Path) -> None:
+    profile_dir = tmp_path / "tester"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _FakeContext()
+    runtime = _FakeRuntime(ctx)
+    service = playwright_service.PlaywrightService(headless=False, base_profiles=tmp_path)
+    service._runtime = runtime
+
+    observed: dict[str, Any] = {}
+
+    class _FakeLayoutManager:
+        async def before_context_launch(self, config):
+            observed["before"] = dict(config)
+            return {"scope": str(config["scope"]), "target_count": int(config["target_count"])}
+
+        async def attach_context(self, config, *, ctx, page) -> None:
+            observed["attach"] = {
+                "config": dict(config),
+                "ctx": ctx,
+                "page": page,
+            }
+
+        async def release_context(self, config, *, ctx) -> None:
+            observed["release"] = {"config": dict(config), "ctx": ctx}
+
+    monkeypatch.setattr(playwright_service, "_VISIBLE_CAMPAIGN_LAYOUT_MANAGER", _FakeLayoutManager())
+
+    async def _fake_focus_visible_page(page) -> None:
+        observed["focus"] = page
+
+    monkeypatch.setattr(playwright_service, "_focus_visible_page", _fake_focus_visible_page)
+
+    returned_ctx = asyncio.run(
+        service.new_context_for_account(
+            profile_dir=profile_dir,
+            storage_state=None,
+            proxy=None,
+            visible_browser_layout={
+                "scope": "campaign:run-123",
+                "target_count": 4,
+                "stagger_min_ms": 300,
+                "stagger_max_ms": 800,
+            },
+        )
+    )
+
+    assert returned_ctx is ctx
+    assert observed["before"]["scope"] == "campaign:run-123"
+    assert observed["before"]["target_count"] == 4
+    assert observed["attach"]["config"] == {
+        "scope": "campaign:run-123",
+        "target_count": 4,
+    }
+    assert observed["attach"]["ctx"] is ctx
+    assert observed["attach"]["page"] is ctx.pages[0]
+    assert observed["focus"] is ctx.pages[0]
+
+
+def test_new_context_for_account_launches_campaign_visible_windows_compact(monkeypatch, tmp_path: Path) -> None:
+    profile_dir = tmp_path / "tester"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _FakeContext()
+    runtime = _FakeRuntime(ctx)
+    service = playwright_service.PlaywrightService(headless=False, base_profiles=tmp_path)
+    service._runtime = runtime
+
+    class _FakeLayoutManager:
+        async def before_context_launch(self, config):
+            assert config["layout_policy"] == "compact"
+            return {
+                "scope": str(config["scope"]),
+                "target_count": int(config["target_count"]),
+                "layout_policy": "compact",
+                "initial_rect": {
+                    "left": 40,
+                    "top": 60,
+                    "width": 640,
+                    "height": 480,
+                },
+            }
+
+        async def attach_context(self, config, *, ctx, page) -> None:
+            return None
+
+        async def release_context(self, config, *, ctx) -> None:
+            return None
+
+    monkeypatch.setattr(playwright_service, "_VISIBLE_CAMPAIGN_LAYOUT_MANAGER", _FakeLayoutManager())
+
+    asyncio.run(
+        service.new_context_for_account(
+            profile_dir=profile_dir,
+            storage_state=None,
+            proxy=None,
+            visible_browser_layout={
+                "scope": "campaign:run-123",
+                "target_count": 4,
+                "layout_policy": "compact",
+                "stagger_min_ms": 300,
+                "stagger_max_ms": 800,
+            },
+        )
+    )
+
+    assert runtime.calls[0]["launch_args"] == playwright_service.build_launch_args(
+        headless=False,
+        locale=playwright_service.DEFAULT_LOCALE,
+        initial_window_rect=playwright_service._WindowRect(left=40, top=60, width=640, height=480),
+    )
+    assert "--start-maximized" not in runtime.calls[0]["launch_args"]
+    assert runtime.calls[0]["viewport_kwargs"] == {"no_viewport": True}
+
+
+def test_apply_window_rect_logs_when_cdp_is_unavailable(caplog: pytest.LogCaptureFixture) -> None:
+    class _NoCdpPage:
+        context = object()
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(
+            playwright_service._VisibleCampaignLayoutManager._apply_window_rect(
+                _NoCdpPage(),
+                playwright_service._WindowRect(left=10, top=20, width=640, height=480),
+            )
+        )
+
+    assert "CDP is unavailable" in caplog.text

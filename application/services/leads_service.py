@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import shutil
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,9 +27,9 @@ from core.templates_store import (
     save_template_state_file,
     save_templates_file,
 )
-from runtime.runtime import request_stop
+from paths import storage_root
 
-from .base import ServiceContext, ServiceError, dedupe_usernames, normalize_alias
+from .base import ServiceContext, ServiceError, dedupe_usernames
 
 logger = logging.getLogger(__name__)
 
@@ -378,15 +377,15 @@ class LeadsService:
         return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     def _legacy_leads_path(self) -> Path:
-        return Path(self.context.root_dir) / "storage" / "leads"
+        return self._legacy_storage_root() / "leads"
 
-    def _legacy_filter_path(self) -> Path:
-        return Path(self.context.root_dir) / "storage" / "lead_filters"
+    def _legacy_storage_root(self) -> Path:
+        return storage_root(Path(self.context.root_dir), scoped=False, honor_env=False)
 
     def _template_storage_roots(self) -> list[Path]:
         candidates = [
             self.context.storage_path(),
-            Path(self.context.root_dir) / "storage",
+            self._legacy_storage_root(),
             Path(self.context.root_dir) / "data",
         ]
         roots: list[Path] = []
@@ -483,7 +482,6 @@ class LeadsService:
 
     def _sync_legacy_storage(self) -> None:
         self._sync_legacy_lead_lists()
-        self._sync_legacy_filter_storage()
         self._sync_legacy_template_storage()
         leads_module.refresh_runtime_paths(self.context.root_dir)
         self._list_store = LeadListStore(self.context.leads_path())
@@ -516,37 +514,6 @@ class LeadsService:
                 continue
             primary_store.save(name, legacy_store.load(name))
 
-    def _sync_legacy_filter_storage(self) -> None:
-        primary_root = self.context.storage_path("lead_filters")
-        legacy_root = self._legacy_filter_path()
-        try:
-            if primary_root.resolve() == legacy_root.resolve():
-                return
-        except Exception:
-            pass
-        if not legacy_root.exists():
-            return
-
-        primary_root.mkdir(parents=True, exist_ok=True)
-        primary_lists_dir = primary_root / "lists"
-        primary_lists_dir.mkdir(parents=True, exist_ok=True)
-        legacy_lists_dir = legacy_root / "lists"
-
-        primary_has_lists = any(primary_lists_dir.glob("*.json"))
-        if not primary_has_lists and legacy_lists_dir.exists():
-            for candidate in legacy_lists_dir.glob("*.json"):
-                target = primary_lists_dir / candidate.name
-                if target.exists():
-                    continue
-                shutil.copy2(candidate, target)
-
-        for relative_name in ("filters_config.json", "account_http_meta.json"):
-            legacy_file = legacy_root / relative_name
-            primary_file = primary_root / relative_name
-            if primary_file.exists() or not legacy_file.exists():
-                continue
-            shutil.copy2(legacy_file, primary_file)
-
     def _sync_legacy_template_storage(self) -> None:
         roots = self._template_storage_roots()
         if not roots:
@@ -577,41 +544,6 @@ class LeadsService:
             save_templates_file(primary_templates_path, merged_templates)
         if state_changed:
             save_template_state_file(primary_state_path, merged_state)
-
-    def default_filter_config(self) -> dict[str, Any]:
-        text_defaults = getattr(leads_module, "_default_text_engine_thresholds_payload", None)
-        image_defaults = getattr(leads_module, "_default_image_engine_thresholds_payload", None)
-        return {
-            "classic": {
-                "min_followers": 0,
-                "min_posts": 0,
-                "privacy": "any",
-                "link_in_bio": "any",
-                "include_keywords": [],
-                "exclude_keywords": [],
-                "language": "any",
-                "min_followers_state": leads_module.FILTER_STATE_DISABLED,
-                "min_posts_state": leads_module.FILTER_STATE_DISABLED,
-                "privacy_state": leads_module.FILTER_STATE_DISABLED,
-                "link_in_bio_state": leads_module.FILTER_STATE_DISABLED,
-                "include_keywords_state": leads_module.FILTER_STATE_DISABLED,
-                "exclude_keywords_state": leads_module.FILTER_STATE_DISABLED,
-                "language_state": leads_module.FILTER_STATE_DISABLED,
-            },
-            "text": {
-                "enabled": False,
-                "criteria": "",
-                "model_path": "",
-                "state": leads_module.FILTER_STATE_DISABLED,
-                "engine_thresholds": text_defaults() if callable(text_defaults) else {},
-            },
-            "image": {
-                "enabled": False,
-                "prompt": "",
-                "state": leads_module.FILTER_STATE_DISABLED,
-                "engine_thresholds": image_defaults() if callable(image_defaults) else {},
-            },
-        }
 
     def list_lists(self) -> list[str]:
         return list(self._list_store.list_names())
@@ -924,281 +856,3 @@ class LeadsService:
         self._template_store.save_templates(kept)
         return 1
 
-    def load_filter_config(self) -> dict[str, Any]:
-        cfg = leads_module._load_filter_config()
-        if cfg is None:
-            return {}
-        return leads_module._filter_config_to_dict(cfg)
-
-    def effective_filter_config(self) -> dict[str, Any]:
-        payload = self.load_filter_config()
-        if payload:
-            return payload
-        return self.default_filter_config()
-
-    def save_filter_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        cfg = leads_module._filter_config_from_dict(dict(payload or {}))
-        if cfg is None:
-            raise ServiceError("Configuracion de filtrado invalida.")
-        leads_module._save_filter_config(cfg)
-        return leads_module._filter_config_to_dict(cfg)
-
-    def delete_filter_config(self) -> bool:
-        path = leads_module.FILTER_CONFIG_PATH
-        if not path.exists():
-            return False
-        path.unlink()
-        return True
-
-    def list_filter_lists(self, *, status: str | None = None) -> list[dict[str, Any]]:
-        rows = leads_module._load_filter_lists()
-        for row in rows:
-            leads_module._refresh_list_stats(row)
-            row["pending"] = int(leads_module._pending_count(row))
-            row["source_list"] = str(row.get("source_list") or row.get("list_name") or "")
-        if not status:
-            return rows
-        status_value = str(status or "").strip().lower()
-        if status_value == "completed":
-            return [item for item in rows if leads_module._pending_count(item) == 0]
-        if status_value == "incomplete":
-            return [item for item in rows if leads_module._pending_count(item) > 0]
-        return rows
-
-    def list_filter_list_summaries(self, *, status: str | None = None) -> list[dict[str, Any]]:
-        rows = leads_module._load_filter_list_summaries(status=status)
-        for row in rows:
-            row["pending"] = int(row.get("pending") or 0)
-            row["source_list"] = str(row.get("source_list") or row.get("list_name") or "")
-            row["processed"] = int(row.get("processed") or 0)
-            row["qualified"] = int(row.get("qualified") or 0)
-            row["discarded"] = int(row.get("discarded") or 0)
-            row["total"] = int(row.get("total") or 0)
-            row["errors"] = int(row.get("errors") or 0)
-        return rows
-
-    def create_filter_list(
-        self,
-        usernames: list[str],
-        *,
-        export_alias: str,
-        filters: dict[str, Any],
-        run: dict[str, Any],
-        source_list: str = "",
-    ) -> dict[str, Any]:
-        clean_usernames = dedupe_usernames(usernames)
-        if not clean_usernames:
-            raise ServiceError("No hay usernames para filtrar.")
-        filter_cfg = leads_module._filter_config_from_dict(dict(filters or {}))
-        if filter_cfg is None:
-            raise ServiceError("Configuracion de filtros invalida.")
-        run_cfg = leads_module._run_config_from_dict(dict(run or {}))
-        if run_cfg is None:
-            raise ServiceError("Configuracion de ejecucion invalida.")
-        data = leads_module._create_filter_list(clean_usernames)
-        data["export_alias"] = normalize_alias(export_alias, default="leads_filtrados")
-        data["filters"] = leads_module._filter_config_to_dict(filter_cfg)
-        data["run"] = leads_module._run_config_to_dict(run_cfg)
-        data["source_list"] = str(source_list or "").strip()
-        leads_module._save_filter_list(data)
-        return data
-
-    def create_filter_list_from_source(
-        self,
-        source_list: str,
-        *,
-        export_alias: str,
-        filters: dict[str, Any],
-        run: dict[str, Any],
-    ) -> dict[str, Any]:
-        clean_source = str(source_list or "").strip()
-        usernames = self.load_list(clean_source)
-        if not usernames:
-            raise ServiceError("La lista origen no tiene usernames para filtrar.")
-        return self.create_filter_list(
-            usernames,
-            export_alias=export_alias,
-            filters=filters,
-            run=run,
-            source_list=clean_source,
-        )
-
-    def find_filter_list(self, list_id: str) -> dict[str, Any]:
-        clean_id = str(list_id or "").strip()
-        if not clean_id:
-            raise ServiceError("ID de lista invalido.")
-        item = leads_module._load_filter_list_by_id(clean_id)
-        if item:
-            leads_module._refresh_list_stats(item)
-            item["pending"] = int(leads_module._pending_count(item))
-            item["source_list"] = str(item.get("source_list") or item.get("list_name") or "")
-            return item
-        raise ServiceError(f"No se encontro la lista de filtrado {clean_id}.")
-
-    def delete_filter_list(self, list_id: str) -> None:
-        item = self.find_filter_list(list_id)
-        leads_module._delete_filter_list(item)
-
-    def filter_list_result_rows(self, list_id: str) -> list[dict[str, Any]]:
-        list_data = self.find_filter_list(list_id)
-        rows = [dict(item) for item in list_data.get("items") or [] if isinstance(item, dict)]
-        rows.sort(
-            key=lambda item: (
-                str(item.get("updated_at") or ""),
-                str(item.get("username") or ""),
-            ),
-            reverse=True,
-        )
-        return rows
-
-    def update_filter_list_settings(
-        self,
-        list_id: str,
-        *,
-        filters: dict[str, Any],
-        run: dict[str, Any],
-        export_alias: str = "",
-    ) -> dict[str, Any]:
-        list_data = self.find_filter_list(list_id)
-        filter_cfg = leads_module._filter_config_from_dict(dict(filters or {}))
-        if filter_cfg is None:
-            raise ServiceError("Configuracion de filtros invalida.")
-        run_cfg = leads_module._run_config_from_dict(dict(run or {}))
-        if run_cfg is None:
-            raise ServiceError("Configuracion de ejecucion invalida.")
-        list_data["filters"] = leads_module._filter_config_to_dict(filter_cfg)
-        list_data["run"] = leads_module._run_config_to_dict(run_cfg)
-        if export_alias:
-            list_data["export_alias"] = normalize_alias(export_alias, default="leads_filtrados")
-        leads_module._save_filter_list(list_data)
-        return list_data
-
-    def restart_filter_list(
-        self,
-        list_id: str,
-        *,
-        filters: dict[str, Any],
-        run: dict[str, Any],
-        export_alias: str = "",
-    ) -> dict[str, Any]:
-        list_data = self.find_filter_list(list_id)
-        usernames = [
-            str(item.get("username") or "").strip()
-            for item in list_data.get("items") or []
-            if isinstance(item, dict) and str(item.get("username") or "").strip()
-        ]
-        return self.create_filter_list(
-            usernames,
-            export_alias=export_alias or str(list_data.get("export_alias") or ""),
-            filters=filters,
-            run=run,
-            source_list=str(list_data.get("source_list") or ""),
-        )
-
-    def finalize_stopped_filter_list(
-        self,
-        list_id: str,
-        *,
-        action: str,
-        export_alias: str = "",
-    ) -> dict[str, Any]:
-        list_data = self.find_filter_list(list_id)
-        leads_module._refresh_list_stats(list_data)
-        action_value = str(action or "keep").strip().lower() or "keep"
-        alias = normalize_alias(
-            export_alias or str(list_data.get("export_alias") or ""),
-            default="leads_filtrados",
-        )
-        qualified = leads_module._collect_qualified_usernames(list_data)
-
-        if action_value == "export":
-            list_data["export_alias"] = alias
-            leads_module._save_filter_list(list_data)
-            if qualified:
-                leads_module._export_to_alias(alias, qualified)
-            return {
-                "action": action_value,
-                "alias": alias,
-                "exported": len(qualified),
-                "processed": int(list_data.get("processed") or 0),
-                "qualified": int(list_data.get("qualified") or 0),
-                "discarded": int(list_data.get("discarded") or 0),
-                "pending": int(leads_module._pending_count(list_data)),
-            }
-
-        if action_value == "keep":
-            leads_module._save_filter_list(list_data)
-            return {
-                "action": action_value,
-                "alias": alias,
-                "exported": 0,
-                "processed": int(list_data.get("processed") or 0),
-                "qualified": int(list_data.get("qualified") or 0),
-                "discarded": int(list_data.get("discarded") or 0),
-                "pending": int(leads_module._pending_count(list_data)),
-            }
-
-        if action_value == "delete":
-            leads_module._delete_filter_list(list_data)
-            return {
-                "action": action_value,
-                "alias": alias,
-                "exported": 0,
-                "processed": int(list_data.get("processed") or 0),
-                "qualified": int(list_data.get("qualified") or 0),
-                "discarded": int(list_data.get("discarded") or 0),
-                "pending": int(leads_module._pending_count(list_data)),
-            }
-
-        raise ServiceError("Accion final de filtrado invalida.")
-
-    def stop_filtering(
-        self,
-        reason: str = "stop requested from leads GUI",
-        *,
-        task_runner: Any | None = None,
-    ) -> None:
-        clean_reason = str(reason or "").strip() or "stop requested from leads GUI"
-        request_task_stop = getattr(task_runner, "request_task_stop", None)
-        if callable(request_task_stop):
-            request_task_stop("leads_filter", clean_reason)
-            return
-        request_stop(clean_reason)
-
-    def execute_filter_list(self, list_id: str) -> dict[str, Any]:
-        list_data = self.find_filter_list(list_id)
-        filter_cfg = leads_module._filter_config_from_dict(list_data.get("filters") or {})
-        if filter_cfg is None:
-            filter_cfg = leads_module._load_filter_config()
-        if filter_cfg is None:
-            raise ServiceError("No hay filtros configurados para ejecutar.")
-        run_cfg = leads_module._run_config_from_dict(list_data.get("run") or {})
-        if run_cfg is None:
-            raise ServiceError("No hay configuracion de ejecucion para la lista.")
-
-        leads_module._verify_dependencies_for_run(filter_cfg)
-        if not list_data.get("export_alias"):
-            list_data["export_alias"] = normalize_alias(
-                "leads_filtrados",
-                default="leads_filtrados",
-            )
-            leads_module._save_filter_list(list_data)
-
-        print("Ejecutando filtrado... (presiona Q para detener)")
-        print("Inicializando cuentas y scheduler...")
-        stopped = leads_module._run_async(
-            leads_module._execute_filter_list_async(list_data, filter_cfg, run_cfg)
-        )
-        leads_module._save_filter_list(list_data)
-        if not stopped:
-            leads_module._auto_export_on_complete(list_data)
-        return {
-            "list_id": str(list_data.get("id") or ""),
-            "source_list": str(list_data.get("source_list") or ""),
-            "export_alias": str(list_data.get("export_alias") or ""),
-            "stopped": bool(stopped),
-            "processed": int(list_data.get("processed") or 0),
-            "qualified": int(list_data.get("qualified") or 0),
-            "discarded": int(list_data.get("discarded") or 0),
-            "pending": int(leads_module._pending_count(list_data)),
-        }

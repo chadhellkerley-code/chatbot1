@@ -21,6 +21,7 @@ import requests
 
 from config import SETTINGS, read_env_local, refresh_settings, update_env_local
 from core.storage_atomic import atomic_write_json, atomic_write_text, load_json_file
+from paths import storage_root
 from supabase_migrations import ensure_licenses_table as run_ensure_licenses_table
 from ui import Fore, banner, full_line, style_text
 from utils import ask, ask_int, ok, press_enter, warn
@@ -44,7 +45,7 @@ _TABLE_SQL = textwrap.dedent(
     );
     """
 ).strip()
-_STORAGE_ROOT = Path(__file__).resolve().parent / "storage"
+_STORAGE_ROOT = storage_root(Path(__file__).resolve().parent)
 _PAYLOAD_PATH = _STORAGE_ROOT / "license_payload.json"
 _LICENSES_FILE = _STORAGE_ROOT / "licenses.json"
 

@@ -40,7 +40,7 @@ class BrowserPool:
                 and current.account_id == account_id
                 and active_thread_key == thread_key
             ):
-                return {"ok": True, "reason": "already_prepared"}
+                return current.prepare(thread_row)
         account = self._accounts_provider(account_id)
         if not isinstance(account, dict):
             return {"ok": False, "reason": "account_not_found"}

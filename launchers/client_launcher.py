@@ -17,7 +17,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from bootstrap import bootstrap_application
 from runtime.runtime_parity import bootstrap_runtime_env
 
-_BOOTSTRAP_CONTEXT = bootstrap_application("client")
+_BOOTSTRAP_CONTEXT = bootstrap_application("client", defer_housekeeping=True)
 
 
 def _bootstrap_playwright_env() -> None:

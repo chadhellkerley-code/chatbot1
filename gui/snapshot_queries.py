@@ -1,63 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core import storage as storage_module
 from core.session_store import list_saved_sessions
 from paths import browser_profiles_root, sessions_root
 from src.dm_campaign.contracts import CampaignCapacity, CampaignRunSnapshot, CampaignRunStatus
 from src.playwright_service import resolve_playwright_executable
 
 from .page_base import message_limit, safe_float, safe_int
-
-
-def _dashboard_today() -> datetime.date:
-    tzinfo = getattr(storage_module, "TZ", None)
-    if tzinfo is None:
-        return datetime.now().astimezone().date()
-    return datetime.now(tzinfo).date()
-
-
-def _lead_filter_summary_rows(services: Any, *, status: str | None = None) -> list[dict[str, Any]]:
-    summary_getter = getattr(services.leads, "list_filter_list_summaries", None)
-    if callable(summary_getter):
-        try:
-            rows = summary_getter(status=status)
-        except TypeError:
-            rows = summary_getter()
-        return list(rows) if isinstance(rows, list) else []
-    try:
-        rows = services.leads.list_filter_lists(status=status)
-    except TypeError:
-        rows = services.leads.list_filter_lists()
-    return list(rows) if isinstance(rows, list) else []
-
-
-def _leads_processed_today(services: Any) -> int:
-    today = _dashboard_today()
-    tzinfo = getattr(storage_module, "TZ", None)
-    total = 0
-    for row in services.leads.list_filter_lists():
-        if not isinstance(row, dict):
-            continue
-        for item in row.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("status") or "").strip().upper() == "PENDING":
-                continue
-            updated_at = str(item.get("updated_at") or "").strip()
-            if not updated_at:
-                continue
-            try:
-                stamp = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-                local_stamp = stamp.astimezone(tzinfo) if tzinfo is not None else stamp.astimezone()
-            except Exception:
-                continue
-            if local_stamp.date() == today:
-                total += 1
-    return total
 
 
 def build_dashboard_snapshot(services: Any, tasks: Any, *, active_alias: str) -> dict[str, Any]:
@@ -74,7 +25,6 @@ def build_dashboard_snapshot(services: Any, tasks: Any, *, active_alias: str) ->
             "messages_error_today": safe_int(metrics.get("messages_error_today")),
             "replies_received_today": safe_int(metrics.get("messages_replied_today")),
             "active_campaigns": 1 if tasks.is_running("campaign") else 0,
-            "leads_processed_today": _leads_processed_today(services),
         },
         "summary": (
             "Alias activo: "
@@ -169,6 +119,10 @@ def _build_account_row(services: Any, record: dict[str, Any]) -> dict[str, Any]:
     row = dict(record)
     connected = bool(services.accounts.connected_status(record))
     health = str(services.accounts.health_badge(record) or "-").strip() or "-"
+    connected_label = "Si" if connected else "No"
+    row["connected"] = connected
+    row["connected_label"] = connected_label
+    row["health_badge"] = health
     eligibility_resolver = getattr(services.accounts, "manual_action_eligibility", None)
     proxy_display_resolver = getattr(services.accounts, "proxy_display_for_account", None)
     login_progress_resolver = getattr(services.accounts, "login_progress_for_account", None)
@@ -187,9 +141,6 @@ def _build_account_row(services: Any, record: dict[str, Any]) -> dict[str, Any]:
         if callable(login_progress_resolver)
         else {"active": False, "state": "", "message": "", "label": "", "updated_at": ""}
     )
-    row["connected"] = connected
-    row["connected_label"] = "Si" if connected else "No"
-    row["health_badge"] = health
     row["proxy_label"] = str(proxy_display.get("label") or "-")
     row["proxy_status"] = str(proxy_display.get("status") or "unknown")
     row["login_progress_active"] = bool(login_progress.get("active"))
@@ -378,18 +329,13 @@ def _read_text_file_since(path: Path, cursor: int | None) -> tuple[int, str, boo
 def build_leads_home_snapshot(services: Any) -> dict[str, Any]:
     templates = len(services.leads.list_templates())
     lists_total = len(services.leads.list_lists())
-    completed = len(_lead_filter_summary_rows(services, status="completed"))
-    incomplete = len(_lead_filter_summary_rows(services, status="incomplete"))
     return {
         "values": {
             "templates": templates,
             "lists": lists_total,
-            "completed": completed,
-            "pending": incomplete,
         },
         "summary": (
-            f"Plantillas: {templates}  |  Listas: {lists_total}  |  "
-            f"Filtrados completos: {completed}  |  Pendientes: {incomplete}"
+            f"Plantillas: {templates}  |  Listas: {lists_total}"
         ),
     }
 
@@ -443,76 +389,6 @@ def build_leads_import_snapshot(services: Any) -> dict[str, Any]:
             "escribiendo su nombre en el destino."
         ),
     }
-
-
-def build_leads_filter_config_snapshot(services: Any) -> dict[str, Any]:
-    return {"payload": services.leads.effective_filter_config()}
-
-
-def build_leads_filter_runner_snapshot(
-    services: Any,
-    *,
-    active_alias: str,
-    current_source: str,
-    current_account_alias: str,
-    current_export_alias: str,
-) -> dict[str, Any]:
-    source_lists = services.leads.list_lists()
-    account_aliases = services.accounts.list_aliases()
-    export_aliases = list(account_aliases)
-    completed_rows = _lead_filter_summary_rows(services, status="completed")
-    incomplete_rows = _lead_filter_summary_rows(services, status="incomplete")
-    selected_alias = str(current_account_alias or active_alias).strip()
-    account_rows: list[dict[str, Any]] = []
-    for record in services.accounts.list_accounts(selected_alias):
-        username = str(record.get("username") or "").strip().lstrip("@")
-        if not username:
-            continue
-        proxy_label = str(
-            record.get("assigned_proxy_id")
-            or record.get("proxy_url")
-            or record.get("proxy")
-            or ""
-        ).strip()
-        account_rows.append(
-            {
-                "username": username,
-                "connected": bool(services.accounts.connected_status(record)),
-                "proxy": proxy_label,
-            }
-        )
-    proxy_count = len({str(row.get("proxy") or "").strip() for row in account_rows if str(row.get("proxy") or "").strip()})
-    if account_rows and proxy_count <= 0:
-        computed_concurrency = 1
-    else:
-        computed_concurrency = min(len(account_rows), proxy_count) if account_rows and proxy_count else 0
-    return {
-        "source_lists": source_lists,
-        "account_aliases": account_aliases,
-        "export_aliases": export_aliases,
-        "selected_source": current_source,
-        "selected_account_alias": selected_alias,
-        "selected_export_alias": current_export_alias,
-        "account_rows": account_rows,
-        "account_count": len(account_rows),
-        "proxy_count": proxy_count,
-        "computed_concurrency": computed_concurrency,
-        "completed": completed_rows,
-        "incomplete": incomplete_rows,
-    }
-
-
-def build_leads_filter_detail_snapshot(services: Any, *, list_id: str) -> dict[str, Any]:
-    row = services.leads.find_filter_list(list_id)
-    preview_rows = services.leads.filter_list_result_rows(list_id)[:20]
-    return {
-        "row": row,
-        "preview_rows": preview_rows,
-    }
-
-
-def build_leads_filter_execution_snapshot(services: Any, *, list_id: str) -> dict[str, Any]:
-    return {"row": services.leads.find_filter_list(list_id)}
 
 
 def build_system_home_snapshot(services: Any, tasks: Any) -> dict[str, Any]:
@@ -572,7 +448,7 @@ def build_system_config_snapshot(services: Any) -> dict[str, Any]:
 
 
 def build_system_update_check_snapshot(services: Any) -> dict[str, Any]:
-    return {"result": services.system.check_updates()}
+    return services.system.check_updates()
 
 
 def _profiles_with_storage(root_dir: Path) -> int:
@@ -598,11 +474,6 @@ def build_system_diagnostics_snapshot(services: Any, tasks: Any, *, root_dir: Pa
         playwright_ok = playwright_path is not None
     except Exception as exc:
         playwright_error = str(exc)
-    pending_leads = sum(
-        safe_int(item.get("pending"))
-        for item in _lead_filter_summary_rows(services)
-        if isinstance(item, dict)
-    )
     payload = {
         "playwright": {
             "ok": playwright_ok,
@@ -621,7 +492,6 @@ def build_system_diagnostics_snapshot(services: Any, tasks: Any, *, root_dir: Pa
             "session_dir": str(session_dir),
         },
         "queues": {
-            "leads_pending": pending_leads,
             "inbox_tasks": safe_int(inbox.get("queued_tasks")),
             "inbox_dedupe": safe_int(inbox.get("dedupe_pending")),
         },
@@ -634,7 +504,6 @@ def build_automation_home_snapshot(services: Any, *, active_alias: str) -> dict[
     packs = services.automation.list_packs()
     whatsapp = services.automation.whatsapp_snapshot()
     snapshot = services.automation.autoresponder_snapshot(active_alias)
-    task_active = bool(snapshot.get("task_active"))
     return {
         "alias": active_alias,
         "packs": len(packs),
@@ -642,10 +511,8 @@ def build_automation_home_snapshot(services: Any, *, active_alias: str) -> dict[
         "pending_hydration": safe_int(snapshot.get("pending_hydration")),
         "summary": (
             f"Alias activo: {active_alias}  |  "
-            f"Packs: {len(packs)}  |  "
-            f"WhatsApp runs activos: {safe_int(whatsapp.get('runs_active'))}  |  "
-            f"Hydration pendiente: {safe_int(snapshot.get('pending_hydration'))}  |  "
-            f"Autoresponder activo: {'si' if task_active else 'no'}"
+            f"Packs disponibles: {len(packs)}  |  "
+            "Accesos principales: Config, Packs y Flow."
         ),
     }
 

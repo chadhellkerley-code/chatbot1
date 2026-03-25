@@ -20,7 +20,6 @@ def test_relogin_clears_stale_storage_state_on_failed_result(
     captured_payloads: list[dict[str, object]] = []
 
     monkeypatch.setattr(accounts, "BASE_PROFILES", tmp_path)
-    monkeypatch.setattr(accounts, "_refresh_totp_export_cache", lambda force=True: None)
     monkeypatch.setattr(
         accounts,
         "_playwright_account_payload",
@@ -31,8 +30,7 @@ def test_relogin_clears_stale_storage_state_on_failed_result(
         },
     )
     monkeypatch.setattr(
-        onboarding,
-        "login_account_playwright",
+        "src.auth.onboarding.login_account_playwright",
         lambda payload, alias, headful=True: captured_payloads.append(dict(payload)) or {
             "username": payload.get("username") or "",
             "status": "failed",
@@ -41,7 +39,7 @@ def test_relogin_clears_stale_storage_state_on_failed_result(
             "row_number": payload.get("row_number"),
         },
     )
-    monkeypatch.setattr(onboarding, "write_onboarding_results", lambda _rows: None)
+    monkeypatch.setattr("src.auth.onboarding.write_onboarding_results", lambda _rows: None)
     monkeypatch.setattr(
         accounts,
         "mark_connected",
@@ -59,7 +57,6 @@ def test_relogin_clears_stale_storage_state_on_failed_result(
     results = accounts.relogin_accounts_with_playwright(
         "matias",
         [{"username": "tester", "password": "secret"}],
-        concurrency=1,
     )
 
     assert results == [
@@ -78,7 +75,7 @@ def test_relogin_clears_stale_storage_state_on_failed_result(
     payload = captured_payloads[0]
     assert payload["username"] == "tester"
     assert payload["password"] == "secret"
-    assert payload["force_totp_refresh"] is True
+    assert payload["force_totp_refresh"] is False
     assert payload["alias"] == "matias"
     assert payload["strict_login"] is True
     assert payload["force_login"] is True

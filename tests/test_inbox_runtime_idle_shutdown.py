@@ -102,6 +102,47 @@ class _SelectiveCacheEngine(_FakeEngine):
         return dict(thread) if isinstance(thread, dict) else None
 
 
+class _OpenHydrationEngine(_FakeEngine):
+    def __init__(self, *, messages: list[dict] | None) -> None:
+        super().__init__()
+        self.open_calls: list[str] = []
+        self.hydrate_calls: list[str] = []
+        self.thread = {
+            "thread_key": "acc-1:thread-1",
+            "thread_id": "thread-1",
+            "account_id": "acc-1",
+            "messages": [dict(item) for item in messages or []],
+        }
+
+    def list_threads(self, filter_mode: str = "all") -> list[dict]:
+        del filter_mode
+        return [
+            {
+                "thread_key": "acc-1:thread-1",
+                "thread_id": "thread-1",
+                "account_id": "acc-1",
+                "display_name": "Uno",
+                "last_message_text": "Hola",
+                "last_message_timestamp": 100.0,
+                "last_message_direction": "inbound",
+                "unread_count": 1,
+            }
+        ]
+
+    def get_thread(self, thread_key: str) -> dict | None:
+        if str(thread_key or "").strip() != "acc-1:thread-1":
+            return None
+        return dict(self.thread)
+
+    def open_thread(self, thread_key: str) -> bool:
+        self.open_calls.append(str(thread_key or "").strip())
+        return True
+
+    def hydrate_thread(self, thread_key: str) -> bool:
+        self.hydrate_calls.append(str(thread_key or "").strip())
+        return True
+
+
 def _wait_until(predicate, *, timeout: float = 0.8, interval: float = 0.02) -> bool:
     deadline = time.time() + max(0.05, float(timeout or 0.05))
     while time.time() < deadline:
@@ -192,6 +233,26 @@ def test_inbox_runtime_forces_sync_when_activating_cold_backend(tmp_path: Path) 
         runtime.shutdown()
 
 
+def test_inbox_runtime_reports_worker_crash_in_diagnostics(tmp_path: Path) -> None:
+    engine = _FakeEngine()
+    runtime = InboxRuntime(ServiceContext(root_dir=tmp_path), engine)
+    runtime._builder.build_rows = lambda _rows: (_ for _ in ()).throw(RuntimeError("projection boom"))
+    try:
+        runtime.ensure_backend_started()
+
+        assert _wait_until(lambda: runtime.diagnostics()["runtime_worker_state"] == "error")
+        payload = runtime.diagnostics()
+
+        assert payload["runtime_worker_alive"] is False
+        assert payload["runtime_worker_state"] == "error"
+        assert "RuntimeError: projection boom" in payload["runtime_worker_last_error"]
+        assert payload["backend_started"] is False
+        assert payload["projection_ready"] is False
+        assert engine.shutdown_calls == 1
+    finally:
+        runtime.shutdown()
+
+
 def test_inbox_runtime_keeps_unrelated_thread_cache_on_account_sync(tmp_path: Path) -> None:
     engine = _SelectiveCacheEngine()
     runtime = InboxRuntime(ServiceContext(root_dir=tmp_path), engine)
@@ -219,5 +280,49 @@ def test_inbox_runtime_keeps_unrelated_thread_cache_on_account_sync(tmp_path: Pa
         refreshed = runtime.get_thread("acc-2:thread-2")
         assert refreshed is not None
         assert engine.get_thread_calls["acc-2:thread-2"] == 2
+    finally:
+        runtime.shutdown()
+
+
+def test_inbox_runtime_hydrates_opened_thread_when_preview_lacks_real_timestamps(tmp_path: Path) -> None:
+    engine = _OpenHydrationEngine(
+        messages=[
+            {
+                "message_id": "preview-1",
+                "text": "Hola",
+                "timestamp": None,
+                "direction": "inbound",
+            }
+        ]
+    )
+    runtime = InboxRuntime(ServiceContext(root_dir=tmp_path), engine)
+    try:
+        opened = runtime._open_thread_in_worker("acc-1:thread-1")
+
+        assert opened is True
+        assert engine.open_calls == ["acc-1:thread-1"]
+        assert engine.hydrate_calls == ["acc-1:thread-1"]
+    finally:
+        runtime.shutdown()
+
+
+def test_inbox_runtime_skips_hydration_when_opened_thread_already_has_real_timestamps(tmp_path: Path) -> None:
+    engine = _OpenHydrationEngine(
+        messages=[
+            {
+                "message_id": "msg-1",
+                "text": "Hola",
+                "timestamp": 100.0,
+                "direction": "inbound",
+            }
+        ]
+    )
+    runtime = InboxRuntime(ServiceContext(root_dir=tmp_path), engine)
+    try:
+        opened = runtime._open_thread_in_worker("acc-1:thread-1")
+
+        assert opened is True
+        assert engine.open_calls == ["acc-1:thread-1"]
+        assert engine.hydrate_calls == []
     finally:
         runtime.shutdown()

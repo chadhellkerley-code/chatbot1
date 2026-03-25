@@ -303,6 +303,81 @@ def test_migration_reconstructs_flow_state_from_legacy_chat() -> None:
     assert reconstructed["last_outbound_ts"] is not None
 
 
+def test_flow_normalizes_legacy_initial_alias_to_canonical_inicial() -> None:
+    config = responder._normalize_flow_config(
+        {
+            "version": 1,
+            "entry_stage_id": "initial",
+            "stages": [
+                _stage("initial", "PACK_1", positive="stage_2", negative="initial", doubt="initial", neutral="initial"),
+                _stage("stage_2", "PACK_2", positive="stage_2", negative="stage_2", doubt="stage_2", neutral="stage_2"),
+            ],
+        }
+    )
+
+    assert config["entry_stage_id"] == "inicial"
+    assert config["stages"][0]["id"] == "inicial"
+    assert config["stages"][0]["transitions"]["negative"] == "inicial"
+
+    engine = responder.FlowEngine(config)
+    updated = engine.apply_outbound(
+        {"stage_id": "initial", "followup_level": 0, "objection_step": 0},
+        {
+            "decision": "reply",
+            "next_stage_id": "inicial",
+            "objection_step_after": 0,
+        },
+        sent_at=time.time(),
+    )
+
+    assert engine.entry_stage_id == "inicial"
+    assert engine.has_initial_stage is True
+    assert updated["stage_id"] == "inicial"
+
+
+def test_followup_preconversation_requires_real_initial_stage() -> None:
+    config = responder._normalize_flow_config(
+        {
+            "version": 1,
+            "entry_stage_id": "etapa_1",
+            "stages": [
+                _stage(
+                    "etapa_1",
+                    "PACK_1",
+                    positive="etapa_2",
+                    negative="etapa_1",
+                    doubt="etapa_1",
+                    neutral="etapa_1",
+                    followups=[{"delay_hours": 0, "action_type": "FU_1"}],
+                ),
+                _stage("etapa_2", "PACK_2", positive="etapa_2", negative="etapa_2", doubt="etapa_2", neutral="etapa_2"),
+            ],
+        }
+    )
+    engine = responder.FlowEngine(config)
+
+    followup = engine.compute_followup_due(
+        {
+            "flow_state": {
+                "stage_id": "initial",
+                "followup_level": 0,
+                "followup_anchor_ts": time.time() - 30,
+                "last_outbound_ts": time.time() - 30,
+                "objection_step": 0,
+            },
+            "last_outbound_ts": time.time() - 30,
+            "followup_level": 0,
+            "has_inbound_history": False,
+            "preconversation_initial_placeholder": True,
+            "now_ts": time.time(),
+        }
+    )
+
+    assert engine.has_initial_stage is False
+    assert followup["due"] is False
+    assert followup["reason"] == "preconversation_without_initial_stage"
+
+
 def test_flow_config_normalization_resolves_pack_ids_to_pack_types(monkeypatch) -> None:
     monkeypatch.setattr(
         responder,

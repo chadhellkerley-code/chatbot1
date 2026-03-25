@@ -88,10 +88,10 @@ class ConversationService:
         return self._sender.prepare_thread(clean_key)
 
     def send_message(self, thread_key: str, text: str) -> str:
-        return self._sender.queue_message(thread_key, text)
+        return self._sender.queue_message(thread_key, text, job_type="manual_reply")
 
     def send_pack(self, thread_key: str, pack_id: str) -> bool:
-        return self._sender.queue_pack(thread_key, pack_id)
+        return self._sender.queue_pack(thread_key, pack_id, job_type="manual_pack")
 
     def request_ai_suggestion(self, thread_key: str) -> bool:
         clean_key = str(thread_key or "").strip()
@@ -144,6 +144,20 @@ class ConversationService:
         if deleted:
             self._notifier(
                 reason="conversation_deleted",
+                thread_keys=[clean_key],
+                account_ids=[str(thread.get("account_id") or "").strip()],
+            )
+        return deleted
+
+    def delete_message_local(self, thread_key: str, message_ref: dict[str, Any]) -> bool:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or not isinstance(message_ref, dict):
+            return False
+        thread = self._store.get_thread(clean_key) or {}
+        deleted = self._store.delete_message_local(clean_key, message_ref)
+        if deleted:
+            self._notifier(
+                reason="message_deleted_local",
                 thread_keys=[clean_key],
                 account_ids=[str(thread.get("account_id") or "").strip()],
             )

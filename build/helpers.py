@@ -6,17 +6,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import errno
 from pathlib import Path
 from typing import Optional
 
 from tools.build_executable import (
-    _EXTRA_HIDDEN_IMPORTS,
-    _HIDDEN_IMPORTS,
     _copy_playwright_browsers,
     _copy_project,
     _ensure_playwright_available,
     _parse_collect_all_modules,
     _parse_excludes,
+    _parse_hidden_imports,
     _prune_runtime_tree,
     _resolve_playwright_browsers_path,
 )
@@ -131,7 +131,7 @@ def build_onefile_executable(
 
     for module in _parse_collect_all_modules():
         command.extend(["--collect-all", module])
-    for module in _HIDDEN_IMPORTS + _EXTRA_HIDDEN_IMPORTS:
+    for module in _parse_hidden_imports():
         command.extend(["--hidden-import", module])
     for module in _parse_excludes():
         command.extend(["--exclude-module", module])
@@ -144,13 +144,7 @@ def build_onefile_executable(
         raise FileNotFoundError(f"PyInstaller no generó {artifact}")
 
     target = dist_root() / artifact.name
-    if target.exists():
-        if target.is_dir():
-            shutil.rmtree(target, ignore_errors=True)
-        else:
-            target.unlink()
-    shutil.copy2(artifact, target)
-    return target
+    return _move_or_copy(artifact, target)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -163,6 +157,22 @@ def _copy_optional(src: Optional[Path], dest: Path) -> None:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
+
+
+def _move_or_copy(src: Path, dest: Path) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        if dest.is_dir():
+            shutil.rmtree(dest, ignore_errors=True)
+        else:
+            dest.unlink()
+    try:
+        return src.replace(dest)
+    except OSError as exc:
+        if exc.errno not in {errno.EXDEV, errno.EACCES, errno.EPERM}:
+            raise
+    shutil.copy2(src, dest)
+    return dest
 
 
 def _default_client_env() -> str:
@@ -257,6 +267,7 @@ def _copy_release_metadata(
             "version": version,
             "channel": channel,
             "layout": "instacrm.v1",
+            "update_mode": "full-package",
             "executable_name": executable_name,
         },
     )
@@ -305,7 +316,7 @@ def assemble_client_layout(
     _create_layout_dirs(target_dir)
 
     executable_name = f"{CLIENT_EXE_STEM}.exe" if sys.platform.startswith("win") else CLIENT_EXE_STEM
-    shutil.copy2(built_executable, target_dir / executable_name)
+    _move_or_copy(built_executable, target_dir / executable_name)
 
     app_dir = target_dir / "app"
     _copy_release_metadata(
@@ -345,7 +356,7 @@ def assemble_owner_layout(
     _create_layout_dirs(target_dir)
 
     executable_name = f"{OWNER_EXE_STEM}.exe" if sys.platform.startswith("win") else OWNER_EXE_STEM
-    shutil.copy2(built_executable, target_dir / executable_name)
+    _move_or_copy(built_executable, target_dir / executable_name)
 
     app_dir = target_dir / "app"
     _copy_release_metadata(

@@ -79,13 +79,18 @@ class AccountWorker:
         if not thread_key or not thread_id:
             return {"ok": False, "reason": "invalid_thread"}
         if thread_key == self._thread_key and self._client is not None:
-            return {"ok": True, "reason": "already_prepared"}
+            ready_ok, _ready_reason = self._client.ensure_thread_ready_strict(thread_id)
+            if ready_ok:
+                self._focus_composer()
+                return {"ok": True, "reason": "already_prepared"}
+            self.shutdown()
         self.shutdown()
         self._client = TaskDirectClient(
             self._runtime,
             self._account,
             thread_id=thread_id,
             thread_href=str(thread_row.get("thread_href") or "").strip(),
+            bypass_account_quota=True,
         )
         ready_ok, ready_reason = self._client.ensure_thread_ready_strict(thread_id)
         if not ready_ok:

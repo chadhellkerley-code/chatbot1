@@ -10,6 +10,7 @@ import core.storage_atomic as storage_atomic
 from PySide6.QtWidgets import QApplication
 
 from gui.inbox.chat_view import ChatView
+from gui.inbox.conversation_list import _short_time
 from gui.snapshot_queries import build_system_logs_snapshot
 from gui.task_runner import LogStore
 
@@ -166,3 +167,56 @@ def test_chat_view_appends_new_message_without_rebuilding_existing_widgets() -> 
     assert view._message_widgets[1] is existing_widgets[1]
     assert view._message_widgets[2] is existing_widgets[2]
     assert view._message_widgets[3] not in existing_widgets
+
+
+def test_chat_view_preserves_scroll_anchor_when_existing_messages_refresh() -> None:
+    _app()
+    view = ChatView()
+    view.resize(900, 420)
+    view.set_thread(_thread_payload())
+    rows = [_message_row(index) for index in range(40)]
+    view.set_messages(rows, force_scroll_to_bottom=True)
+    assert _wait_until(lambda: len(view._message_widgets) == 40)
+
+    scrollbar = view._scroll.verticalScrollBar()
+    scrollbar.setValue(max(0, scrollbar.maximum() // 2))
+    _pump_events(2)
+    previous_value = scrollbar.value()
+
+    refreshed_rows = [dict(row) for row in rows]
+    refreshed_rows[15]["delivery_status"] = "error"
+    view.set_messages(refreshed_rows, force_scroll_to_bottom=False)
+
+    assert _wait_until(lambda: len(view._message_widgets) == 40)
+    assert abs(scrollbar.value() - previous_value) <= 4
+
+
+def test_chat_view_preserves_scroll_anchor_when_full_rerender_is_required() -> None:
+    _app()
+    view = ChatView()
+    view.resize(900, 420)
+    view.set_thread(_thread_payload())
+    rows = [_message_row(index) for index in range(90)]
+    view.set_messages(rows, force_scroll_to_bottom=True)
+    assert _wait_until(lambda: len(view._message_widgets) == 90)
+
+    scrollbar = view._scroll.verticalScrollBar()
+    scrollbar.setValue(max(0, scrollbar.maximum() // 2))
+    _pump_events(2)
+    previous_value = scrollbar.value()
+
+    rerender_rows = [dict(row) for row in rows]
+    rerender_rows[10]["message_id"] = "msg-10-rerender"
+    view.set_messages(rerender_rows, force_scroll_to_bottom=False)
+
+    assert _wait_until(lambda: len(view._message_widgets) == 90)
+    assert abs(scrollbar.value() - previous_value) <= 4
+
+
+def test_conversation_list_sidebar_time_is_stable_for_recent_messages() -> None:
+    recent_stamp = time.time() - 180.0
+
+    rendered = _short_time(recent_stamp)
+
+    assert ":" in rendered
+    assert not rendered.endswith("m")

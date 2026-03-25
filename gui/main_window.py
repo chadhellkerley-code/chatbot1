@@ -38,7 +38,6 @@ from gui.pages_campaigns import CampaignCreatePage, CampaignHistoryPage, Campaig
 from gui.pages_dashboard import DashboardPage
 from gui.pages_inbox import InboxPage
 from gui.modules.leads import (
-    LeadsFilterPage,
     LeadsHomePage,
     LeadsImportPage,
     LeadsListsPage,
@@ -104,6 +103,15 @@ class MainWindow(QMainWindow):
         ("system_home", "Sistema"),
         ("inbox_page", "Inbox CRM"),
     )
+    SYSTEM_ROUTES = frozenset(
+        {
+            "system_home",
+            "system_license_page",
+            "system_logs_page",
+            "system_config_page",
+            "system_diagnostics_page",
+        }
+    )
 
     def __init__(
         self,
@@ -124,10 +132,10 @@ class MainWindow(QMainWindow):
         self.tasks = TaskManager(self.logs, parent=self)
         self.queries = QueryManager(parent=self)
         initial_active_alias = "default"
-        aliases_service = getattr(self.services, "aliases", None)
-        if aliases_service is not None:
+        active_alias_getter = getattr(self.services, "get_initial_active_alias", None)
+        if callable(active_alias_getter):
             try:
-                initial_active_alias = str(aliases_service.get_active_alias() or "default").strip() or "default"
+                initial_active_alias = str(active_alias_getter() or "default").strip() or "default"
             except Exception:
                 initial_active_alias = "default"
         self.state = GuiState(active_alias=initial_active_alias)
@@ -155,6 +163,22 @@ class MainWindow(QMainWindow):
 
         self.open_route("dashboard", remember=False, clear_history=True)
         self._apply_initial_geometry()
+
+    def _is_owner_mode(self) -> bool:
+        return self.mode == "owner"
+
+    def _is_system_route(self, route: str) -> bool:
+        clean_route = self._normalize_route(route)
+        return clean_route in self.SYSTEM_ROUTES
+
+    def _sidebar_routes(self) -> tuple[tuple[str, str], ...]:
+        if self._is_owner_mode():
+            return self.SIDEBAR_ROUTES
+        return tuple(
+            (route, label)
+            for route, label in self.SIDEBAR_ROUTES
+            if not self._is_system_route(route)
+        )
 
     def _build_shell(self) -> None:
         root = QWidget()
@@ -235,7 +259,7 @@ class MainWindow(QMainWindow):
         menu_buttons_layout = QVBoxLayout(menu_container)
         menu_buttons_layout.setContentsMargins(8, 8, 8, 8)
         menu_buttons_layout.setSpacing(8)
-        for route, label in self.SIDEBAR_ROUTES:
+        for route, label in self._sidebar_routes():
             button = _SidebarButton(label, route)
             button.clicked.connect(lambda checked=False, target=route: self.open_route(target))
             self._sidebar_buttons[route] = button
@@ -336,7 +360,6 @@ class MainWindow(QMainWindow):
             section="leads_home",
             title="Importar leads",
         )
-        self._register_page_factory("leads_filter_page", lambda: LeadsFilterPage(ctx), section="leads_home", title="Filtrado")
         self._register_page_factory("campaigns_home", lambda: CampaignsHomePage(ctx), section="campaigns_home", title="Campanas")
         self._register_page_factory(
             "campaign_create_page",
@@ -394,26 +417,37 @@ class MainWindow(QMainWindow):
             title="WhatsApp",
         )
 
-        self._register_page_factory("system_home", lambda: SystemHomePage(ctx), section="system_home", title="Sistema")
-        self._register_page_factory(
-            "system_license_page",
-            lambda: SystemLicensePage(ctx),
-            section="system_home",
-            title="Licencias",
-        )
-        self._register_page_factory("system_logs_page", lambda: SystemLogsPage(ctx), section="system_home", title="Logs")
-        self._register_page_factory(
-            "system_config_page",
-            lambda: SystemConfigPage(ctx),
-            section="system_home",
-            title="Configuracion",
-        )
-        self._register_page_factory(
-            "system_diagnostics_page",
-            lambda: SystemDiagnosticsPage(ctx),
-            section="system_home",
-            title="Diagnostico",
-        )
+        if self._is_owner_mode():
+            self._register_page_factory(
+                "system_home",
+                lambda: SystemHomePage(ctx),
+                section="system_home",
+                title="Sistema",
+            )
+            self._register_page_factory(
+                "system_license_page",
+                lambda: SystemLicensePage(ctx),
+                section="system_home",
+                title="Licencias",
+            )
+            self._register_page_factory(
+                "system_logs_page",
+                lambda: SystemLogsPage(ctx),
+                section="system_home",
+                title="Logs",
+            )
+            self._register_page_factory(
+                "system_config_page",
+                lambda: SystemConfigPage(ctx),
+                section="system_home",
+                title="Configuracion",
+            )
+            self._register_page_factory(
+                "system_diagnostics_page",
+                lambda: SystemDiagnosticsPage(ctx),
+                section="system_home",
+                title="Diagnostico",
+            )
 
         self._register_page_factory("inbox_page", lambda: InboxPage(ctx), section="inbox_page", title="Inbox CRM")
 
@@ -469,6 +503,8 @@ class MainWindow(QMainWindow):
         clear_history: bool = False,
     ) -> None:
         clean_route = self._normalize_route(route)
+        if not self._is_owner_mode() and self._is_system_route(clean_route):
+            clean_route = "dashboard"
         self._ensure_page(clean_route)
         self.router.navigate(clean_route, payload=payload, remember=remember, clear_history=clear_history)
 
@@ -594,6 +630,9 @@ class MainWindow(QMainWindow):
 
     def start_startup_housekeeping(self) -> None:
         self._refresh_status_card()
+        post_show_hydration = getattr(self.services, "start_post_show_hydration", None)
+        if callable(post_show_hydration):
+            post_show_hydration()
         if self.mode == "client" and self._heartbeat_client is None:
             self._heartbeat_client = HeartbeatClient(self._build_heartbeat_snapshot)
             self._heartbeat_client.start()
@@ -605,6 +644,10 @@ class MainWindow(QMainWindow):
             self._heartbeat_client = None
         if self._proxy_housekeeping_timer is not None:
             self._proxy_housekeeping_timer.stop()
+        try:
+            self.services.inbox.set_ui_active(False)
+        except Exception:
+            pass
         self.queries.shutdown()
         try:
             self.services.accounts.shutdown_manual_sessions()

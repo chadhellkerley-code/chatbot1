@@ -8,10 +8,8 @@ from application.services import AutomationService, ServiceContext
 from core import responder
 
 
-def test_start_autoresponder_surfaces_activation_block_reason(monkeypatch) -> None:
+def test_start_autoresponder_returns_inbox_only_snapshot_without_activating_runtime(monkeypatch) -> None:
     service = AutomationService(ServiceContext.default(Path.cwd()))
-    monkeypatch.setattr(service, "max_alias_concurrency", lambda alias: 1)
-    monkeypatch.setattr(service, "_autoresponder_targets", lambda alias: ["acct-1"])
     monkeypatch.setattr(
         service,
         "alias_account_rows",
@@ -19,82 +17,34 @@ def test_start_autoresponder_surfaces_activation_block_reason(monkeypatch) -> No
     )
     monkeypatch.setattr(
         responder,
-        "_inspect_startable_accounts",
-        lambda targets, log_skipped=False: {
-            "startable_accounts": list(targets),
-            "skipped_accounts": [],
-        },
-    )
-    monkeypatch.setattr(
-        responder,
         "_activate_bot",
-        lambda: {
-            "status": "activation_blocked",
-            "reason": "No se puede activar el autoresponder: pack invalido.",
-            "loop_started": False,
-            "alias": "alias-demo",
-        },
+        lambda: (_ for _ in ()).throw(AssertionError("legacy activation should stay disconnected")),
     )
 
     snapshot = service.start_autoresponder({"alias": "alias-demo"})
 
-    assert snapshot["status"] == "Failed"
-    assert snapshot["message"] == "No se puede activar el autoresponder: pack invalido."
+    assert snapshot["status"] == "Idle"
+    assert snapshot["message"] == "El runtime de autoresponder/follow-up ahora se administra solo desde Inbox."
     assert snapshot["task_active"] is False
 
 
-def test_start_autoresponder_marks_proxy_preflight_blocked_accounts_in_state(monkeypatch) -> None:
+def test_start_autoresponder_preserves_blocked_accounts_in_wrapper_snapshot(monkeypatch) -> None:
     service = AutomationService(ServiceContext.default(Path.cwd()))
-    monkeypatch.setattr(service, "max_alias_concurrency", lambda alias: 2)
-    monkeypatch.setattr(service, "_autoresponder_targets", lambda alias: ["acct-1", "acct-2"])
     monkeypatch.setattr(
         service,
         "alias_account_rows",
         lambda alias: [
             {"username": "acct-1", "proxy": "proxy-a", "connected": True},
-            {"username": "acct-2", "proxy": "proxy-b", "connected": True},
+            {
+                "username": "acct-2",
+                "proxy": "proxy-b",
+                "connected": True,
+                "blocked": True,
+                "blocked_reason": "Proxy en cuarentena",
+                "safety_state": "blocked",
+                "safety_message": "Proxy en cuarentena",
+            },
         ],
-    )
-    monkeypatch.setattr(
-        responder,
-        "_inspect_startable_accounts",
-        lambda targets, log_skipped=False: {
-            "startable_accounts": ["acct-1"],
-            "account_statuses": [
-                {
-                    "username": "acct-1",
-                    "blocked": False,
-                    "safety_state": "usable",
-                    "message": "Lista",
-                },
-                {
-                    "username": "acct-2",
-                    "blocked": True,
-                    "safety_state": "blocked",
-                    "reason": "proxy_quarantined",
-                    "message": "Proxy en cuarentena",
-                },
-            ],
-            "skipped_accounts": [
-                {
-                    "username": "acct-2",
-                    "source": "proxy",
-                    "status": "blocked",
-                    "reason": "proxy_quarantined",
-                    "message": "Proxy en cuarentena",
-                }
-            ],
-        },
-    )
-    monkeypatch.setattr(
-        responder,
-        "_activate_bot",
-        lambda: {
-            "status": "activation_blocked",
-            "reason": "No hay cuentas listas para ejecutar.",
-            "loop_started": False,
-            "alias": "alias-demo",
-        },
     )
 
     snapshot = service.start_autoresponder({"alias": "alias-demo"})
@@ -109,10 +59,8 @@ def test_start_autoresponder_marks_proxy_preflight_blocked_accounts_in_state(mon
     assert blocked_row["safety_message"] == "Proxy en cuarentena"
 
 
-def test_start_autoresponder_stops_before_runtime_when_no_safe_accounts(monkeypatch) -> None:
+def test_start_autoresponder_never_uses_legacy_activation_even_when_accounts_are_safe(monkeypatch) -> None:
     service = AutomationService(ServiceContext.default(Path.cwd()))
-    monkeypatch.setattr(service, "max_alias_concurrency", lambda alias: 1)
-    monkeypatch.setattr(service, "_autoresponder_targets", lambda alias: ["acct-1"])
     monkeypatch.setattr(
         service,
         "alias_account_rows",
@@ -120,52 +68,27 @@ def test_start_autoresponder_stops_before_runtime_when_no_safe_accounts(monkeypa
             {
                 "username": "acct-1",
                 "proxy": "proxy-a",
-                "connected": False,
-                "blocked": True,
-                "blocked_reason": "Re-login requerido",
-                "safety_state": "needs_login",
-                "safety_message": "Re-login requerido",
+                "connected": True,
+                "blocked": False,
+                "blocked_reason": "",
+                "safety_state": "usable",
+                "safety_message": "Lista",
             }
         ],
     )
     monkeypatch.setattr(
         responder,
-        "_inspect_startable_accounts",
-        lambda targets, log_skipped=False: {
-            "startable_accounts": [],
-            "account_statuses": [
-                {
-                    "username": "acct-1",
-                    "blocked": True,
-                    "safety_state": "needs_login",
-                    "reason": "storage_state_missing",
-                    "message": "Re-login requerido",
-                }
-            ],
-            "skipped_accounts": [
-                {
-                    "username": "acct-1",
-                    "source": "session",
-                    "status": "needs_login",
-                    "reason": "storage_state_missing",
-                    "message": "Re-login requerido",
-                }
-            ],
-        },
-    )
-    monkeypatch.setattr(
-        responder,
         "_activate_bot",
-        lambda: (_ for _ in ()).throw(AssertionError("activation should not start")),
+        lambda: (_ for _ in ()).throw(AssertionError("legacy activation should not start")),
     )
 
     snapshot = service.start_autoresponder({"alias": "alias-demo"})
 
-    assert snapshot["status"] == "Failed"
+    assert snapshot["status"] == "Idle"
     assert snapshot["task_active"] is False
-    assert snapshot["message"] == "No hay cuentas seguras listas para iniciar este autoresponder."
-    assert snapshot["accounts_active"] == 0
-    assert snapshot["accounts_blocked"] == 1
+    assert snapshot["message"] == "El runtime de autoresponder/follow-up ahora se administra solo desde Inbox."
+    assert snapshot["accounts_active"] == 1
+    assert snapshot["accounts_blocked"] == 0
 
 
 def test_autoresponder_snapshot_preserves_preflight_blocked_rows_without_runtime(monkeypatch) -> None:

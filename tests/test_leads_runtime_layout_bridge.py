@@ -26,34 +26,20 @@ def test_service_migrates_legacy_lead_lists_into_active_data_root(
     assert leads_module.load_list("demo") == ["uno", "dos"]
 
 
-def test_service_migrates_legacy_filter_storage_into_active_data_root(
+def test_service_leaves_legacy_filter_storage_unreferenced(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     data_root = tmp_path / "data"
     legacy_root = tmp_path / "storage" / "lead_filters"
-    legacy_lists = legacy_root / "lists"
-    legacy_lists.mkdir(parents=True, exist_ok=True)
-    (legacy_root / "filters_config.json").write_text(
-        json.dumps({"classic": {}, "text": {}, "image": {}}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    (legacy_root / "account_http_meta.json").write_text(
-        json.dumps({"acct": {"cooldown_until": ""}}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    (legacy_lists / "legacy_run.json").write_text(
-        json.dumps({"id": "legacy_run", "items": [], "export_alias": "demo"}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    (legacy_root / "lists").mkdir(parents=True, exist_ok=True)
+    (legacy_root / "filters_config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("INSTACRM_DATA_ROOT", str(data_root))
 
-    service = LeadsService(ServiceContext(root_dir=tmp_path))
-    filter_rows = service.list_filter_lists()
+    LeadsService(ServiceContext(root_dir=tmp_path))
 
-    assert [str(row.get("id") or "") for row in filter_rows] == ["legacy_run"]
-    assert (data_root / "lead_filters" / "filters_config.json").exists()
-    assert (data_root / "lead_filters" / "account_http_meta.json").exists()
+    assert legacy_root.exists()
+    assert not (data_root / "lead_filters").exists()
 
 
 def test_service_migrates_templates_into_active_data_root(

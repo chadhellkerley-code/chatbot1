@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.alias_identity import (
     DEFAULT_ALIAS_DISPLAY_NAME,
@@ -27,12 +27,30 @@ class AliasLifecycleService:
         accounts: AccountService | None = None,
         automation: AutomationService | None = None,
         warmup: WarmupService | None = None,
+        automation_provider: Callable[[], AutomationService] | None = None,
+        warmup_provider: Callable[[], WarmupService] | None = None,
     ) -> None:
         self.context = context
         self.accounts = accounts or AccountService(context)
-        self.automation = automation or AutomationService(context)
-        self.warmup = warmup or WarmupService(context)
+        self._automation = automation
+        self._warmup = warmup
+        self._automation_provider = automation_provider
+        self._warmup_provider = warmup_provider
         self.state_store = get_app_state_store(context.root_dir)
+
+    @property
+    def automation(self) -> AutomationService:
+        if self._automation is None:
+            provider = self._automation_provider
+            self._automation = provider() if callable(provider) else AutomationService(self.context)
+        return self._automation
+
+    @property
+    def warmup(self) -> WarmupService:
+        if self._warmup is None:
+            provider = self._warmup_provider
+            self._warmup = provider() if callable(provider) else WarmupService(self.context)
+        return self._warmup
 
     def list_alias_records(self) -> list[dict[str, Any]]:
         return self.accounts.list_alias_records()

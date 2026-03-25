@@ -8,10 +8,19 @@ from core.proxy_registry import proxy_health_label, proxy_reference_status
 
 
 BLOCKING_PROXY_STATUSES = frozenset({"inactive", "missing", "quarantined"})
+DIRECT_NETWORK_KEY = "direct"
+PROXY_NETWORK_KEY_PREFIX = "proxy:"
 
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def effective_network_key(proxy_id: Any) -> str:
+    clean_proxy_id = _clean(proxy_id)
+    if not clean_proxy_id:
+        return DIRECT_NETWORK_KEY
+    return f"{PROXY_NETWORK_KEY_PREFIX}{clean_proxy_id.lower()}"
 
 
 def account_proxy_preflight(
@@ -42,6 +51,8 @@ def account_proxy_preflight(
             "username": username,
             "alias": alias,
             "status": status,
+            "network_mode": "proxy",
+            "effective_network_key": effective_network_key(assigned_proxy_id),
             "proxy_id": assigned_proxy_id,
             "proxy_label": assigned_proxy_id,
             "message": message,
@@ -58,6 +69,8 @@ def account_proxy_preflight(
             "username": username,
             "alias": alias,
             "status": "legacy",
+            "network_mode": "legacy",
+            "effective_network_key": "",
             "proxy_id": "",
             "proxy_label": proxy_url,
             "message": message,
@@ -73,8 +86,10 @@ def account_proxy_preflight(
         "username": username,
         "alias": alias,
         "status": "none",
+        "network_mode": "direct",
+        "effective_network_key": DIRECT_NETWORK_KEY,
         "proxy_id": "",
-        "proxy_label": "-",
+        "proxy_label": DIRECT_NETWORK_KEY,
         "message": message,
         "blocking": not allow_proxyless,
         "health_label": "",
@@ -110,6 +125,10 @@ def preflight_accounts_for_proxy_runtime(
             blocked_accounts.append(status)
             blocked_status_counts[normalized_status] += 1
             continue
+        current["effective_network_key"] = _clean(status.get("effective_network_key"))
+        current["network_mode"] = _clean(status.get("network_mode"))
+        current["proxy_preflight_status"] = normalized_status
+        current["proxy_preflight_message"] = _clean(status.get("message"))
         ready_accounts.append(current)
 
     return {

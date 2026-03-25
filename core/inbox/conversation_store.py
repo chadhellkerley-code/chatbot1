@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from src.inbox.inbox_storage import InboxStorage
+from src.inbox.message_timestamps import message_canonical_timestamp, message_sort_key
 
 from .legacy_projection import LegacyConversationProjection
 
@@ -110,6 +111,9 @@ class ConversationStore:
     def upsert_threads(self, rows: list[dict[str, Any]]) -> None:
         self._storage.upsert_threads(rows)
 
+    def update_thread_record(self, thread_key: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        return self._storage.update_thread_record(thread_key, updates)
+
     def seed_messages(
         self,
         thread_key: str,
@@ -185,11 +189,14 @@ class ConversationStore:
                 filtered_messages[thread_key] = legacy_messages.get(thread_key, [])
             legacy_rows = filtered_rows
             legacy_messages = filtered_messages
-        merged_rows = self._merge_endpoint_and_legacy_rows(
-            account,
-            clean_rows,
-            legacy_rows=legacy_rows,
-        )
+        merged_rows = [
+            self._apply_preview_customer_activity_fallback(row)
+            for row in self._merge_endpoint_and_legacy_rows(
+                account,
+                clean_rows,
+                legacy_rows=legacy_rows,
+            )
+        ]
         accepted_rows: list[dict[str, Any]] = []
         for row in merged_rows:
             thread_key = str(row.get("thread_key") or "").strip()
@@ -300,25 +307,14 @@ class ConversationStore:
                     or ""
                 ).strip(),
                 "pack_name": str(pack_name or "").strip(),
-                "status": "pack_sent",
-                "last_message": str(pack_name or current.get("last_message_text") or current.get("last_message") or "").strip(),
-                "last_message_text": str(
-                    pack_name
-                    or current.get("last_message_text")
-                    or current.get("last_message")
-                    or row.get("last_message_text")
-                    or ""
-                ).strip(),
-                "last_message_timestamp": sent_at,
-                "last_message_direction": "outbound",
-                "last_message_id": str(current.get("last_message_id") or row.get("last_message_id") or "").strip(),
+                "ui_status": "pack_sent",
+                "last_message": str(pack_name or current.get("last_message") or "").strip(),
                 "latest_customer_message_at": self._coerce_timestamp(
                     current.get("latest_customer_message_at") or row.get("latest_customer_message_at")
                 ),
                 "last_activity_timestamp": sent_at,
                 "thread_status": "ready",
                 "thread_error": "",
-                "pack_sent_at": sent_at,
                 "reply_detected_at": self._coerce_timestamp(current.get("reply_detected_at")),
             },
         )
@@ -356,8 +352,20 @@ class ConversationStore:
         )
         return True
 
-    def append_local_outbound_message(self, thread_key: str, text: str) -> dict[str, Any] | None:
-        return self._storage.append_local_outbound_message(thread_key, text)
+    def append_local_outbound_message(
+        self,
+        thread_key: str,
+        text: str,
+        *,
+        source: str = "manual",
+        pack_id: str = "",
+    ) -> dict[str, Any] | None:
+        return self._storage.append_local_outbound_message(
+            thread_key,
+            text,
+            source=source,
+            pack_id=pack_id,
+        )
 
     def set_local_outbound_status(self, thread_key: str, local_message_id: str, *, status: str) -> None:
         self._storage.set_local_outbound_status(thread_key, local_message_id, status=status)
@@ -379,6 +387,9 @@ class ConversationStore:
             error_message=error_message,
         )
 
+    def delete_message_local(self, thread_key: str, message_ref: dict[str, Any]) -> bool:
+        return self._storage.delete_message_local(thread_key, message_ref)
+
     def create_send_queue_job(
         self,
         task_type: str,
@@ -387,6 +398,9 @@ class ConversationStore:
         account_id: str,
         payload: dict[str, Any],
         dedupe_key: str = "",
+        priority: int | None = None,
+        state: str = "queued",
+        scheduled_at: float | None = None,
     ) -> int:
         return self._storage.create_send_queue_job(
             task_type,
@@ -394,10 +408,31 @@ class ConversationStore:
             account_id=account_id,
             payload=payload,
             dedupe_key=dedupe_key,
+            priority=priority,
+            state=state,
+            scheduled_at=scheduled_at,
         )
 
-    def update_send_queue_job(self, job_id: int, *, state: str, error_message: str = "") -> None:
-        self._storage.update_send_queue_job(job_id, state=state, error_message=error_message)
+    def update_send_queue_job(
+        self,
+        job_id: int,
+        *,
+        state: str,
+        error_message: str = "",
+        failure_reason: str = "",
+        started_at: float | None = None,
+        finished_at: float | None = None,
+        increment_attempt: bool = False,
+    ) -> None:
+        self._storage.update_send_queue_job(
+            job_id,
+            state=state,
+            error_message=error_message,
+            failure_reason=failure_reason,
+            started_at=started_at,
+            finished_at=finished_at,
+            increment_attempt=increment_attempt,
+        )
 
     def list_send_queue_jobs(
         self,
@@ -407,8 +442,79 @@ class ConversationStore:
     ) -> list[dict[str, Any]]:
         return self._storage.list_send_queue_jobs(states=states, limit=limit)
 
+    def get_send_queue_job(self, job_id: int) -> dict[str, Any] | None:
+        return self._storage.get_send_queue_job(job_id)
+
+    def claim_next_send_queue_job(self, account_id: str, *, allowed_states: list[str] | None = None) -> dict[str, Any] | None:
+        return self._storage.claim_next_send_queue_job(account_id, allowed_states=allowed_states)
+
+    def cancel_send_queue_jobs(
+        self,
+        *,
+        thread_key: str = "",
+        account_id: str = "",
+        alias_id: str = "",
+        job_types: list[str] | None = None,
+        states: list[str] | None = None,
+        reason: str = "cancelled",
+    ) -> int:
+        return self._storage.cancel_send_queue_jobs(
+            thread_key=thread_key,
+            account_id=account_id,
+            alias_id=alias_id,
+            job_types=job_types,
+            states=states,
+            reason=reason,
+        )
+
     def update_thread_state(self, thread_key: str, updates: dict[str, Any]) -> None:
         self._storage.update_thread_state(thread_key, updates)
+
+    def add_thread_event(
+        self,
+        thread_key: str,
+        event_type: str,
+        *,
+        account_id: str = "",
+        alias_id: str = "",
+        payload: dict[str, Any] | None = None,
+        created_at: float | None = None,
+    ) -> None:
+        self._storage.add_thread_event(
+            thread_key,
+            event_type,
+            account_id=account_id,
+            alias_id=alias_id,
+            payload=payload,
+            created_at=created_at,
+        )
+
+    def list_thread_events(self, thread_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self._storage.list_thread_events(thread_key, limit=limit)
+
+    def get_runtime_alias_state(self, alias_id: str) -> dict[str, Any]:
+        return self._storage.get_runtime_alias_state(alias_id)
+
+    def upsert_runtime_alias_state(self, alias_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        return self._storage.upsert_runtime_alias_state(alias_id, updates)
+
+    def list_runtime_alias_states(self) -> list[dict[str, Any]]:
+        return self._storage.list_runtime_alias_states()
+
+    def delete_runtime_alias_state(self, alias_id: str) -> bool:
+        return self._storage.delete_runtime_alias_state(alias_id)
+
+    def get_session_connector_state(self, account_id: str) -> dict[str, Any]:
+        return self._storage.get_session_connector_state(account_id)
+
+    def list_session_connector_states(self) -> list[dict[str, Any]]:
+        return self._storage.list_session_connector_states()
+
+    def upsert_session_connector_state(self, account_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        return self._storage.upsert_session_connector_state(account_id, updates)
+
+    def delete_session_connector_state(self, account_id: str) -> bool:
+        return self._storage.delete_session_connector_state(account_id)
 
     def mark_thread_opened(self, thread_key: str) -> None:
         self._storage.mark_thread_opened(thread_key)
@@ -492,18 +598,61 @@ class ConversationStore:
                 if not key:
                     continue
                 previous = merged.get(key)
-                message_ts = cls._coerce_timestamp(message.get("timestamp")) or 0.0
-                previous_ts = cls._coerce_timestamp((previous or {}).get("timestamp")) or 0.0
+                message_ts = message_canonical_timestamp(message) or 0.0
+                previous_ts = message_canonical_timestamp(previous) or 0.0
                 if previous is None or message_ts >= previous_ts:
                     merged[key] = message
         rows = list(merged.values())
-        rows.sort(
-            key=lambda item: (
-                cls._coerce_timestamp(item.get("timestamp")) or 0.0,
-                str(item.get("message_id") or "").strip(),
-            )
-        )
+        rows.sort(key=lambda item: message_sort_key(item))
         return rows
+
+    @classmethod
+    def _preview_has_inbound_message(cls, row: dict[str, Any]) -> bool:
+        for raw in row.get("preview_messages") or []:
+            if not isinstance(raw, dict):
+                continue
+            if str(raw.get("direction") or "").strip().lower() == "inbound":
+                return True
+        return False
+
+    @classmethod
+    def _preview_inbound_activity_at(cls, row: dict[str, Any]) -> float | None:
+        latest_inbound_at = max(
+            (
+                stamp
+                for stamp in (
+                    cls._coerce_timestamp(raw.get("timestamp"))
+                    for raw in row.get("preview_messages") or []
+                    if isinstance(raw, dict)
+                    and str(raw.get("direction") or "").strip().lower() == "inbound"
+                )
+                if stamp is not None
+            ),
+            default=None,
+        )
+        if latest_inbound_at is not None:
+            return latest_inbound_at
+        if not cls._preview_has_inbound_message(row):
+            return None
+        activity_stamp = (
+            cls._coerce_timestamp(row.get("last_activity_at"))
+            or cls._coerce_timestamp(row.get("last_activity_timestamp"))
+        )
+        if activity_stamp is not None:
+            return activity_stamp
+        if str(row.get("last_message_direction") or "").strip().lower() == "inbound":
+            return cls._coerce_timestamp(row.get("last_message_timestamp"))
+        return None
+
+    @classmethod
+    def _apply_preview_customer_activity_fallback(cls, row: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(row)
+        if cls._coerce_timestamp(merged.get("latest_customer_message_at")) is not None:
+            return merged
+        preview_inbound_at = cls._preview_inbound_activity_at(merged)
+        if preview_inbound_at is not None:
+            merged["latest_customer_message_at"] = preview_inbound_at
+        return merged
 
     @classmethod
     def _thread_has_activity(
@@ -537,7 +686,7 @@ class ConversationStore:
             unread = max(0, int(row.get("unread_count") or 0))
         except Exception:
             unread = 0
-        if direction == "inbound" or unread > 0:
+        if direction == "inbound" or unread > 0 or self._preview_has_inbound_message(row):
             return True
         if legacy_messages:
             return True
@@ -694,16 +843,17 @@ class ConversationStore:
         activity_candidates = [
             effective_last_message_timestamp,
             latest_customer_message_at,
+            cls._coerce_timestamp(row.get("last_activity_timestamp")),
             cls._coerce_timestamp(current.get("last_activity_timestamp")),
             pack_sent_at,
         ]
         last_activity_timestamp = max((stamp for stamp in activity_candidates if stamp is not None), default=None)
-        status = (
+        ui_status = (
             "pack_sent"
             if pack_sent_at is not None and effective_last_message_direction != "inbound"
-            else cls._status_from_direction(
+            else cls._ui_status_from_direction(
                 effective_last_message_direction,
-                fallback=str(current.get("status") or "").strip(),
+                fallback=str(current.get("ui_status") or "").strip(),
             )
         )
         return {
@@ -712,10 +862,10 @@ class ConversationStore:
                 current.get("recipient_username")
                 or current.get("username")
                 or row.get("recipient_username")
-                or ""
-            ).strip(),
+                    or ""
+                ).strip(),
             "pack_name": pack_name,
-            "status": status,
+            "ui_status": ui_status,
             "last_message": effective_last_message_text,
             "last_message_text": effective_last_message_text,
             "last_message_timestamp": effective_last_message_timestamp,
@@ -745,7 +895,7 @@ class ConversationStore:
         return True
 
     @staticmethod
-    def _status_from_direction(direction: str, *, fallback: str = "") -> str:
+    def _ui_status_from_direction(direction: str, *, fallback: str = "") -> str:
         clean_direction = str(direction or "").strip().lower()
         if clean_direction == "inbound":
             return "needs_reply"

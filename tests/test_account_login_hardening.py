@@ -15,7 +15,8 @@ class _FakeSvc:
         self.saved.append((ctx, profile_path))
 
 
-def test_build_playwright_login_payload_does_not_force_relogin(monkeypatch) -> None:
+def test_build_playwright_login_payload_uses_canonical_totp_payload(monkeypatch) -> None:
+    callback = object()
     monkeypatch.setattr(
         accounts,
         "_playwright_account_payload",
@@ -23,6 +24,8 @@ def test_build_playwright_login_payload_does_not_force_relogin(monkeypatch) -> N
             "username": username,
             "password": password,
             "proxy_settings": proxy_settings,
+            "totp_secret": "canonical-secret",
+            "totp_callback": callback,
         },
     )
 
@@ -36,7 +39,8 @@ def test_build_playwright_login_payload_does_not_force_relogin(monkeypatch) -> N
     )
 
     assert payload["alias"] == "ventas"
-    assert payload["totp_secret"] == "totp-secret"
+    assert payload["totp_secret"] == "canonical-secret"
+    assert payload["totp_callback"] is callback
     assert payload["row_number"] == 7
     assert payload["disable_safe_browser_recovery"] is True
     assert "strict_login" not in payload

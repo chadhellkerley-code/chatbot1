@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import io
 import logging
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from core.accounts_helpers.csv_utils import (
     _compose_proxy_url,
     _extract_totp_entries_from_csv,
     _parse_accounts_csv,
+    extract_totp_secret_from_row,
 )
 from core.proxy_preflight import account_proxy_preflight, preflight_accounts_for_proxy_runtime
 from core.proxy_registry import (
@@ -48,6 +50,10 @@ from core.proxy_registry import (
 from core.totp_store import save_secret as save_totp_secret
 from proxy_manager import ProxyConfig, test_proxy_connection
 
+from paths import runtime_base
+
+from core.accounts import normalize_alias as normalize_alias_key
+
 from .base import ServiceContext, ServiceError, dedupe_usernames, normalize_alias
 
 
@@ -56,9 +62,72 @@ _ALIAS_REGISTRY_SCHEMA_VERSION = 2
 _IG_EDIT_PROFILE_URL = "https://www.instagram.com/accounts/edit/"
 
 
+def assign_proxy_to_account(username: str, proxy_id: str | None) -> bool:
+    from core.accounts import update_account
+
+    return bool(
+        update_account(
+            username,
+            {
+                "assigned_proxy_id": proxy_id,
+                "proxy_url": None,
+                "proxy_user": None,
+                "proxy_pass": None,
+            },
+        )
+    )
+
+
+def _health_refresh_proxy(record: dict[str, Any]) -> dict[str, str] | None:
+    try:
+        from src.proxy_payload import proxy_from_account
+    except Exception:
+        return None
+    try:
+        return proxy_from_account(record)
+    except Exception:
+        logger.debug(
+            "No se pudo resolver el proxy de health refresh para @%s.",
+            str(record.get("username") or "").strip().lstrip("@"),
+            exc_info=True,
+        )
+        return None
+
+
+def _check_connected_account_health(record: dict[str, Any]) -> tuple[bool, str]:
+    from src.auth.persistent_login import check_session
+
+    username = str(record.get("username") or "").strip().lstrip("@")
+    if not username:
+        raise ValueError("username requerido para refrescar health.")
+    return check_session(
+        username,
+        proxy=_health_refresh_proxy(record),
+        headless=True,
+    )
+
+
 class AccountService:
     def __init__(self, context: ServiceContext) -> None:
         self.context = context
+
+    def is_ready(self) -> bool:
+        try:
+            expected = runtime_base(Path(accounts_module.__file__).resolve().parent.parent).resolve()
+            current = Path(getattr(accounts_module, "BASE")).resolve()
+        except Exception:
+            return True
+        return current == expected
+
+    def ensure_ready_from_env(self) -> bool:
+        if self.is_ready():
+            return True
+        try:
+            importlib.reload(accounts_module)
+        except Exception:
+            logger.exception("No se pudo recargar core.accounts luego del bootstrap.")
+            return False
+        return self.is_ready()
 
     def login_queue_concurrency(self) -> int:
         provider = getattr(accounts_module, "playwright_login_queue_concurrency", None)
@@ -195,7 +264,7 @@ class AccountService:
         display_name = alias_entry.display_name if alias_entry is not None else fallback_display_name
         row["alias_id"] = alias_id
         row["alias_display_name"] = display_name
-        row["alias"] = display_name
+        row["alias"] = "Sin alias" if alias_id == DEFAULT_ALIAS_ID else display_name
         return row
 
     def _account_records(self) -> list[dict[str, Any]]:
@@ -222,6 +291,34 @@ class AccountService:
             record_map = dict(records)
         else:
             record_map = {record.alias_id: record for record in records}
+
+        deduped_by_display: dict[str, AliasRecord] = {}
+        for record in record_map.values():
+            if record.alias_id == DEFAULT_ALIAS_ID:
+                continue
+            display_key = normalize_alias_key(record.display_name)
+            if not display_key:
+                continue
+            existing = deduped_by_display.get(display_key)
+            if existing is None:
+                deduped_by_display[display_key] = record
+                continue
+            existing_rank = (bool(existing.system), str(existing.created_at or ""), str(existing.alias_id or ""))
+            candidate_rank = (bool(record.system), str(record.created_at or ""), str(record.alias_id or ""))
+            if candidate_rank < existing_rank:
+                deduped_by_display[display_key] = record
+
+        if deduped_by_display:
+            cleaned: dict[str, AliasRecord] = {}
+            for record in record_map.values():
+                if record.alias_id == DEFAULT_ALIAS_ID:
+                    continue
+                display_key = normalize_alias_key(record.display_name)
+                if display_key and deduped_by_display.get(display_key) is not record:
+                    continue
+                cleaned[record.alias_id] = record
+            record_map = cleaned
+
         record_map.setdefault(DEFAULT_ALIAS_ID, default_alias_record())
         payload = {
             "schema_version": _ALIAS_REGISTRY_SCHEMA_VERSION,
@@ -249,6 +346,8 @@ class AccountService:
 
     def resolve_alias_display_name(self, alias: str | None, *, default: str = DEFAULT_ALIAS_ID) -> str:
         alias_id = self.resolve_alias_id(alias, default=default)
+        if alias_id == DEFAULT_ALIAS_ID:
+            return "Sin alias"
         record = self._alias_registry().get(alias_id)
         if record is not None:
             return record.display_name
@@ -282,6 +381,13 @@ class AccountService:
         if next_alias_id != current_alias_id:
             raise ServiceError("El nuevo nombre cambia la identidad del alias y requiere lifecycle completo.")
         records = self._alias_registry()
+        next_key = normalize_alias_key(next_display_name)
+        if next_key:
+            for record in records.values():
+                if record.alias_id == current_alias_id:
+                    continue
+                if normalize_alias_key(record.display_name) == next_key:
+                    raise ServiceError("Ya existe un alias con ese nombre (ignorando mayusculas/espacios).")
         existing = records.get(current_alias_id)
         if existing is None:
             raise ServiceError("No se encontro el alias a renombrar.")
@@ -293,6 +399,10 @@ class AccountService:
             system=existing.system,
         )
         records[current_alias_id] = updated
+        try:
+            self._save_alias_registry(records)
+        except Exception as exc:
+            raise ServiceError("No se pudo guardar el alias renombrado.") from exc
         sync_alias_metadata = getattr(accounts_module, "sync_alias_metadata", None)
         if callable(sync_alias_metadata):
             try:
@@ -302,20 +412,12 @@ class AccountService:
                     display_name=updated.display_name,
                 )
             except Exception as exc:
-                raise ServiceError("No se pudo actualizar el alias en las cuentas.") from exc
-        try:
-            self._save_alias_registry(records)
-        except Exception as exc:
-            if callable(sync_alias_metadata):
+                records[current_alias_id] = existing
                 try:
-                    sync_alias_metadata(
-                        current_alias_id,
-                        alias_id=existing.alias_id,
-                        display_name=existing.display_name,
-                    )
+                    self._save_alias_registry(records)
                 except Exception:
-                    logger.exception("No se pudo revertir la sincronizacion de alias en cuentas.")
-            raise ServiceError("No se pudo guardar el alias renombrado.") from exc
+                    logger.exception("No se pudo revertir aliases.json luego de un error sincronizando cuentas.")
+                raise ServiceError("No se pudo actualizar el alias en las cuentas.") from exc
         return updated.to_payload()
 
     def _record_alias_id(self, record: dict[str, Any]) -> str:
@@ -341,11 +443,34 @@ class AccountService:
         except AliasValidationError as exc:
             raise ServiceError(str(exc)) from exc
         records = self._alias_registry()
+        requested_key = normalize_alias_key(requested.display_name)
+        if requested_key:
+            for record in records.values():
+                if normalize_alias_key(record.display_name) == requested_key:
+                    return record.display_name
         existing = records.get(requested.alias_id)
         if existing is not None:
             return existing.display_name
+        original_records = dict(records)
         records[requested.alias_id] = requested
-        self._save_alias_registry(records)
+        try:
+            self._save_alias_registry(records)
+        except Exception as exc:
+            raise ServiceError("No se pudo guardar el alias.") from exc
+        sync_alias_metadata = getattr(accounts_module, "sync_alias_metadata", None)
+        if callable(sync_alias_metadata):
+            try:
+                sync_alias_metadata(
+                    requested.alias_id,
+                    alias_id=requested.alias_id,
+                    display_name=requested.display_name,
+                )
+            except Exception as exc:
+                try:
+                    self._save_alias_registry(original_records)
+                except Exception:
+                    logger.exception("No se pudo revertir aliases.json luego de un error sincronizando cuentas.")
+                raise ServiceError("No se pudo sincronizar el alias en las cuentas.") from exc
         return requested.display_name
 
     def delete_alias(self, alias: str, *, move_accounts_to: str | None = None) -> None:
@@ -413,11 +538,76 @@ class AccountService:
     def clear_login_progress(self, usernames: list[str]) -> None:
         health_store.clear_login_progress_many(dedupe_usernames(usernames))
 
+    def refresh_connected_health(
+        self,
+        alias: str,
+        usernames: list[str] | None = None,
+    ) -> dict[str, Any]:
+        clean_alias, records = self._resolve_selected_records(alias, usernames)
+        connected_records = [record for record in records if self.connected_status(record)]
+        results: list[dict[str, Any]] = []
+        state_counts = {
+            health_store.HEALTH_STATE_ALIVE: 0,
+            health_store.HEALTH_STATE_INACTIVE: 0,
+            health_store.HEALTH_STATE_DEAD: 0,
+        }
+        error_count = 0
+
+        for record in connected_records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            if not username:
+                continue
+            probe_ok = False
+            probe_reason = ""
+            error_message = ""
+            try:
+                probe_ok, probe_reason = _check_connected_account_health(record)
+            except Exception as exc:
+                error_count += 1
+                error_message = str(exc) or exc.__class__.__name__
+                probe_reason = f"exception:{error_message}"
+                logger.exception("No se pudo refrescar health para @%s.", username)
+            state, stale = health_store.get_badge(username)
+            normalized_state = str(state or "").strip().upper()
+            if normalized_state in state_counts:
+                state_counts[normalized_state] += 1
+            results.append(
+                {
+                    "username": username,
+                    "ok": bool(probe_ok),
+                    "reason": probe_reason,
+                    "health": str(state or "").strip(),
+                    "stale": bool(stale),
+                    "error": error_message,
+                }
+            )
+
+        return {
+            "alias": clean_alias,
+            "requested": len(records),
+            "eligible": len(connected_records),
+            "refreshed": len(results),
+            "skipped": max(0, len(records) - len(connected_records)),
+            "alive": state_counts[health_store.HEALTH_STATE_ALIVE],
+            "inactive": state_counts[health_store.HEALTH_STATE_INACTIVE],
+            "dead": state_counts[health_store.HEALTH_STATE_DEAD],
+            "errors": error_count,
+            "results": results,
+        }
+
     def health_badge(self, record: dict[str, Any]) -> str:
         badge_resolver = getattr(accounts_module, "_badge_for_display", None)
         if callable(badge_resolver):
             try:
-                badge, _cached = badge_resolver(record)
+                badge, stale = badge_resolver(record)
+                if stale:
+                    return str(
+                        getattr(
+                            accounts_module,
+                            "ACCOUNT_UI_STATE_UNVERIFIED",
+                            "NO VERIFICADA",
+                        )
+                    ).strip()
                 return str(badge or "").strip()
             except Exception:
                 pass
@@ -476,17 +666,26 @@ class AccountService:
         clean_password = str(password or "").strip()
         if not clean_password:
             raise ServiceError("Password invalida.")
+        clean_totp_secret = str(totp_secret or "").strip()
         clean_alias = self.create_alias(alias)
         added = accounts_module.add_account(clean_username, clean_alias, proxy)
         if not added:
             return False
-        store_password = getattr(accounts_module, "_store_account_password", None)
-        if callable(store_password):
-            store_password(clean_username, clean_password)
-        else:
-            accounts_module.update_account(clean_username, {"password": clean_password})
-        if totp_secret:
-            save_totp_secret(clean_username, totp_secret)
+        try:
+            store_password = getattr(accounts_module, "_store_account_password", None)
+            if callable(store_password):
+                store_password(clean_username, clean_password)
+            else:
+                accounts_module.update_account(clean_username, {"password": clean_password})
+        except Exception as exc:
+            accounts_module.remove_account(clean_username)
+            raise ServiceError(f"No se pudo persistir la cuenta @{clean_username}: {exc}") from exc
+        if clean_totp_secret:
+            try:
+                save_totp_secret(clean_username, clean_totp_secret)
+            except Exception as exc:
+                accounts_module.remove_account(clean_username)
+                raise ServiceError(f"No se pudo persistir TOTP para @{clean_username}: {exc}") from exc
         return True
 
     def remove_accounts(self, usernames: list[str]) -> int:
@@ -526,13 +725,15 @@ class AccountService:
         login_payloads: list[dict[str, Any]] = []
         build_login_payload = getattr(accounts_module, "_build_playwright_login_payload", None)
 
-        for row in rows:
+        for row_index, row in enumerate(rows, start=1):
             username = str(row.get("username") or "").strip().lstrip("@")
             password = str(row.get("password") or "").strip()
             if not username or not password:
                 skipped += 1
                 continue
             totp_secret = totp_entries.get(username.lower(), "")
+            if not totp_secret:
+                totp_secret = extract_totp_secret_from_row(row)
             proxy_url = _compose_proxy_url(
                 str(row.get("proxy id") or ""),
                 str(row.get("proxy port") or ""),
@@ -545,13 +746,18 @@ class AccountService:
             }
             if not proxy_url:
                 proxy = None
-            created = self.add_account(
-                username,
-                clean_alias,
-                password=password,
-                proxy=proxy,
-                totp_secret=totp_secret,
-            )
+            try:
+                created = self.add_account(
+                    username,
+                    clean_alias,
+                    password=password,
+                    proxy=proxy,
+                    totp_secret=totp_secret,
+                )
+            except ServiceError as exc:
+                raise ServiceError(
+                    f"Fila {row_index}: no se pudo importar @{username}: {exc}"
+                ) from exc
             if created:
                 added += 1
                 imported_usernames.append(username)
@@ -578,7 +784,6 @@ class AccountService:
             login_results = accounts_module.login_accounts_with_playwright(
                 clean_alias,
                 login_payloads,
-                concurrency=self.login_queue_concurrency(),
             )
             self._report_login_failures(
                 alias=clean_alias,
@@ -901,10 +1106,6 @@ class AccountService:
                         duration_s=minutes * 60,
                         likes_target=likes_target,
                     )
-                    try:
-                        await session_manager.save_storage_state(session, username)
-                    except Exception:
-                        pass
                 except Exception as exc:
                     await session_manager.discard_if_unhealthy(
                         session,
@@ -1125,7 +1326,6 @@ class AccountService:
         results = accounts_module.relogin_accounts_with_playwright(
             clean_alias,
             valid_records,
-            concurrency=self.login_queue_concurrency(),
         )
         for result_index, result in enumerate(results):
             if result_index >= len(valid_indexes):
@@ -1216,7 +1416,6 @@ class AccountService:
         results = accounts_module.login_accounts_with_playwright(
             clean_alias,
             payloads,
-            concurrency=self.login_queue_concurrency(),
         )
         for result_index, result in enumerate(results):
             if result_index >= len(valid_indexes):
@@ -1723,16 +1922,7 @@ class AccountService:
             )
         updated = 0
         for username in dedupe_usernames(usernames):
-            if accounts_module.update_account(
-                username,
-                {
-                    "assigned_proxy_id": clean_proxy_id,
-                    "proxy_url": "",
-                    "proxy_user": "",
-                    "proxy_pass": "",
-                    "proxy_sticky_minutes": None,
-                },
-            ):
+            if assign_proxy_to_account(username, clean_proxy_id):
                 updated += 1
         if updated:
             record_proxy_audit_event(

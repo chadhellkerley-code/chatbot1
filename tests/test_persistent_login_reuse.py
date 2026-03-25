@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from src.runtime.playwright_runtime import PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY
+from src.runtime.playwright_runtime import (
+    PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+    PLAYWRIGHT_BROWSER_MODE_MANAGED,
+)
 
 
 class _FakePage:
@@ -202,6 +205,32 @@ def test_reuse_session_only_applies_assigned_proxy_at_launch(monkeypatch, tmp_pa
         "username": "alice",
         "password": "secret",
     }
+    assert calls == {"load_home": 0, "check_logged_in": 0, "human_login": 0}
+
+
+def test_campaign_visible_reuse_session_uses_managed_browser_mode(monkeypatch, tmp_path: Path) -> None:
+    import src.auth.persistent_login as persistent_login
+
+    calls = {"load_home": 0, "check_logged_in": 0, "human_login": 0}
+    _install_fake_browser(monkeypatch, persistent_login, calls)
+
+    profile_root = _profile_root(tmp_path)
+    _seed_profile(profile_root, "tester")
+
+    asyncio.run(
+        persistent_login.ensure_logged_in_async(
+            {
+                "username": "tester",
+                "reuse_session_only": True,
+                "manual_visible_browser": True,
+                "playwright_browser_mode": PLAYWRIGHT_BROWSER_MODE_MANAGED,
+            },
+            headless=False,
+            profile_root=profile_root,
+        )
+    )
+
+    assert _FakeService.instances[0].browser_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED
     assert calls == {"load_home": 0, "check_logged_in": 0, "human_login": 0}
 
 

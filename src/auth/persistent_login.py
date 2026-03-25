@@ -22,6 +22,7 @@ from src.playwright_service import BASE_PROFILES, PlaywrightService, get_page
 from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
 from src.runtime.playwright_runtime import (
     PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+    PLAYWRIGHT_BROWSER_MODE_MANAGED,
     is_driver_crash_error,
     run_coroutine_sync,
 )
@@ -175,12 +176,17 @@ def _storage_state_path(username: str, profile_root: Optional[Union[str, Path]] 
     )
 
 
-def _login_playwright_service(*, headless: bool, profile_root: Path) -> PlaywrightService:
+def _login_playwright_service(
+    *,
+    headless: bool,
+    profile_root: Path,
+    browser_mode: str = PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+) -> PlaywrightService:
     return PlaywrightService(
         headless=headless,
         base_profiles=profile_root,
         prefer_persistent=True,
-        browser_mode=PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+        browser_mode=browser_mode,
     )
 
 
@@ -342,6 +348,12 @@ async def ensure_logged_in_async(
         or account.get("disable_safe_browser_recovery")
     )
     strict_login = bool(account.get("strict_login"))
+    browser_mode = str(account.get("playwright_browser_mode") or "").strip().lower()
+    if browser_mode not in {
+        PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+        PLAYWRIGHT_BROWSER_MODE_MANAGED,
+    }:
+        browser_mode = PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY
     if strict_login:
         # Flujos de login/relogin explícito no deben gastar tiempo en probe de
         # sesión previa; se fuerza una corrida limpia.
@@ -361,15 +373,23 @@ async def ensure_logged_in_async(
     _session_log(profile_root_path, f"login_start username={username} headless={headless}")
 
     _trace_msg(f"Launch browser ({'headful' if not headless else 'headless'})")
-    svc = _login_playwright_service(headless=headless, profile_root=profile_root_path)
+    svc = _login_playwright_service(
+        headless=headless,
+        profile_root=profile_root_path,
+        browser_mode=browser_mode,
+    )
 
     async def _new_context(use_storage: bool, *, safe_mode: bool = False) -> tuple[BrowserContext, Page]:
-        ctx = await svc.new_context_for_account(
-            profile_dir=account_profile,
-            storage_state=str(storage_state) if use_storage and storage_state.exists() else None,
-            proxy=None if safe_mode else proxy_payload,
-            safe_mode=safe_mode,
-        )
+        context_kwargs = {
+            "profile_dir": account_profile,
+            "storage_state": str(storage_state) if use_storage and storage_state.exists() else None,
+            "proxy": None if safe_mode else proxy_payload,
+            "safe_mode": safe_mode,
+        }
+        visible_browser_layout = account.get("visible_browser_layout")
+        if visible_browser_layout is not None:
+            context_kwargs["visible_browser_layout"] = visible_browser_layout
+        ctx = await svc.new_context_for_account(**context_kwargs)
         try:
             page = await get_page(ctx)
         except Exception:
@@ -419,7 +439,11 @@ async def ensure_logged_in_async(
                 await svc.close()
             except Exception:
                 pass
-            svc = _login_playwright_service(headless=True, profile_root=profile_root_path)
+            svc = _login_playwright_service(
+                headless=True,
+                profile_root=profile_root_path,
+                browser_mode=browser_mode,
+            )
             try:
                 safe_context_timeout = _remaining_timeout()
                 return await asyncio.wait_for(

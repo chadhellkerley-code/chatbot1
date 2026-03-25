@@ -292,7 +292,8 @@ _CONVERSATION_ENGINE_CACHE: Dict[str, dict] | None = None
 _MESSAGE_LOG_FILE = _STORAGE_ROOT / "message_log.jsonl"
 _MESSAGE_LOG_LOCK = threading.Lock()
 
-_STAGE_INITIAL = "initial"
+_STAGE_INITIAL = "inicial"
+_STAGE_INITIAL_ALIASES = frozenset({"initial", "inicial"})
 _STAGE_FOLLOWUP = "followup"
 _STAGE_WAITING = "waiting"
 _STAGE_CLOSED = "closed"
@@ -351,6 +352,38 @@ def _flow_action_token(value: object) -> str:
     return _normalize_text_token(value).replace(" ", "_")
 
 
+def _canonical_flow_stage_id(value: object) -> str:
+    stage_id = str(value or "").strip()
+    if not stage_id:
+        return ""
+    if _normalize_text_token(stage_id) in _STAGE_INITIAL_ALIASES:
+        return _STAGE_INITIAL
+    return stage_id
+
+
+def _is_initial_flow_stage_id(value: object) -> bool:
+    return _canonical_flow_stage_id(value) == _STAGE_INITIAL
+
+
+def _flow_stage_ids_match(left: object, right: object) -> bool:
+    left_stage_id = _canonical_flow_stage_id(left)
+    right_stage_id = _canonical_flow_stage_id(right)
+    return bool(left_stage_id and right_stage_id and left_stage_id == right_stage_id)
+
+
+def _flow_initial_stage_id(flow_config: Dict[str, object]) -> str:
+    stages = flow_config.get("stages", [])
+    if not isinstance(stages, list):
+        return ""
+    for raw_stage in stages:
+        if not isinstance(raw_stage, dict):
+            continue
+        stage_id = _canonical_flow_stage_id(raw_stage.get("id"))
+        if stage_id == _STAGE_INITIAL:
+            return stage_id
+    return ""
+
+
 def _normalize_last_outbound_fingerprint(raw_value: object) -> Dict[str, object]:
     if not isinstance(raw_value, dict):
         return {}
@@ -398,10 +431,11 @@ def _normalize_flow_state(
     last_outbound_ts: Optional[float] = None,
     followup_level_hint: int = 0,
 ) -> Dict[str, object]:
-    state = _default_flow_state(fallback_stage_id)
+    canonical_fallback_stage_id = _canonical_flow_stage_id(fallback_stage_id)
+    state = _default_flow_state(canonical_fallback_stage_id)
     if isinstance(raw_flow_state, dict):
         state.update(raw_flow_state)
-    stage_id = str(state.get("stage_id") or "").strip() or str(fallback_stage_id or "").strip()
+    stage_id = _canonical_flow_stage_id(state.get("stage_id")) or canonical_fallback_stage_id
     state["stage_id"] = stage_id
     try:
         version_int = int(state.get("version") or _FLOW_CONFIG_VERSION)
@@ -1673,11 +1707,12 @@ def _sleep_between_replies_for_account(
     delay_max: float,
     *,
     label: str = "reply_delay",
+    apply_safezone_multiplier: bool = True,
 ) -> None:
     base_delay = _random_delay_seconds(delay_min, delay_max)
     if base_delay <= 0:
         return
-    multiplier = _safezone_delay_multiplier(account_id)
+    multiplier = _safezone_delay_multiplier(account_id) if apply_safezone_multiplier else 1.0
     final_delay = max(0.0, float(base_delay) * float(multiplier))
     if final_delay <= 0:
         return
@@ -1838,6 +1873,8 @@ class FlowEngine:
         if entry_stage_id not in self.stage_map:
             entry_stage_id = self.stage_order[0] if self.stage_order else ""
         self.entry_stage_id = entry_stage_id
+        self.initial_stage_id = _flow_initial_stage_id(normalized)
+        self.has_initial_stage = bool(self.initial_stage_id)
         self._stage_index = {stage_id: idx for idx, stage_id in enumerate(self.stage_order)}
 
     def _stage_for(self, stage_id: str) -> Dict[str, object]:
@@ -1906,6 +1943,16 @@ class FlowEngine:
             last_outbound_ts=_safe_float(thread_context.get("last_outbound_ts")),
             followup_level_hint=_safe_int(thread_context.get("followup_level")),
         )
+        has_inbound_history = bool(thread_context.get("has_inbound_history", False))
+        preconversation_initial_placeholder = bool(thread_context.get("preconversation_initial_placeholder", False))
+        if not self.has_initial_stage and preconversation_initial_placeholder and not has_inbound_history:
+            return {
+                "due": False,
+                "wait_seconds": 0,
+                "reason": "preconversation_without_initial_stage",
+                "action_type": "",
+                "followup_level": int(flow_state.get("followup_level") or 0),
+            }
         stage = self._stage_for(str(flow_state.get("stage_id") or self.entry_stage_id))
         followups = stage.get("followups")
         followup_list = list(followups) if isinstance(followups, list) else []
@@ -3825,7 +3872,7 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
         layout_raw: Dict[str, object] = {}
     elif isinstance(raw_config, dict):
         raw_stages = list(raw_config.get("stages") or [])
-        entry_stage_id = str(raw_config.get("entry_stage_id") or "").strip()
+        entry_stage_id = _canonical_flow_stage_id(raw_config.get("entry_stage_id"))
         try:
             version_value = max(_FLOW_CONFIG_VERSION, int(raw_config.get("version") or _FLOW_CONFIG_VERSION))
         except Exception:
@@ -3849,7 +3896,7 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
     seen_stage_ids: set[str] = set()
     for index, raw_stage in enumerate(raw_stages):
         stage = dict(raw_stage) if isinstance(raw_stage, dict) else {}
-        stage_id = str(stage.get("id") or f"stage_{index + 1}").strip() or f"stage_{index + 1}"
+        stage_id = _canonical_flow_stage_id(stage.get("id")) or f"stage_{index + 1}"
         if stage_id in seen_stage_ids:
             suffix = 2
             candidate = f"{stage_id}_{suffix}"
@@ -3863,7 +3910,7 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
         transitions = dict(transitions_raw) if isinstance(transitions_raw, dict) else {}
         normalized_transitions: Dict[str, str] = {}
         for transition_key in ("positive", "negative", "doubt", "neutral"):
-            target = str(transitions.get(transition_key) or stage_id).strip() or stage_id
+            target = _canonical_flow_stage_id(transitions.get(transition_key)) or stage_id
             normalized_transitions[transition_key] = target
 
         followups_raw = stage.get("followups")
@@ -3938,16 +3985,21 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
         stage_id = str(stage.get("id") or "").strip()
         transitions = dict(stage.get("transitions") or {})
         for transition_key in ("positive", "negative", "doubt", "neutral"):
-            target = str(transitions.get(transition_key) or stage_id).strip() or stage_id
+            target = _canonical_flow_stage_id(transitions.get(transition_key)) or stage_id
             if target not in valid_stage_ids:
                 target = stage_id
             transitions[transition_key] = target
         stage["transitions"] = transitions
     entry_id = entry_stage_id if entry_stage_id in valid_stage_ids else (stage_ids[0] if stage_ids else "")
     nodes_raw = dict(layout_raw.get("nodes") or {}) if isinstance(layout_raw.get("nodes"), dict) else {}
+    canonical_nodes_raw: Dict[str, object] = {}
+    for raw_stage_id, raw_node in nodes_raw.items():
+        clean_stage_id = _canonical_flow_stage_id(raw_stage_id) or str(raw_stage_id or "").strip()
+        if clean_stage_id:
+            canonical_nodes_raw[clean_stage_id] = raw_node
     normalized_nodes: Dict[str, Dict[str, float]] = {}
     for stage_id in stage_ids:
-        node_raw = nodes_raw.get(stage_id)
+        node_raw = canonical_nodes_raw.get(stage_id)
         if not isinstance(node_raw, dict):
             continue
         x_value = _safe_float(node_raw.get("x"))
@@ -4261,7 +4313,7 @@ def _history_outbox_sent_actions(
             continue
         pack_id = str(parsed.get("pack_id") or "").strip()
         action_index = _safe_int(parsed.get("action_index"))
-        stage_id = str(parsed.get("stage_id") or "").strip()
+        stage_id = _canonical_flow_stage_id(parsed.get("stage_id"))
         anchor_ts = _outbox_anchor_token_to_float(parsed.get("anchor_token"))
         pack = pack_lookup.get(pack_id)
         action_type = str(pack.get("type") or "").strip() if isinstance(pack, dict) else ""
@@ -4368,7 +4420,7 @@ def _infer_flow_stage_from_history(
     if str(last_event.get("source") or "").strip() != "outbox":
         return entry_stage_id, "legacy_migrated"
 
-    event_stage_id = str(last_event.get("stage_id") or "").strip()
+    event_stage_id = _canonical_flow_stage_id(last_event.get("stage_id"))
     action_type = str(last_event.get("action_type") or "").strip()
     mapped_stage_id = _stage_id_for_action_type_exact(flow_config, action_type)
     is_followup_action = bool(last_event.get("is_followup_action", False))
@@ -5947,11 +5999,17 @@ def _normalize_pending_pack_run(raw_pending: object) -> Optional[Dict[str, objec
     if not normalized_actions:
         return None
     try:
-        delay_min = max(0, int(raw_pending.get("delay_min", 0) or 0))
+        delay_min = max(
+            0,
+            int(raw_pending.get("pack_delay_min", raw_pending.get("delay_min", 0)) or 0),
+        )
     except Exception:
         delay_min = 0
     try:
-        delay_max = max(delay_min, int(raw_pending.get("delay_max", delay_min) or delay_min))
+        delay_max = max(
+            delay_min,
+            int(raw_pending.get("pack_delay_max", raw_pending.get("delay_max", delay_min)) or delay_min),
+        )
     except Exception:
         delay_max = delay_min
     try:
@@ -5983,8 +6041,8 @@ def _normalize_pending_pack_run(raw_pending: object) -> Optional[Dict[str, objec
         "pack_id": str(raw_pending.get("pack_id") or "").strip(),
         "pack_name": str(raw_pending.get("pack_name") or "").strip(),
         "strategy_name": str(raw_pending.get("strategy_name") or "").strip(),
-        "delay_min": delay_min,
-        "delay_max": delay_max,
+        "pack_delay_min": delay_min,
+        "pack_delay_max": delay_max,
         "actions": normalized_actions,
         "current_index": current_index,
         "latest_inbound_id": str(raw_pending.get("latest_inbound_id") or "").strip(),
@@ -6073,8 +6131,9 @@ def _build_pending_pack_run(
         "pack_id": str(pack.get("id") or "").strip(),
         "pack_name": str(pack.get("name") or "").strip(),
         "strategy_name": str(strategy_name or "").strip(),
-        "delay_min": delay_min,
-        "delay_max": delay_max,
+        # Delay del pack: solo entre acciones internas del mismo pack.
+        "pack_delay_min": delay_min,
+        "pack_delay_max": delay_max,
         "actions": resolved_actions,
         "current_index": 0,
         "latest_inbound_id": str(latest_inbound_id or "").strip(),
@@ -6526,13 +6585,14 @@ def execute_pack(
             persist_pending=persist_pending,
         )
         if next_index < total_actions:
-            delay_min = max(0, int(pending_run.get("delay_min", 0) or 0))
-            delay_max = max(delay_min, int(pending_run.get("delay_max", delay_min) or delay_min))
+            delay_min = max(0, int(pending_run.get("pack_delay_min", 0) or 0))
+            delay_max = max(delay_min, int(pending_run.get("pack_delay_max", delay_min) or delay_min))
             _sleep_between_replies_for_account(
                 account_id,
                 delay_min,
                 delay_max,
                 label="pack_action_delay",
+                apply_safezone_multiplier=False,
             )
 
     if run_sendable_expected <= 0:
@@ -11414,7 +11474,7 @@ from datetime import datetime as _datetime_for_state
 try:
     _CONV_STATE_PATH = storage_root(_Path_for_state(__file__).resolve().parent.parent) / "conversation_state.json"
 except Exception:
-    _CONV_STATE_PATH = _Path_for_state(__file__).resolve().parent.parent / "storage" / "conversation_state.json"
+    _CONV_STATE_PATH = storage_root(_Path_for_state(__file__).resolve().parent.parent) / "conversation_state.json"
 
 # Constantes de limpieza (en dÃ­as y segundos)
 _CLEANUP_AFTER_DAYS_CLOSED = 90

@@ -106,6 +106,14 @@ class InboxManager(QObject):
         self.start()
         return self._service.open_thread(thread_key)
 
+    def hydrate_thread(self, thread_key: str) -> bool:
+        self.start()
+        clean_key = str(thread_key or "").strip()
+        if not clean_key:
+            return False
+        self._task_read_thread({"thread_key": clean_key})
+        return True
+
     def send_message(self, thread_key: str, text: str) -> str:
         self.start()
         return self._service.send_message(thread_key, text)
@@ -126,6 +134,9 @@ class InboxManager(QObject):
 
     def delete_conversation(self, thread_key: str) -> bool:
         return self._service.delete_conversation(thread_key)
+
+    def delete_message_local(self, thread_key: str, message_ref: dict[str, Any]) -> bool:
+        return self._service.delete_message_local(thread_key, message_ref)
 
     def enqueue_periodic_sync(self, *, force: bool = False) -> None:
         self._force_refresh_requested = self._force_refresh_requested or bool(force)
@@ -217,7 +228,7 @@ class InboxManager(QObject):
                     "sender_error": "",
                     "thread_status": "ready",
                     "thread_error": "",
-                    "status": "active",
+                    "ui_status": "active",
                     "last_message": text,
                     "last_activity_timestamp": sent_timestamp,
                 },
@@ -238,7 +249,7 @@ class InboxManager(QObject):
                 "sender_status": "failed",
                 "sender_error": reason,
                 "thread_error": reason,
-                "status": "error",
+                "ui_status": "error",
             },
         )
         self._emit_cache_updated(reason="send_message_failed", thread_keys=[thread_key], account_ids=[account_id])
@@ -393,10 +404,10 @@ class InboxManager(QObject):
             task_type = str(job.get("task_type") or "").strip().lower()
             payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
             job_id = int(job.get("id") or 0)
-            if task_type == "send_message":
+            if task_type in {"send_message", "manual_reply", "auto_reply", "followup"}:
                 self._recover_send_message_job(job, payload, job_id)
                 continue
-            if task_type == "send_pack":
+            if task_type in {"send_pack", "manual_pack"}:
                 self._storage.update_send_queue_job(job_id, state="pending")
                 self._enqueue_outbound(
                     "send_pack",
@@ -420,7 +431,7 @@ class InboxManager(QObject):
             return
         account_id = str(thread.get("account_id") or job.get("account_id") or "").strip().lstrip("@").lower()
         state = str(job.get("state") or "").strip().lower()
-        if state == "sending":
+        if state in {"sending", "processing"}:
             account = self._get_account(account_id)
             if isinstance(account, dict):
                 local_row = next(
@@ -453,7 +464,7 @@ class InboxManager(QObject):
                             "sender_status": "ready",
                             "sender_error": "",
                             "thread_error": "",
-                            "status": "active",
+                            "ui_status": "active",
                             "last_activity_timestamp": sent_timestamp,
                         },
                     )

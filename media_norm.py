@@ -9,11 +9,12 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Literal
+from paths import storage_root
 
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
-CACHE_DIR = ROOT / "storage" / "data" / "normalized_media"
+CACHE_DIR = storage_root(ROOT) / "data" / "normalized_media"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}

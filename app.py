@@ -155,7 +155,6 @@ accounts = _safe_import("core.accounts")
 leads = _safe_import("core.leads")
 ig = _safe_import("core.ig")
 storage = _safe_import("core.storage")
-responder = _safe_import("core.responder")
 licensekit = _safe_import("licensekit")
 state_view = _safe_import("state_view")
 try:
@@ -228,7 +227,7 @@ def current_menu_option_labels() -> list[str]:
         f"2) {em('🗂️')} Gestionar leads",
         f"3) {em('💬')} Enviar mensajes",
         f"4) {em('📜')} Ver registros de envíos",
-        f"5) {em('🤖')} Auto-responder con OpenAI",
+        "5) Auto-responder con OpenAI (gestionado desde Inbox)",
         f"6) {em('📊')} Estadísticas y métricas",
         f"7) {em('📱')} Automatización por WhatsApp",
     ]
@@ -295,9 +294,10 @@ def menu():
         elif op == "4" and storage:
             clear_console()
             storage.menu_logs()
-        elif op == "5" and responder:
+        elif op == "5":
             clear_console()
-            responder.menu_autoresponder()
+            warn("El autoresponder/follow-up CLI legacy quedo deshabilitado. Usa Inbox CRM para iniciar o detener el runtime real.")
+            press_enter()
         elif op == "6" and stats_engine:
             clear_console()
             stats_engine.menu_stats()

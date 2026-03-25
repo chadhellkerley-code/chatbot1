@@ -100,6 +100,8 @@ class _FakeAccountsService:
         self.manual_shutdown_count = 0
         self._block_manual_session = False
         self._manual_session_released = threading.Event()
+        self.health_by_username: dict[str, str] = {}
+        self.health_refresh_calls: list[dict[str, Any]] = []
 
     def list_aliases(self) -> list[str]:
         return ["default", "matias"]
@@ -117,7 +119,57 @@ class _FakeAccountsService:
         return str(record.get("username") or "").strip() != "dos"
 
     def health_badge(self, record: dict[str, Any]) -> str:
+        username = str(record.get("username") or "").strip()
+        stored = str(self.health_by_username.get(username) or "").strip()
+        if stored:
+            return stored
         return "VIVA" if self.connected_status(record) else "NO ACTIVA"
+
+    def refresh_connected_health(
+        self,
+        alias: str,
+        usernames: list[str] | None = None,
+    ) -> dict[str, Any]:
+        clean_alias = str(alias or "").strip()
+        selected = {str(item or "").strip().lower() for item in usernames or [] if str(item or "").strip()}
+        rows = list(self.rows_by_alias.get(clean_alias, []))
+        eligible = 0
+        refreshed = 0
+        alive = 0
+        inactive = 0
+        dead = 0
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            username = str(row.get("username") or "").strip()
+            if selected and username.lower() not in selected:
+                continue
+            if not self.connected_status(row):
+                continue
+            eligible += 1
+            refreshed += 1
+            health = self.health_by_username.get(username) or "VIVA"
+            if health == "NO VERIFICADA":
+                health = "VIVA"
+                self.health_by_username[username] = health
+            if health == "VIVA":
+                alive += 1
+            elif health == "NO ACTIVA":
+                inactive += 1
+            elif health == "MUERTA":
+                dead += 1
+            results.append({"username": username, "health": health, "reason": "test_refresh"})
+        payload = {
+            "alias": clean_alias,
+            "eligible": eligible,
+            "refreshed": refreshed,
+            "alive": alive,
+            "inactive": inactive,
+            "dead": dead,
+            "errors": 0,
+            "results": results,
+        }
+        self.health_refresh_calls.append({"alias": clean_alias, "usernames": list(usernames or []), "result": payload})
+        return payload
 
     def manual_action_eligibility(self, record: dict[str, Any]) -> dict[str, Any]:
         connected = self.connected_status(record)
@@ -720,6 +772,36 @@ def test_accounts_page_applies_latest_alias_after_inflight_refresh() -> None:
             and page._table.item(0, 0).text() == "@matias_a"
         )
         assert "Alias activo: matias" in page._summary.text()
+    finally:
+        queries.shutdown()
+        tasks.shutdown("test cleanup")
+
+
+def test_accounts_page_refresh_button_rehydrates_health_badge_after_refresh() -> None:
+    _app()
+    services, logs, tasks, queries, ctx = _build_ctx()
+    services.accounts.health_by_username["uno"] = "NO VERIFICADA"
+    page = AccountsPage(ctx)
+    try:
+        page.on_navigate_to()
+        def _row_value(username: str, column: int) -> str:
+            for row in range(page._table.rowCount()):
+                user_item = page._table.item(row, 0)
+                if user_item is None or user_item.text() != f"@{username}":
+                    continue
+                value_item = page._table.item(row, column)
+                return value_item.text() if value_item is not None else ""
+            return ""
+
+        assert _wait_until(
+            lambda: page._table.rowCount() == 2 and _row_value("uno", 2) == "NO VERIFICADA"
+        )
+
+        page._refresh_health()
+
+        assert _wait_until(lambda: bool(services.accounts.health_refresh_calls))
+        assert _wait_until(lambda: _row_value("uno", 2) == "VIVA")
+        assert _row_value("uno", 1) == "Si"
     finally:
         queries.shutdown()
         tasks.shutdown("test cleanup")

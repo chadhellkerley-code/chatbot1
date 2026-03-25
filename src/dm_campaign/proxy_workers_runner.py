@@ -1,25 +1,30 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import threading
 import time
+from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, MutableMapping, Optional
 
+import health_store
 from core.accounts import (
     connected_status,
     get_account,
     has_playwright_storage_state,
     list_all,
     mark_connected,
+    FILE as ACCOUNTS_FILE,
+    normalize_alias,
     playwright_storage_state_path,
 )
 from core.leads import load_list
-from core.proxy_preflight import preflight_accounts_for_proxy_runtime
+from core.proxy_preflight import DIRECT_NETWORK_KEY, account_proxy_preflight
 from runtime.runtime import (
     EngineCancellationToken,
     STOP_EVENT,
@@ -38,6 +43,7 @@ from src.dm_campaign.contracts import (
 )
 from src.dm_campaign.health_monitor import HealthMonitor
 from src.dm_campaign.lead_status_store import (
+    GLOBAL_CONTACT_TTL_SECONDS,
     apply_terminal_status_updates,
     get_prefilter_snapshot,
     mark_lead_failed,
@@ -45,8 +51,11 @@ from src.dm_campaign.lead_status_store import (
     mark_lead_skipped,
 )
 from src.dm_campaign.worker_state_machine import CampaignWorkerStateMachine, WorkerStateSnapshot
-from src.proxy_payload import proxy_from_account
-from src.runtime.playwright_runtime import PlaywrightRuntimeCancelledError, PlaywrightRuntimeTimeoutError
+from src.runtime.playwright_runtime import (
+    PLAYWRIGHT_BROWSER_MODE_MANAGED,
+    PlaywrightRuntimeCancelledError,
+    PlaywrightRuntimeTimeoutError,
+)
 from src.transport.human_instagram_sender import HumanInstagramSender
 from core.storage import (
     campaign_start_snapshot,
@@ -58,11 +67,73 @@ from core.templates_store import render_template
 
 logger = logging.getLogger(__name__)
 LOCAL_WORKER_PROXY_ID = "__no_proxy__"
+DEFAULT_LAUNCH_BATCH_SIZE = 8
+DEFAULT_LAUNCH_STAGGER_MIN_SECONDS = 0.6
+DEFAULT_LAUNCH_STAGGER_MAX_SECONDS = 1.4
+DEFAULT_LAUNCH_BATCH_PAUSE_MIN_SECONDS = 3.5
+DEFAULT_LAUNCH_BATCH_PAUSE_MAX_SECONDS = 6.0
 
 
 def _is_local_proxy_id(proxy_id: str) -> bool:
     normalized = str(proxy_id or "").strip().lower()
-    return normalized in {"", LOCAL_WORKER_PROXY_ID}
+    return normalized in {"", LOCAL_WORKER_PROXY_ID, DIRECT_NETWORK_KEY}
+
+
+def _normalize_effective_network_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized or normalized in {LOCAL_WORKER_PROXY_ID, DIRECT_NETWORK_KEY}:
+        return DIRECT_NETWORK_KEY
+    if normalized.startswith("proxy:"):
+        proxy_id = normalized.split(":", 1)[1].strip()
+        return f"proxy:{proxy_id}" if proxy_id else DIRECT_NETWORK_KEY
+    return f"proxy:{normalized}"
+
+
+def _runtime_proxy_id_from_network_key(network_key: str) -> str:
+    normalized = _normalize_effective_network_key(network_key)
+    if normalized == DIRECT_NETWORK_KEY:
+        return LOCAL_WORKER_PROXY_ID
+    return normalized.split(":", 1)[1].strip() or LOCAL_WORKER_PROXY_ID
+
+
+def _effective_network_key_for_account(account: Dict[str, Any]) -> str:
+    if not isinstance(account, dict):
+        return ""
+    explicit = str(account.get("effective_network_key") or "").strip()
+    if explicit:
+        return _normalize_effective_network_key(explicit)
+    assigned_proxy_id = str(account.get("assigned_proxy_id") or "").strip()
+    if assigned_proxy_id:
+        return _normalize_effective_network_key(f"proxy:{assigned_proxy_id}")
+    if str(account.get("proxy_url") or "").strip():
+        return ""
+    return DIRECT_NETWORK_KEY
+
+
+def _network_mode_for_account(account: Dict[str, Any]) -> str:
+    if not isinstance(account, dict):
+        return ""
+    mode = str(account.get("network_mode") or "").strip().lower()
+    if mode:
+        return mode
+    worker_key = _effective_network_key_for_account(account)
+    if not worker_key:
+        return "legacy" if str(account.get("proxy_url") or "").strip() else ""
+    return "direct" if worker_key == DIRECT_NETWORK_KEY else "proxy"
+
+
+def _worker_label(network_key: str) -> str:
+    normalized = _normalize_effective_network_key(network_key)
+    if normalized == DIRECT_NETWORK_KEY:
+        return DIRECT_NETWORK_KEY
+    return normalized.split(":", 1)[1].strip() or DIRECT_NETWORK_KEY
+
+
+def _runtime_proxy_id_for_account(account: Dict[str, Any]) -> str:
+    worker_key = _effective_network_key_for_account(account)
+    if not worker_key:
+        return ""
+    return _runtime_proxy_id_from_network_key(worker_key)
 
 
 def _account_storage_state_path(username: str) -> Path:
@@ -99,6 +170,8 @@ class AccountRuntimeState:
     cooldown_until: float = 0.0
     disabled_for_campaign: bool = False
     session_ready: bool = False
+    preflight_failure_reason: str = ""
+    preflight_failure_message: str = ""
 
 
 @dataclass(frozen=True)
@@ -133,6 +206,7 @@ class ProxyWorker:
         self,
         *,
         worker_id: str,
+        network_key: str = "",
         proxy_id: str,
         accounts: list[Dict[str, Any]],
         all_proxy_ids: list[str],
@@ -150,9 +224,12 @@ class ProxyWorker:
         runtime_event_callback: Callable[[dict[str, Any]], None] | None = None,
         headless: bool,
         send_flow_timeout_seconds: float,
+        visible_browser_layout: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.worker_id = worker_id
-        self.proxy_id = str(proxy_id or LOCAL_WORKER_PROXY_ID).strip() or LOCAL_WORKER_PROXY_ID
+        self.network_key = _normalize_effective_network_key(network_key or proxy_id)
+        runtime_proxy_id = str(proxy_id or _runtime_proxy_id_from_network_key(self.network_key)).strip()
+        self.proxy_id = runtime_proxy_id or LOCAL_WORKER_PROXY_ID
         self._is_local_worker = _is_local_proxy_id(self.proxy_id)
         self.accounts = accounts
         self.browser = None
@@ -168,10 +245,19 @@ class ProxyWorker:
         self._campaign_alias = str(campaign_alias or "").strip().lower()
         self._leads_alias = str(leads_alias or "").strip().lower()
         self._campaign_run_id = str(campaign_run_id or "").strip()
-        self._all_proxy_ids = [str(item or "").strip() for item in all_proxy_ids if str(item or "").strip()]
+        self._all_network_keys = [
+            _normalize_effective_network_key(item)
+            for item in all_proxy_ids
+            if str(item or "").strip()
+        ]
         self._cooldown_fail_threshold = max(1, int(cooldown_fail_threshold))
         self._send_flow_timeout_seconds = max(10.0, float(send_flow_timeout_seconds or 10.0))
         self._runtime_event_callback = runtime_event_callback
+        self._visible_browser_layout = (
+            dict(visible_browser_layout or {})
+            if (not headless and isinstance(visible_browser_layout, dict))
+            else {}
+        )
         self._sender = HumanInstagramSender(
             headless=headless,
             keep_browser_open_per_account=True,
@@ -190,8 +276,20 @@ class ProxyWorker:
                 continue
             limit = _resolve_account_message_limit(account)
             sent_today = _resolve_account_sent_today(account)
+            account_payload = dict(account)
+            account_payload["effective_network_key"] = _effective_network_key_for_account(account_payload) or self.network_key
+            account_payload["runtime_proxy_id"] = _runtime_proxy_id_for_account(account_payload) or self.proxy_id
+            if self._visible_browser_layout:
+                account_payload["visible_browser_layout"] = {
+                    **self._visible_browser_layout,
+                    "worker_id": self.worker_id,
+                    "proxy_id": self.proxy_id,
+                    "network_key": self.network_key,
+                }
+                account_payload["manual_visible_browser"] = True
+                account_payload["playwright_browser_mode"] = PLAYWRIGHT_BROWSER_MODE_MANAGED
             state = AccountRuntimeState(
-                account=dict(account),
+                account=account_payload,
                 max_messages=limit,
                 sent_count=sent_today,
                 disabled_for_campaign=sent_today >= limit,
@@ -237,6 +335,7 @@ class ProxyWorker:
                 "message": str(message or "").strip(),
                 "worker_id": self.worker_id,
                 "proxy_id": self.proxy_id,
+                "network_key": self.network_key,
                 **payload,
             }
         )
@@ -312,7 +411,7 @@ class ProxyWorker:
         self._scheduler.update_worker_activity(
             self.worker_id,
             sent=False,
-            proxy_id=self.proxy_id,
+            proxy_id=self.network_key,
             execution_state=snapshot.state,
             execution_stage=snapshot.stage,
             lead=snapshot.lead,
@@ -326,7 +425,7 @@ class ProxyWorker:
         self._scheduler.update_worker_activity(
             self.worker_id,
             sent=sent,
-            proxy_id=self.proxy_id,
+            proxy_id=self.network_key,
             execution_state=snapshot.state,
             execution_stage=snapshot.stage,
             lead=snapshot.lead,
@@ -418,7 +517,7 @@ class ProxyWorker:
                 proxy_status = self._proxy_status()
                 self._log_proxy_status_change(proxy_status)
                 if proxy_status == "blocked":
-                    task = self._scheduler.pop_task_for_proxy(self.proxy_id)
+                    task = self._scheduler.pop_task_for_proxy(self.network_key)
                     if task is not None:
                         self._transition_state(self._worker_state.set_blocked_proxy(reason="proxy_blocked"))
                         self._handle_blocked_proxy_task(task)
@@ -431,7 +530,7 @@ class ProxyWorker:
                     self._wait_briefly(0.35)
                     continue
 
-                task = self._scheduler.pop_task_for_proxy(self.proxy_id)
+                task = self._scheduler.pop_task_for_proxy(self.network_key)
                 if task is None:
                     if self._scheduler.is_empty():
                         break
@@ -504,11 +603,12 @@ class ProxyWorker:
                 if self._stop_requested():
                     self._requeue_task_for_stop(task, reason="stop_during_session_open")
                     return False
+                session_failure_reason = account_state.preflight_failure_reason or "login_failed"
                 self._handle_failure(
                     task=task,
                     account_state=account_state,
-                    reason="login_failed",
-                    is_login_error=True,
+                    reason=session_failure_reason,
+                    is_login_error=self._session_failure_is_login_error(session_failure_reason),
                     response_time=0.0,
                 )
                 return False
@@ -577,6 +677,7 @@ class ProxyWorker:
                     account_state,
                     detail=parsed_result.detail or "ok",
                     response_time=elapsed,
+                    result=parsed_result,
                 )
                 return True
 
@@ -606,8 +707,17 @@ class ProxyWorker:
         *,
         detail: str,
         response_time: float,
+        result: CampaignSendResult,
     ) -> None:
         username = str(account_state.account.get("username") or "").strip()
+        is_confirmed_send = (
+            result.status == CampaignSendStatus.SENT
+            and not bool(result.payload.get("sent_unverified"))
+        )
+        is_unverified_send = (
+            result.status == CampaignSendStatus.AMBIGUOUS
+            or bool(result.payload.get("sent_unverified"))
+        )
         account_state.sent_count += 1
         account_state.account["sent_today"] = account_state.sent_count
         account_state.fail_count = 0
@@ -618,18 +728,30 @@ class ProxyWorker:
 
         self._record_health_success(username, response_time)
         self._log_proxy_status_change(self._proxy_status())
-        mark_connected(username, True)
+        mark_connected(username, True, invalidate_health=False)
 
         with self._stats_lock:
             self._stats["sent"] = int(self._stats.get("sent", 0)) + 1
 
+        try:
+            if is_confirmed_send:
+                mark_lead_sent(task.lead, sent_by=username, alias=self._campaign_alias)
+        except Exception as exc:
+            self._report_storage_failure(
+                event_type="lead_status_write_failed",
+                message="No se pudo persistir lead_status global para un envio confirmado.",
+                exc=exc,
+                account=username,
+                lead=task.lead,
+            )
         try:
             log_sent(
                 username,
                 task.lead,
                 True,
                 detail,
-                verified=True,
+                verified=bool(result.verified or is_confirmed_send),
+                sent_unverified=is_unverified_send,
                 duration_ms=int(max(0.0, response_time) * 1000),
                 source_engine="campaign",
                 campaign_alias=self._campaign_alias,
@@ -639,17 +761,7 @@ class ProxyWorker:
         except Exception as exc:
             self._report_storage_failure(
                 event_type="sent_log_write_failed",
-                message="No se pudo persistir sent_log para un envio confirmado.",
-                exc=exc,
-                account=username,
-                lead=task.lead,
-            )
-        try:
-            mark_lead_sent(task.lead, sent_by=username, alias=self._campaign_alias)
-        except Exception as exc:
-            self._report_storage_failure(
-                event_type="lead_status_write_failed",
-                message="No se pudo persistir lead_status sent para un envio confirmado.",
+                message="No se pudo persistir sent_log para un envio campaign.",
                 exc=exc,
                 account=username,
                 lead=task.lead,
@@ -702,10 +814,10 @@ class ProxyWorker:
         account_state.fail_count += 1
 
         if is_login_error:
-            mark_connected(username, False)
+            mark_connected(username, False, invalidate_health=False)
         elif username:
             # Un error de envio no implica sesion rota; evitar desconectar cuentas sanas.
-            mark_connected(username, True)
+            mark_connected(username, True, invalidate_health=False)
 
         if is_login_error:
             self._record_health_failure(
@@ -746,10 +858,10 @@ class ProxyWorker:
         ]
         retry_task = self._scheduler.build_retry_task(
             task,
-            failed_proxy_id=self.proxy_id,
+            failed_proxy_id=self.network_key,
             failed_account_id=username,
             same_proxy_account_ids=same_proxy_accounts,
-            all_proxy_ids=self._all_proxy_ids,
+            all_proxy_ids=self._all_network_keys,
         )
         if retry_task is not None:
             self._scheduler.push_task(retry_task)
@@ -791,9 +903,9 @@ class ProxyWorker:
         retry_task = LeadTask(
             lead=task.lead,
             attempt=task.attempt + 1,
-            preferred_proxy_id=self.proxy_id,
+            preferred_proxy_id=self.network_key,
             excluded_accounts=tuple(),
-            history=task.history + (f"{self.proxy_id}:{reason_upper}",),
+            history=task.history + (f"{self.network_key}:{reason_upper}",),
         )
         account_state.fail_count = 0
         account_state.cooldown_until = 0.0
@@ -856,6 +968,22 @@ class ProxyWorker:
     @staticmethod
     def _normalize_failure_reason(reason: str) -> str:
         return str(reason or "").strip().upper()
+
+    @staticmethod
+    def _session_failure_is_login_error(reason: str) -> bool:
+        normalized = str(reason or "").strip().upper()
+        non_login_failures = {
+            "INACTIVE",
+            "ACCOUNT_COOLDOWN",
+            "ACCOUNT_QUARANTINE",
+            "HEALTH_BLOCKED",
+            "NETWORK_IDENTITY_MISMATCH",
+            "PROXY_INACTIVE",
+            "PROXY_LEGACY",
+            "PROXY_MISSING",
+            "PROXY_QUARANTINED",
+        }
+        return normalized not in non_login_failures
 
     @staticmethod
     def _is_non_retryable_lead_failure(reason: str) -> bool:
@@ -1004,10 +1132,10 @@ class ProxyWorker:
         ]
         retry_task = self._scheduler.build_retry_task(
             task,
-            failed_proxy_id=self.proxy_id,
+            failed_proxy_id=self.network_key,
             failed_account_id="",
             same_proxy_account_ids=same_proxy_accounts,
-            all_proxy_ids=self._all_proxy_ids,
+            all_proxy_ids=self._all_network_keys,
         )
         if retry_task is not None:
             self._scheduler.push_task(retry_task)
@@ -1043,10 +1171,10 @@ class ProxyWorker:
     def _handle_blocked_proxy_task(self, task: LeadTask) -> None:
         retry_task = self._scheduler.build_retry_task(
             task,
-            failed_proxy_id=self.proxy_id,
+            failed_proxy_id=self.network_key,
             failed_account_id="",
             same_proxy_account_ids=[],
-            all_proxy_ids=self._all_proxy_ids,
+            all_proxy_ids=self._all_network_keys,
         )
         if retry_task is not None:
             self._scheduler.push_task(retry_task)
@@ -1074,10 +1202,32 @@ class ProxyWorker:
         account = state.account
         username = str(account.get("username") or "").strip()
         if not username:
+            state.preflight_failure_reason = "missing_username"
+            state.preflight_failure_message = "Cuenta sin username valido."
             return False
 
-        refreshed = get_account(username) or account
-        state.account = dict(refreshed)
+        refreshed = dict(get_account(username) or account)
+        readiness = _campaign_account_readiness(
+            refreshed,
+            expected_network_key=self.network_key,
+        )
+        if not bool(readiness.get("eligible")):
+            state.preflight_failure_reason = str(readiness.get("reason_code") or "login_failed")
+            state.preflight_failure_message = str(readiness.get("message") or "").strip()
+            state.session_ready = False
+            if state.preflight_failure_reason == "network_identity_mismatch":
+                state.disabled_for_campaign = True
+            self._log(
+                "warning",
+                "Cuenta @%s excluida durante ensure_session (%s).",
+                username,
+                state.preflight_failure_message or state.preflight_failure_reason,
+            )
+            return False
+
+        state.preflight_failure_reason = ""
+        state.preflight_failure_message = ""
+        state.account = dict(readiness.get("account") or refreshed)
         refreshed_sent_today = _resolve_account_sent_today(state.account)
         state.sent_count = max(state.sent_count, refreshed_sent_today)
         state.account["sent_today"] = state.sent_count
@@ -1085,10 +1235,14 @@ class ProxyWorker:
         if state.sent_count >= state.max_messages:
             state.disabled_for_campaign = True
 
-        state.session_ready = has_playwright_storage_state(username)
+        state.session_ready = _account_has_storage_state(state.account)
         if state.session_ready:
-            mark_connected(username, True)
-        return True
+            mark_connected(username, True, invalidate_health=False)
+            return True
+
+        state.preflight_failure_reason = "storage_state_missing"
+        state.preflight_failure_message = f"La cuenta @{username} perdio el storage_state usable."
+        return False
 
     def _account_schedulable(
         self,
@@ -1301,34 +1455,290 @@ def _account_usernames(accounts: list[Dict[str, Any]]) -> set[str]:
     }
 
 
+def _timestamp_from_account(account: Dict[str, Any], *keys: str) -> float:
+    if not isinstance(account, dict):
+        return 0.0
+    for key in keys:
+        try:
+            value = float(account.get(key) or 0.0)
+        except Exception:
+            value = 0.0
+        if value > 0.0:
+            return value
+    return 0.0
+
+
+def _campaign_block_payload(
+    *,
+    account: Dict[str, Any],
+    reason_code: str,
+    message: str,
+    effective_network_key: str = "",
+    network_mode: str = "",
+    proxy_preflight_status: str = "",
+    runtime_proxy_id: str = "",
+) -> dict[str, Any]:
+    username = str(account.get("username") or "").strip().lstrip("@")
+    payload = {
+        "username": username,
+        "alias": str(account.get("alias") or "default").strip() or "default",
+        "reason_code": str(reason_code or "").strip() or "blocked",
+        "message": str(message or "").strip() or "Cuenta excluida por preflight.",
+        "effective_network_key": _normalize_effective_network_key(effective_network_key)
+        if str(effective_network_key or "").strip()
+        else "",
+        "network_mode": str(network_mode or "").strip().lower(),
+        "proxy_preflight_status": str(proxy_preflight_status or "").strip().lower(),
+        "runtime_proxy_id": str(runtime_proxy_id or "").strip(),
+    }
+    return payload
+
+
+def _campaign_account_readiness(
+    account: Dict[str, Any] | None,
+    *,
+    expected_network_key: str = "",
+) -> dict[str, Any]:
+    current = dict(account or {})
+    username = str(current.get("username") or "").strip().lstrip("@")
+    alias = str(current.get("alias") or "default").strip() or "default"
+    if not username:
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account={"username": "", "alias": alias},
+                reason_code="missing_username",
+                message="Cuenta sin username valido.",
+            ),
+        }
+
+    if not bool(current.get("active")):
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="inactive",
+                message=f"La cuenta @{username} no esta activa.",
+            ),
+        }
+
+    session_ready = _account_has_storage_state(current)
+    if not session_ready:
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="storage_state_missing",
+                message=f"La cuenta @{username} no tiene storage_state usable.",
+            ),
+        }
+
+    connected = False
+    try:
+        connected = bool(
+            connected_status(
+                current,
+                fast=False,
+                persist=False,
+                reason="campaign-preflight",
+            )
+        )
+    except Exception:
+        connected = bool(current.get("connected"))
+    if not connected:
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="disconnected",
+                message=f"La cuenta @{username} no esta connected.",
+            ),
+        }
+
+    record, expired = health_store.get_record(username)
+    if record is not None and not expired and health_store.is_dead_state(record.state):
+        reason = str(record.reason or "").strip() or record.state
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="health_blocked",
+                message=f"La cuenta @{username} quedo bloqueada por health state ({reason}).",
+            ),
+        }
+
+    cooldown_until = _timestamp_from_account(current, "cooldown_until", "account_cooldown_until")
+    if cooldown_until > time.time():
+        seconds_left = max(0, int(cooldown_until - time.time()))
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="account_cooldown",
+                message=f"La cuenta @{username} sigue en cooldown por {seconds_left}s.",
+            ),
+        }
+
+    quarantine_until = _timestamp_from_account(current, "quarantine_until", "account_quarantine_until")
+    if quarantine_until > time.time():
+        seconds_left = max(0, int(quarantine_until - time.time()))
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="account_quarantine",
+                message=f"La cuenta @{username} sigue en quarantine por {seconds_left}s.",
+            ),
+        }
+
+    proxy_status = account_proxy_preflight(
+        current,
+        allow_proxyless=True,
+        allow_legacy=False,
+    )
+    worker_key = _normalize_effective_network_key(proxy_status.get("effective_network_key"))
+    network_mode = str(proxy_status.get("network_mode") or "").strip().lower()
+    runtime_proxy_id = _runtime_proxy_id_from_network_key(worker_key) if worker_key else ""
+    proxy_preflight_status = str(proxy_status.get("status") or "").strip().lower()
+    if bool(proxy_status.get("blocking")):
+        message = str(proxy_status.get("message") or proxy_preflight_status or "proxy_blocked").strip()
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code=f"proxy_{proxy_preflight_status or 'blocked'}",
+                message=message,
+                effective_network_key=str(proxy_status.get("effective_network_key") or ""),
+                network_mode=network_mode,
+                proxy_preflight_status=proxy_preflight_status,
+                runtime_proxy_id=runtime_proxy_id,
+            ),
+        }
+
+    expected_key = _normalize_effective_network_key(expected_network_key) if expected_network_key else ""
+    if expected_key and worker_key != expected_key:
+        return {
+            "eligible": False,
+            "account": current,
+            **_campaign_block_payload(
+                account=current,
+                reason_code="network_identity_mismatch",
+                message=(
+                    f"La cuenta @{username} ya no pertenece al worker {expected_key}; "
+                    f"ahora resuelve a {worker_key or 'sin_worker'}."
+                ),
+                effective_network_key=worker_key,
+                network_mode=network_mode,
+                proxy_preflight_status=proxy_preflight_status,
+                runtime_proxy_id=runtime_proxy_id,
+            ),
+        }
+
+    current["effective_network_key"] = worker_key
+    current["network_mode"] = network_mode
+    current["proxy_preflight_status"] = proxy_preflight_status
+    current["proxy_preflight_message"] = str(proxy_status.get("message") or "").strip()
+    current["runtime_proxy_id"] = runtime_proxy_id
+    current["connected"] = connected
+    return {
+        "eligible": True,
+        "account": current,
+        "username": username,
+        "alias": alias,
+        "reason_code": "",
+        "message": "",
+        "effective_network_key": worker_key,
+        "network_mode": network_mode,
+        "proxy_preflight_status": proxy_preflight_status,
+        "runtime_proxy_id": runtime_proxy_id,
+    }
+
+
+def _campaign_accounts_preflight(accounts: list[Dict[str, Any]]) -> dict[str, Any]:
+    ready_accounts: list[dict[str, Any]] = []
+    blocked_accounts: list[dict[str, Any]] = []
+    blocked_reason_counts: Counter[str] = Counter()
+    network_mode_counts: Counter[str] = Counter()
+
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        readiness = _campaign_account_readiness(account)
+        if not bool(readiness.get("eligible")):
+            blocked_accounts.append(
+                {
+                    key: value
+                    for key, value in readiness.items()
+                    if key != "account"
+                }
+            )
+            blocked_reason_counts[str(readiness.get("reason_code") or "blocked")] += 1
+            continue
+        current = dict(readiness.get("account") or {})
+        ready_accounts.append(current)
+        network_mode_counts[str(readiness.get("network_mode") or "unknown")] += 1
+
+    return {
+        "ready_accounts": ready_accounts,
+        "blocked_accounts": blocked_accounts,
+        "ready": len(ready_accounts),
+        "blocked": len(blocked_accounts),
+        "blocked_reason_counts": dict(blocked_reason_counts),
+        "network_mode_counts": dict(network_mode_counts),
+    }
+
+
 def _load_selected_accounts(alias: str) -> list[Dict[str, Any]]:
-    alias_norm = str(alias or "default").strip().lower()
+    requested_alias = alias or "default"
+    alias_norm = normalize_alias(requested_alias)
     selected: list[Dict[str, Any]] = []
+    matched_any_alias = False
+    available_aliases: set[str] = set()
     for account in list_all():
         if not isinstance(account, dict):
             continue
         username = str(account.get("username") or "").strip()
         if not username:
             continue
-        account_alias = str(account.get("alias") or "default").strip().lower()
-        if account_alias != alias_norm:
+        account_alias = account.get("alias") or "default"
+        available_aliases.add(str(account_alias or "default"))
+        if normalize_alias(account_alias) != alias_norm:
             continue
-        if not bool(account.get("active")):
-            continue
-        try:
-            is_connected = bool(
-                connected_status(
-                    account,
-                    fast=True,
-                    persist=False,
-                    reason="campaign-load",
-                )
-            )
-        except Exception:
-            is_connected = bool(account.get("connected"))
-        if not is_connected:
-            continue
+        matched_any_alias = True
         selected.append(dict(account))
+
+    if alias_norm and not matched_any_alias:
+        ui_alias_exists = False
+        try:
+            registry_path = Path(ACCOUNTS_FILE).with_name("aliases.json")
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            raw_aliases: list[Any] = []
+            if isinstance(payload, dict):
+                raw_aliases = payload.get("aliases") if isinstance(payload.get("aliases"), list) else []
+            elif isinstance(payload, list):
+                raw_aliases = payload
+            for entry in raw_aliases:
+                if isinstance(entry, dict):
+                    display_name = entry.get("display_name") or entry.get("alias") or entry.get("name")
+                else:
+                    display_name = entry
+                if normalize_alias(str(display_name or "")) == alias_norm:
+                    ui_alias_exists = True
+                    break
+        except Exception:
+            ui_alias_exists = False
+
+        if ui_alias_exists:
+            aliases_sorted = sorted(available_aliases)
+            logger.debug("Alias mismatch: requested=%s available=%s", requested_alias, aliases_sorted)
     return selected
 
 
@@ -1358,7 +1768,10 @@ def load_accounts(
 ) -> list[Dict[str, Any]]:
     _ = run_id
     alias_norm = str(alias or "default").strip().lower()
-    selected = preflight_accounts_for_proxy_runtime(_load_selected_accounts(alias_norm)).get("ready_accounts") or []
+    preflight = _campaign_accounts_preflight(_load_selected_accounts(alias_norm))
+    selected = _order_accounts_for_worker_start(
+        [dict(account) for account in (preflight.get("ready_accounts") or []) if isinstance(account, dict)]
+    )
     counts_today = sent_today_counts
     if counts_today is None:
         counts_today = dict(
@@ -1387,7 +1800,7 @@ def load_leads(leads_alias: str) -> list[str]:
 
 
 def _normalize_campaign_alias(value: Any) -> str:
-    return str(value or "").strip().lower()
+    return normalize_alias(value)
 
 
 def _campaign_account_usernames(alias: str) -> set[str]:
@@ -1449,6 +1862,25 @@ def _collect_legacy_terminal_status_update(
     skipped_updates.append((lead, reason))
 
 
+def _global_contact_is_active(entry: Dict[str, Any] | None, *, now_ts: int) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    status = str(entry.get("last_status") or entry.get("status") or "sent").strip().lower()
+    if status and status != "sent":
+        return False
+    timestamp = 0
+    for key in ("last_contacted_at", "sent_timestamp", "updated_at", "ts"):
+        try:
+            timestamp = int(entry.get(key) or 0)
+        except Exception:
+            timestamp = 0
+        if timestamp > 0:
+            break
+    if timestamp <= 0:
+        return False
+    return max(0, now_ts - timestamp) < GLOBAL_CONTACT_TTL_SECONDS
+
+
 def _filter_pending_leads_for_campaign(
     leads: list[str],
     *,
@@ -1456,8 +1888,8 @@ def _filter_pending_leads_for_campaign(
     alias_accounts: set[str] | None = None,
     campaign_registry: set[str] | None = None,
     shared_registry: set[str] | None = None,
-    alias_terminal_leads: set[str] | None = None,
-    legacy_status_map: Dict[str, Dict[str, Any]] | None = None,
+    alias_status_map: Dict[str, Dict[str, Any]] | None = None,
+    global_contact_map: Dict[str, Dict[str, Any]] | None = None,
 ) -> tuple[list[str], Dict[str, int]]:
     alias_norm = _normalize_campaign_alias(alias)
     resolved_alias_accounts = set(alias_accounts or _campaign_account_usernames(alias_norm))
@@ -1477,25 +1909,33 @@ def _filter_pending_leads_for_campaign(
         if shared_registry is not None
         else (storage_snapshot.get("shared_registry") if storage_snapshot is not None else set())
     )
-    if alias_terminal_leads is None or legacy_status_map is None:
-        status_terminal_leads, status_legacy_map = get_prefilter_snapshot(alias_norm)
-        if alias_terminal_leads is None:
-            alias_terminal_leads = status_terminal_leads
-        if legacy_status_map is None:
-            legacy_status_map = status_legacy_map
-    scoped_terminal_leads = set(alias_terminal_leads or ())
-    resolved_legacy_status_map = dict(legacy_status_map or {})
+    if alias_status_map is None or global_contact_map is None:
+        snapshot_alias_status_map, snapshot_global_contact_map = get_prefilter_snapshot(alias_norm)
+        if alias_status_map is None:
+            alias_status_map = snapshot_alias_status_map
+        if global_contact_map is None:
+            global_contact_map = snapshot_global_contact_map
+    resolved_alias_status_map = {
+        str(lead_key): dict(entry)
+        for lead_key, entry in (alias_status_map or {}).items()
+        if isinstance(entry, dict)
+    }
+    resolved_global_contact_map = {
+        str(lead_key): dict(entry)
+        for lead_key, entry in (global_contact_map or {}).items()
+        if isinstance(entry, dict)
+    }
     pending: list[str] = []
     skipped_duplicates = 0
     skipped_already_sent = 0
-    blocked_by_alias_status = 0
-    blocked_by_campaign_registry = 0
-    blocked_by_legacy_campaign_status = 0
+    blocked_by_global_contact = 0
+    blocked_by_alias_skipped_status = 0
+    advisory_alias_sent_ignored = 0
+    advisory_campaign_registry_hits = 0
     advisory_shared_registry_hits = 0
-    advisory_legacy_status_ignored = 0
-    legacy_sent_updates: list[tuple[str, str]] = []
-    legacy_skipped_updates: list[tuple[str, str]] = []
     seen: set[str] = set()
+    now_ts = int(time.time())
+    del resolved_alias_accounts
 
     for lead in leads:
         normalized = normalize_contact_username(lead)
@@ -1506,55 +1946,30 @@ def _filter_pending_leads_for_campaign(
             continue
         seen.add(normalized)
 
-        blocked_by_scoped_status = normalized in scoped_terminal_leads
-        blocked_by_status = blocked_by_scoped_status
-        blocked_by_registry = normalized in blocked_by_campaign_registry_set
-        legacy_entry = resolved_legacy_status_map.get(normalized)
-        blocked_by_legacy = _legacy_terminal_status_matches_alias(
-            alias=alias_norm,
-            alias_accounts=resolved_alias_accounts,
-            entry=legacy_entry,
+        alias_entry = resolved_alias_status_map.get(normalized)
+        alias_status = str(alias_entry.get("status") or "").strip().lower() if isinstance(alias_entry, dict) else ""
+        blocked_by_global = _global_contact_is_active(
+            resolved_global_contact_map.get(normalized),
+            now_ts=now_ts,
         )
+        blocked_by_alias_skip = alias_status == "skipped"
 
-        if blocked_by_legacy and not blocked_by_status and isinstance(legacy_entry, dict):
-            _collect_legacy_terminal_status_update(
-                normalized,
-                entry=legacy_entry,
-                sent_updates=legacy_sent_updates,
-                skipped_updates=legacy_skipped_updates,
-            )
-            scoped_terminal_leads.add(normalized)
-            blocked_by_status = True
-
-        if blocked_by_status or blocked_by_registry or blocked_by_legacy:
+        if blocked_by_global or blocked_by_alias_skip:
             skipped_already_sent += 1
-            if blocked_by_scoped_status:
-                blocked_by_alias_status += 1
-            if blocked_by_registry:
-                blocked_by_campaign_registry += 1
-            if blocked_by_legacy:
-                blocked_by_legacy_campaign_status += 1
+            if blocked_by_global:
+                blocked_by_global_contact += 1
+            if blocked_by_alias_skip:
+                blocked_by_alias_skipped_status += 1
             continue
 
+        if alias_status == "sent":
+            advisory_alias_sent_ignored += 1
+        if normalized in blocked_by_campaign_registry_set:
+            advisory_campaign_registry_hits += 1
         if normalized in shared_registry_set:
             advisory_shared_registry_hits += 1
-        if isinstance(legacy_entry, dict):
-            advisory_legacy_status_ignored += 1
 
         pending.append(normalized)
-
-    if legacy_sent_updates or legacy_skipped_updates:
-        try:
-            apply_terminal_status_updates(
-                alias=alias_norm,
-                sent_updates=legacy_sent_updates,
-                skipped_updates=legacy_skipped_updates,
-            )
-        except Exception:
-            logger.exception(
-                "[campaign_alias=%s] No se pudieron migrar estados terminales legacy a lead_status.",
-                alias_norm or "-",
-            )
 
     return pending, {
         "skipped_duplicates": skipped_duplicates,
@@ -1562,11 +1977,11 @@ def _filter_pending_leads_for_campaign(
         "pending": len(pending),
         "blocked_total": skipped_already_sent,
         "valid_total": len(pending),
-        "blocked_by_alias_status": blocked_by_alias_status,
-        "blocked_by_campaign_registry": blocked_by_campaign_registry,
-        "blocked_by_legacy_campaign_status": blocked_by_legacy_campaign_status,
+        "blocked_by_global_contact": blocked_by_global_contact,
+        "blocked_by_alias_skipped_status": blocked_by_alias_skipped_status,
+        "advisory_alias_sent_ignored": advisory_alias_sent_ignored,
+        "advisory_campaign_registry_hits": advisory_campaign_registry_hits,
         "advisory_shared_registry_hits": advisory_shared_registry_hits,
-        "advisory_legacy_status_ignored": advisory_legacy_status_ignored,
         "blocked_by_campaign_history": 0,
     }
 
@@ -1582,48 +1997,48 @@ def _log_campaign_diagnostics(
     blocked_total = max(0, int(lead_filter_stats.get("blocked_total", lead_filter_stats.get("skipped_already_sent", 0))))
     valid_total = max(0, int(lead_filter_stats.get("valid_total", lead_filter_stats.get("pending", 0))))
     duplicates = max(0, int(lead_filter_stats.get("skipped_duplicates", 0)))
-    blocked_alias_status = max(0, int(lead_filter_stats.get("blocked_by_alias_status", 0)))
-    blocked_campaign_registry = max(0, int(lead_filter_stats.get("blocked_by_campaign_registry", 0)))
-    blocked_legacy_campaign_status = max(0, int(lead_filter_stats.get("blocked_by_legacy_campaign_status", 0)))
+    blocked_global_contact = max(0, int(lead_filter_stats.get("blocked_by_global_contact", 0)))
+    blocked_alias_skipped = max(0, int(lead_filter_stats.get("blocked_by_alias_skipped_status", 0)))
+    advisory_alias_sent_ignored = max(0, int(lead_filter_stats.get("advisory_alias_sent_ignored", 0)))
+    advisory_campaign_registry_hits = max(0, int(lead_filter_stats.get("advisory_campaign_registry_hits", 0)))
     advisory_shared_registry_hits = max(0, int(lead_filter_stats.get("advisory_shared_registry_hits", 0)))
-    advisory_legacy_status_ignored = max(0, int(lead_filter_stats.get("advisory_legacy_status_ignored", 0)))
     blocked_history = max(0, int(lead_filter_stats.get("blocked_by_campaign_history", 0)))
 
     if callable(log_callback):
         log_callback(
             "info",
             "Campaign diagnostics | alias=%s leads_alias=%s total=%d blocked=%d valid=%d duplicates=%d "
-            "alias_status=%d campaign_registry=%d legacy_campaign_status=%d shared_registry_ignored=%d "
-            "legacy_status_ignored=%d campaign_history=%d",
+            "global_contact=%d alias_skipped=%d alias_sent_ignored=%d campaign_registry_ignored=%d "
+            "shared_registry_ignored=%d campaign_history=%d",
             alias,
             leads_alias,
             total_leads_loaded,
             blocked_total,
             valid_total,
             duplicates,
-            blocked_alias_status,
-            blocked_campaign_registry,
-            blocked_legacy_campaign_status,
+            blocked_global_contact,
+            blocked_alias_skipped,
+            advisory_alias_sent_ignored,
+            advisory_campaign_registry_hits,
             advisory_shared_registry_hits,
-            advisory_legacy_status_ignored,
             blocked_history,
         )
     else:
         logger.info(
             "Campaign diagnostics | alias=%s leads_alias=%s total=%d blocked=%d valid=%d duplicates=%d "
-            "alias_status=%d campaign_registry=%d legacy_campaign_status=%d shared_registry_ignored=%d "
-            "legacy_status_ignored=%d campaign_history=%d",
+            "global_contact=%d alias_skipped=%d alias_sent_ignored=%d campaign_registry_ignored=%d "
+            "shared_registry_ignored=%d campaign_history=%d",
             alias,
             leads_alias,
             total_leads_loaded,
             blocked_total,
             valid_total,
             duplicates,
-            blocked_alias_status,
-            blocked_campaign_registry,
-            blocked_legacy_campaign_status,
+            blocked_global_contact,
+            blocked_alias_skipped,
+            advisory_alias_sent_ignored,
+            advisory_campaign_registry_hits,
             advisory_shared_registry_hits,
-            advisory_legacy_status_ignored,
             blocked_history,
         )
     _print_info_block(
@@ -1637,23 +2052,18 @@ def _log_campaign_diagnostics(
             f"valid leads: {valid_total}",
             "source of block:",
             "note: source counts may overlap",
-            f"campaign alias lead status: {blocked_alias_status}",
-            f"campaign sent registry: {blocked_campaign_registry}",
-            f"legacy campaign status migrated: {blocked_legacy_campaign_status}",
+            f"global contact blocked (<7d): {blocked_global_contact}",
+            f"alias skipped blocked: {blocked_alias_skipped}",
+            f"alias sent ignored without active global block: {advisory_alias_sent_ignored}",
+            f"campaign sent_log bootstrap/advisory hits: {advisory_campaign_registry_hits}",
             f"campaign history: {blocked_history}",
             f"shared sent_log advisory only: {advisory_shared_registry_hits}",
-            f"legacy global lead status ignored: {advisory_legacy_status_ignored}",
         ],
     )
 
 
-def _explicit_worker_proxy_id(account: Dict[str, Any]) -> str:
-    assigned_proxy_id = str(account.get("assigned_proxy_id") or "").strip()
-    if assigned_proxy_id:
-        return assigned_proxy_id
-    proxy_payload = proxy_from_account(account) or {}
-    proxy_server = str(proxy_payload.get("server") or "").strip()
-    return proxy_server
+def _worker_network_key(account: Dict[str, Any]) -> str:
+    return _effective_network_key_for_account(account)
 
 
 def _account_remaining_capacity(account: Dict[str, Any]) -> int:
@@ -1772,20 +2182,24 @@ def _validate_initial_worker_tasks(
 
 
 def calculate_workers(accounts: list[Dict[str, Any]]) -> Dict[str, Any]:
-    proxy_groups = {
-        proxy_id: _order_accounts_for_worker_start(grouped_accounts)
-        for proxy_id, grouped_accounts in _group_accounts_by_proxy(accounts).items()
+    worker_groups = {
+        worker_key: _order_accounts_for_worker_start(grouped_accounts)
+        for worker_key, grouped_accounts in _group_accounts_by_proxy(accounts).items()
         if grouped_accounts
     }
     group_capacities = {
-        proxy_id: _group_remaining_capacity(grouped_accounts)
-        for proxy_id, grouped_accounts in proxy_groups.items()
+        worker_key: _group_remaining_capacity(grouped_accounts)
+        for worker_key, grouped_accounts in worker_groups.items()
+    }
+    worker_proxy_map = {
+        worker_key: _runtime_proxy_id_for_account(grouped_accounts[0]) if grouped_accounts else LOCAL_WORKER_PROXY_ID
+        for worker_key, grouped_accounts in worker_groups.items()
     }
     ranked = sorted(
         [
-            (proxy_id, items)
-            for proxy_id, items in proxy_groups.items()
-            if items and int(group_capacities.get(proxy_id, 0)) > 0
+            (worker_key, items)
+            for worker_key, items in worker_groups.items()
+            if items and int(group_capacities.get(worker_key, 0)) > 0
         ],
         key=lambda item: (
             -sum(1 for account in item[1] if _account_has_storage_state(account)),
@@ -1794,17 +2208,23 @@ def calculate_workers(accounts: list[Dict[str, Any]]) -> Dict[str, Any]:
             str(item[0] or ""),
         ),
     )
-    ordered_worker_ids = [proxy_id for proxy_id, _items in ranked]
-    proxy_ids = [proxy_id for proxy_id in ordered_worker_ids if not _is_local_proxy_id(proxy_id)]
-    has_none_accounts = any(_is_local_proxy_id(proxy_id) for proxy_id in ordered_worker_ids)
+    ordered_worker_ids = [worker_key for worker_key, _items in ranked]
+    proxy_ids = [
+        _runtime_proxy_id_from_network_key(worker_key)
+        for worker_key in ordered_worker_ids
+        if worker_key != DIRECT_NETWORK_KEY
+    ]
+    has_none_accounts = any(worker_key == DIRECT_NETWORK_KEY for worker_key in ordered_worker_ids)
 
     return {
-        "proxy_groups": proxy_groups,
+        "worker_groups": worker_groups,
+        "proxy_groups": worker_groups,
         "group_capacities": group_capacities,
         "proxies": proxy_ids,
         "has_none_accounts": has_none_accounts,
         "workers_capacity": len(ordered_worker_ids),
         "ordered_worker_ids": ordered_worker_ids,
+        "worker_proxy_map": worker_proxy_map,
     }
 
 
@@ -1894,13 +2314,19 @@ def run_dynamic_campaign(
         now = time.time()
         for worker_id, slot in worker_slots.items():
             snapshot = scheduler.worker_snapshot(worker_id)
+            network_key = _normalize_effective_network_key(slot.get("network_key"))
             proxy_id = str(slot.get("proxy_id") or "")
             rows.append(
                 {
                     "worker_id": worker_id,
+                    "network_key": network_key,
                     "proxy_id": proxy_id,
-                    "proxy_label": _proxy_label(proxy_id),
-                    "proxy_status": health_monitor.proxy_status(proxy_id, now=now) if health_monitor is not None else "",
+                    "proxy_label": _proxy_label(network_key or proxy_id),
+                    "proxy_status": (
+                        "healthy"
+                        if _is_local_proxy_id(proxy_id)
+                        else health_monitor.proxy_status(proxy_id, now=now) if health_monitor is not None else ""
+                    ),
                     "execution_state": (
                         snapshot.execution_state.value if snapshot is not None else WorkerExecutionState.IDLE.value
                     ),
@@ -1980,6 +2406,8 @@ def run_dynamic_campaign(
         skipped_preblocked: int = 0,
         health_state: dict[str, Any] | None = None,
         account_health: dict[str, Any] | None = None,
+        preflight_blocked: list[dict[str, Any]] | None = None,
+        worker_plan: list[dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         return {
             "sent": max(0, int(sent or 0)),
@@ -1995,43 +2423,77 @@ def run_dynamic_campaign(
             "skipped_preblocked": max(0, int(skipped_preblocked or 0)),
             "health_state": dict(health_state or {}),
             "account_health": dict(account_health or {}),
+            "preflight_blocked": [dict(item) for item in (preflight_blocked or []) if isinstance(item, dict)],
+            "worker_plan": [dict(item) for item in (worker_plan or []) if isinstance(item, dict)],
         }
 
     accounts = _measure_preflight("load_accounts", lambda: _load_selected_accounts(alias))
     if not accounts:
-        _run_log("warning", "No hay cuentas activas+conectadas en alias '%s'.", alias)
+        _run_log("warning", "No hay cuentas cargadas en alias '%s'.", alias)
         _log_preflight_timings()
         _emit_progress(
             CampaignRunStatus.COMPLETED.value,
-            message="No hay cuentas activas o conectadas para iniciar la campaña.",
+            message="No hay cuentas cargadas para iniciar la campaña.",
             total_leads=total_leads_hint,
         )
         return _build_result()
 
-    proxy_preflight = _measure_preflight(
+    campaign_preflight = _measure_preflight(
         "proxy_preflight",
-        lambda: preflight_accounts_for_proxy_runtime(accounts),
+        lambda: _campaign_accounts_preflight(accounts),
     )
-    for blocked in proxy_preflight.get("blocked_accounts") or []:
+    for blocked in campaign_preflight.get("blocked_accounts") or []:
         if not isinstance(blocked, dict):
             continue
         username = str(blocked.get("username") or "").strip().lstrip("@") or "-"
-        message = str(blocked.get("message") or blocked.get("status") or "proxy_blocked").strip()
-        _run_log("warning", "Cuenta excluida por proxy invalido/quarantined @%s: %s", username, message)
+        message = str(blocked.get("message") or blocked.get("reason_code") or "campaign_preflight_blocked").strip()
+        _run_log("warning", "Cuenta excluida por campaign preflight @%s: %s", username, message)
     accounts = [
         dict(account)
-        for account in (proxy_preflight.get("ready_accounts") or [])
+        for account in (campaign_preflight.get("ready_accounts") or [])
         if isinstance(account, dict)
     ]
+    blocked_accounts = [
+        dict(item)
+        for item in (campaign_preflight.get("blocked_accounts") or [])
+        if isinstance(item, dict)
+    ]
+    network_mode_counts = {
+        str(key): int(value or 0)
+        for key, value in (campaign_preflight.get("network_mode_counts") or {}).items()
+    }
+    blocked_reason_counts = {
+        str(key): int(value or 0)
+        for key, value in (campaign_preflight.get("blocked_reason_counts") or {}).items()
+    }
+    _run_log(
+        "info",
+        "Campaign account preflight | alias=%s total=%d ready=%d blocked=%d proxied=%d direct=%d reasons=%s",
+        alias,
+        len(accounts) + len(blocked_accounts),
+        len(accounts),
+        len(blocked_accounts),
+        int(network_mode_counts.get("proxy", 0)),
+        int(network_mode_counts.get("direct", 0)),
+        blocked_reason_counts,
+    )
+    if blocked_accounts:
+        _print_info_block(
+            "Cuentas excluidas por preflight",
+            [
+                f"@{str(item.get('username') or '-')} -> {str(item.get('message') or item.get('reason_code') or 'blocked')}"
+                for item in blocked_accounts
+            ],
+        )
     if not accounts:
-        _run_log("warning", "No hay cuentas utilizables tras preflight de proxy en alias '%s'.", alias)
+        _run_log("warning", "No hay cuentas operables tras campaign preflight en alias '%s'.", alias)
         _log_preflight_timings()
         _emit_progress(
             CampaignRunStatus.COMPLETED.value,
-            message="No hay cuentas con proxy operativo para iniciar la campana.",
+            message="No hay cuentas operables para iniciar la campaña.",
             total_leads=total_leads_hint,
         )
-        return _build_result()
+        return _build_result(preflight_blocked=blocked_accounts)
 
     alias_accounts = _account_usernames(accounts)
     start_snapshot = _measure_preflight(
@@ -2055,7 +2517,7 @@ def run_dynamic_campaign(
         )
         return _build_result()
 
-    alias_terminal_leads, legacy_status_map = _measure_preflight(
+    alias_status_map, global_contact_map = _measure_preflight(
         "prefilter_snapshot",
         lambda: get_prefilter_snapshot(alias),
     )
@@ -2068,8 +2530,8 @@ def run_dynamic_campaign(
             alias_accounts=alias_accounts,
             campaign_registry=set(start_snapshot.get("campaign_registry") or set()),
             shared_registry=set(start_snapshot.get("shared_registry") or set()),
-            alias_terminal_leads=alias_terminal_leads,
-            legacy_status_map=legacy_status_map,
+            alias_status_map=alias_status_map,
+            global_contact_map=global_contact_map,
         ),
     )
     _log_campaign_diagnostics(
@@ -2095,15 +2557,20 @@ def run_dynamic_campaign(
         )
         return _build_result(
             skipped_preblocked=int(lead_filter_stats.get("skipped_already_sent", 0)) + skipped_for_quota,
+            preflight_blocked=blocked_accounts,
         )
 
     capacity = _measure_preflight("capacity", lambda: calculate_workers(accounts))
-    proxy_groups = capacity.get("proxy_groups") or {}
+    worker_groups = capacity.get("worker_groups") or capacity.get("proxy_groups") or {}
     group_capacities = {
-        str(proxy_id): max(0, int(value or 0))
-        for proxy_id, value in (capacity.get("group_capacities") or {}).items()
+        _normalize_effective_network_key(worker_key): max(0, int(value or 0))
+        for worker_key, value in (capacity.get("group_capacities") or {}).items()
     }
-    ordered_worker_ids = list(capacity.get("ordered_worker_ids") or [])
+    ordered_worker_ids = [_normalize_effective_network_key(item) for item in (capacity.get("ordered_worker_ids") or [])]
+    worker_proxy_map = {
+        _normalize_effective_network_key(worker_key): str(proxy_id or "").strip() or LOCAL_WORKER_PROXY_ID
+        for worker_key, proxy_id in (capacity.get("worker_proxy_map") or {}).items()
+    }
     workers_capacity = int(capacity.get("workers_capacity") or 0)
 
     if workers_capacity <= 0:
@@ -2122,14 +2589,15 @@ def run_dynamic_campaign(
         )
         return _build_result(
             skipped_preblocked=int(lead_filter_stats.get("skipped_already_sent", 0)) + skipped_for_quota,
+            preflight_blocked=blocked_accounts,
         )
 
     workers_effective = min(workers_requested, workers_capacity)
-    selected_proxy_ids = ordered_worker_ids[:workers_effective]
+    selected_worker_keys = ordered_worker_ids[:workers_effective]
     leads, skipped_for_quota = _limit_leads_to_worker_capacity(
         leads,
         group_capacities=group_capacities,
-        worker_ids=selected_proxy_ids,
+        worker_ids=selected_worker_keys,
     )
     if skipped_for_quota > 0:
         _run_log(
@@ -2138,7 +2606,7 @@ def run_dynamic_campaign(
             alias,
             len(leads),
             skipped_for_quota,
-            _total_remaining_capacity_for_groups(group_capacities, selected_proxy_ids),
+            _total_remaining_capacity_for_groups(group_capacities, selected_worker_keys),
         )
         _print_info_block(
             "Capacidad de campana",
@@ -2159,8 +2627,9 @@ def run_dynamic_campaign(
             workers_capacity=workers_capacity,
             workers_effective=workers_effective,
             skipped_preblocked=int(lead_filter_stats.get("skipped_already_sent", 0)) + skipped_for_quota,
+            preflight_blocked=blocked_accounts,
         )
-    proxy_worker_count = sum(1 for proxy_id in selected_proxy_ids if not _is_local_proxy_id(proxy_id))
+    proxy_worker_count = sum(1 for worker_key in selected_worker_keys if worker_key != DIRECT_NETWORK_KEY)
     _log_preflight_timings()
     _print_info_block("Inicializando workers")
 
@@ -2173,7 +2642,7 @@ def run_dynamic_campaign(
     )
     initial_tasks = _build_initial_worker_tasks(
         leads,
-        worker_ids=selected_proxy_ids,
+        worker_ids=selected_worker_keys,
         group_capacities=group_capacities,
     )
     initial_tasks = _validate_initial_worker_tasks(initial_tasks, log_callback=_run_log)
@@ -2185,7 +2654,7 @@ def run_dynamic_campaign(
         idle_seconds=worker_idle_seconds,
         max_attempts_per_lead=max_attempts_per_lead,
     )
-    scheduler.register_proxy_queues(selected_proxy_ids)
+    scheduler.register_proxy_queues(selected_worker_keys)
 
     stats: Dict[str, int] = {
         "sent": 0,
@@ -2259,6 +2728,49 @@ def run_dynamic_campaign(
             health_monitor=health_monitor,
         )
 
+    launch_batch_size = _as_int(
+        config.get("launch_batch_size", DEFAULT_LAUNCH_BATCH_SIZE),
+        default=DEFAULT_LAUNCH_BATCH_SIZE,
+        minimum=1,
+    )
+    launch_stagger_min_seconds = _as_float(
+        config.get("launch_stagger_min_seconds", DEFAULT_LAUNCH_STAGGER_MIN_SECONDS),
+        default=DEFAULT_LAUNCH_STAGGER_MIN_SECONDS,
+        minimum=0.0,
+    )
+    launch_stagger_max_seconds = _as_float(
+        config.get("launch_stagger_max_seconds", max(launch_stagger_min_seconds, DEFAULT_LAUNCH_STAGGER_MAX_SECONDS)),
+        default=max(launch_stagger_min_seconds, DEFAULT_LAUNCH_STAGGER_MAX_SECONDS),
+        minimum=launch_stagger_min_seconds,
+    )
+    launch_batch_pause_min_seconds = _as_float(
+        config.get("launch_batch_pause_min_seconds", DEFAULT_LAUNCH_BATCH_PAUSE_MIN_SECONDS),
+        default=DEFAULT_LAUNCH_BATCH_PAUSE_MIN_SECONDS,
+        minimum=0.0,
+    )
+    launch_batch_pause_max_seconds = _as_float(
+        config.get(
+            "launch_batch_pause_max_seconds",
+            max(launch_batch_pause_min_seconds, DEFAULT_LAUNCH_BATCH_PAUSE_MAX_SECONDS),
+        ),
+        default=max(launch_batch_pause_min_seconds, DEFAULT_LAUNCH_BATCH_PAUSE_MAX_SECONDS),
+        minimum=launch_batch_pause_min_seconds,
+    )
+    worker_plan = [
+        {
+            "network_key": worker_key,
+            "proxy_id": worker_proxy_map.get(worker_key, _runtime_proxy_id_from_network_key(worker_key)),
+            "proxy_label": _proxy_label(worker_key),
+            "account_count": len(worker_groups.get(worker_key, [])),
+            "accounts": [
+                str(account.get("username") or "").strip()
+                for account in worker_groups.get(worker_key, [])
+                if str(account.get("username") or "").strip()
+            ],
+        }
+        for worker_key in selected_worker_keys
+    ]
+
     _run_log(
         "info",
         "alias=%s leads=%d proxies=%d workers=%d",
@@ -2267,6 +2779,16 @@ def run_dynamic_campaign(
         proxy_worker_count,
         workers_effective,
     )
+    visible_browser_layout = None
+    if not headless:
+        visible_browser_layout = {
+            "scope": f"campaign:{run_id}",
+            "target_count": workers_effective,
+            "layout_policy": "compact",
+            "stagger_min_ms": 300,
+            "stagger_max_ms": 800,
+            "stagger_step_ms": 100,
+        }
 
     campaign_token = EngineCancellationToken(f"proxy-campaign:{alias}")
     token_binding = bind_stop_token(campaign_token)
@@ -2274,14 +2796,25 @@ def run_dynamic_campaign(
 
     with ThreadPoolExecutor(max_workers=workers_effective, thread_name_prefix="proxy-worker") as executor:
 
-        def _spawn_worker(worker_id: str, proxy_id: str) -> None:
-            retry_proxy_ids = list(selected_proxy_ids)
-            if proxy_id not in retry_proxy_ids:
-                retry_proxy_ids.append(proxy_id)
+        def _launch_sleep(seconds: float) -> None:
+            remaining = max(0.0, float(seconds))
+            while remaining > 0:
+                if STOP_EVENT.is_set():
+                    return
+                step = min(0.20, remaining)
+                time.sleep(step)
+                remaining = max(0.0, remaining - step)
+
+        def _spawn_worker(worker_id: str, worker_key: str) -> None:
+            runtime_proxy_id = worker_proxy_map.get(worker_key, _runtime_proxy_id_from_network_key(worker_key))
+            retry_proxy_ids = list(selected_worker_keys)
+            if worker_key not in retry_proxy_ids:
+                retry_proxy_ids.append(worker_key)
             worker = ProxyWorker(
                 worker_id=worker_id,
-                proxy_id=proxy_id,
-                accounts=proxy_groups.get(proxy_id, []),
+                network_key=worker_key,
+                proxy_id=runtime_proxy_id,
+                accounts=worker_groups.get(worker_key, []),
                 all_proxy_ids=retry_proxy_ids,
                 scheduler=scheduler,
                 health_monitor=health_monitor,
@@ -2297,32 +2830,97 @@ def run_dynamic_campaign(
                 runtime_event_callback=_record_runtime_event,
                 headless=headless,
                 send_flow_timeout_seconds=send_flow_timeout_seconds,
+                visible_browser_layout=visible_browser_layout,
             )
-            scheduler.register_worker(worker_id, proxy_id)
+            scheduler.register_worker(worker_id, worker_key)
             future = executor.submit(bind_stop_token_callable(campaign_token, worker.run))
             worker_suffix = str(worker_id).split("-")[-1] or worker_id
             print("")
             print(f"Worker #{worker_suffix} iniciado")
-            print(f"Proxy: {_proxy_label(proxy_id)} ({proxy_id})")
-            print(f"Cuentas asignadas: {len(proxy_groups.get(proxy_id, []))}")
+            print(f"Worker key: {worker_key}")
+            print(f"Red efectiva: {_proxy_label(worker_key)}")
+            print(f"Proxy runtime: {runtime_proxy_id}")
+            print(f"Cuentas asignadas: {len(worker_groups.get(worker_key, []))}")
             worker_slots[worker_id] = {
                 "worker": worker,
                 "future": future,
-                "proxy_id": proxy_id,
+                "network_key": worker_key,
+                "proxy_id": runtime_proxy_id,
             }
 
-        for index, proxy_id in enumerate(selected_proxy_ids, start=1):
-            _spawn_worker(f"worker-{index}", proxy_id)
+        def _spawn_workers_in_batches() -> None:
+            specs = [(f"worker-{index}", worker_key) for index, worker_key in enumerate(selected_worker_keys, start=1)]
+            if not specs:
+                return
+            total_batches = max(1, (len(specs) + launch_batch_size - 1) // launch_batch_size)
+            for batch_index in range(total_batches):
+                if STOP_EVENT.is_set():
+                    return
+                start = batch_index * launch_batch_size
+                batch = specs[start : start + launch_batch_size]
+                _run_log(
+                    "info",
+                    "Worker launch batch %d/%d size=%d",
+                    batch_index + 1,
+                    total_batches,
+                    len(batch),
+                )
+                _emit_live_progress(
+                    "Starting",
+                    f"Apertura escalonada: iniciando tanda {batch_index + 1} de {total_batches}.",
+                )
+                for item_index, (worker_id, worker_key) in enumerate(batch, start=1):
+                    if STOP_EVENT.is_set():
+                        return
+                    _spawn_worker(worker_id, worker_key)
+                    if item_index >= len(batch):
+                        continue
+                    delay_seconds = random.uniform(launch_stagger_min_seconds, launch_stagger_max_seconds)
+                    _run_log(
+                        "info",
+                        "Worker launch stagger: worker=%s network=%s sleep=%.2fs",
+                        worker_id,
+                        worker_key,
+                        delay_seconds,
+                    )
+                    _launch_sleep(delay_seconds)
+                if batch_index >= total_batches - 1:
+                    continue
+                pause_seconds = random.uniform(launch_batch_pause_min_seconds, launch_batch_pause_max_seconds)
+                _run_log(
+                    "info",
+                    "Worker launch batch pause after batch %d: %.2fs",
+                    batch_index + 1,
+                    pause_seconds,
+                )
+                _emit_live_progress(
+                    "Starting",
+                    f"Apertura escalonada: pausa entre tandas ({pause_seconds:.1f}s).",
+                )
+                _launch_sleep(pause_seconds)
+
+        _print_info_block(
+            "Workers construidos",
+            [
+                (
+                    f"{row['network_key']} -> {', '.join(row['accounts'])}"
+                    if row["accounts"]
+                    else f"{row['network_key']} -> sin cuentas"
+                )
+                for row in worker_plan
+            ],
+        )
+        _spawn_workers_in_batches()
 
         _emit_live_progress(
             "Starting",
-            "Workers inicializados. Preparando cuentas y cola de leads.",
+            "Workers inicializados con apertura escalonada. Preparando cuentas y cola de leads.",
         )
 
         _print_info_block("Cuentas listas para envÃ­o")
         reported_accounts: set[str] = set()
-        for proxy_id in selected_proxy_ids:
-            for account in proxy_groups.get(proxy_id, []):
+        for worker_key in selected_worker_keys:
+            for account in worker_groups.get(worker_key, []):
                 username = str(account.get("username") or "").strip()
                 if not username or username in reported_accounts:
                     continue
@@ -2334,6 +2932,7 @@ def run_dynamic_campaign(
                 )
                 print("")
                 print(f"Cuenta: {username}")
+                print(f"Worker: {worker_key}")
                 print(f"Estado: {session_label}")
 
         _emit_live_progress(
@@ -2369,14 +2968,16 @@ def run_dynamic_campaign(
                         continue
                     if not scheduler.worker_is_stalled(worker_id, now=now):
                         continue
+                    current_network_key = _normalize_effective_network_key(slot.get("network_key"))
                     current_proxy = str(slot["proxy_id"] or "")
-                    proxy_status = health_monitor.proxy_status(current_proxy, now=now)
+                    proxy_status = "healthy" if _is_local_proxy_id(current_proxy) else health_monitor.proxy_status(current_proxy, now=now)
                     activity_age = max(0.0, now - snapshot.last_activity_at)
                     stage_age = max(0.0, now - snapshot.state_entered_at)
                     _run_log(
                         "warning",
-                        "Worker stalled detectado: %s proxy=%s status=%s exec_state=%s exec_stage=%s lead=%s account=%s activity_age=%.1fs stage_age=%.1fs queue=%d",
+                        "Worker stalled detectado: %s network=%s proxy=%s status=%s exec_state=%s exec_stage=%s lead=%s account=%s activity_age=%.1fs stage_age=%.1fs queue=%d",
                         worker_id,
+                        current_network_key,
                         current_proxy,
                         proxy_status,
                         snapshot.execution_state.value,
@@ -2394,6 +2995,7 @@ def run_dynamic_campaign(
                             "failure_kind": "retryable",
                             "message": f"Worker {worker_id} detectado como stalled.",
                             "worker_id": worker_id,
+                            "network_key": current_network_key,
                             "proxy_id": current_proxy,
                             "lead": snapshot.current_lead or "",
                             "account": snapshot.current_account or "",
@@ -2404,12 +3006,12 @@ def run_dynamic_campaign(
                         }
                     )
                     if proxy_status == "blocked":
-                        new_proxy = scheduler.reassign_worker_proxy(
+                        new_network_key = scheduler.reassign_worker_proxy(
                             worker_id,
-                            current_proxy=current_proxy,
-                            all_proxy_ids=selected_proxy_ids,
+                            current_proxy=current_network_key,
+                            all_proxy_ids=selected_worker_keys,
                         )
-                        slot["next_proxy_id"] = new_proxy
+                        slot["next_network_key"] = new_network_key
                         worker.request_stop("idle_reassignment")
 
             for worker_id in list(worker_slots.keys()):
@@ -2432,6 +3034,7 @@ def run_dynamic_campaign(
                             "failure_kind": "system",
                             "message": f"Worker {worker_id} termino con excepcion.",
                             "worker_id": worker_id,
+                            "network_key": str(slot.get("network_key") or ""),
                             "proxy_id": str(slot.get("proxy_id") or ""),
                             "error": str(exc) or exc.__class__.__name__,
                         }
@@ -2457,6 +3060,7 @@ def run_dynamic_campaign(
                                 "failure_kind": "terminal",
                                 "message": f"Worker {worker_id} alcanzo el limite de reinicios.",
                                 "worker_id": worker_id,
+                                "network_key": str(slot.get("network_key") or ""),
                                 "proxy_id": str(slot.get("proxy_id") or ""),
                                 "restart_count": restart_count,
                                 "restart_limit": worker_restart_limit,
@@ -2465,20 +3069,32 @@ def run_dynamic_campaign(
                         worker_slots.pop(worker_id, None)
                         continue
 
-                    restart_proxy = str(slot.get("next_proxy_id") or slot["proxy_id"] or "")
-                    if not health_monitor.is_proxy_available(restart_proxy):
-                        restart_proxy = scheduler.reassign_worker_proxy(
+                    restart_network_key = _normalize_effective_network_key(
+                        slot.get("next_network_key") or slot.get("network_key") or ""
+                    )
+                    restart_proxy = worker_proxy_map.get(
+                        restart_network_key,
+                        _runtime_proxy_id_from_network_key(restart_network_key),
+                    )
+                    if restart_network_key != DIRECT_NETWORK_KEY and not health_monitor.is_proxy_available(restart_proxy):
+                        restart_network_key = scheduler.reassign_worker_proxy(
                             worker_id,
-                            current_proxy=restart_proxy,
-                            all_proxy_ids=selected_proxy_ids,
+                            current_proxy=restart_network_key,
+                            all_proxy_ids=selected_worker_keys,
                         )
-                    if restart_proxy not in proxy_groups:
-                        restart_proxy = str(slot["proxy_id"])
+                        restart_proxy = worker_proxy_map.get(
+                            restart_network_key,
+                            _runtime_proxy_id_from_network_key(restart_network_key),
+                        )
+                    if restart_network_key not in worker_groups:
+                        restart_network_key = _normalize_effective_network_key(slot.get("network_key") or "")
+                        restart_proxy = str(slot.get("proxy_id") or "")
 
                     _run_log(
                         "warning",
-                        "Worker restarted: %s proxy=%s reason=%s restart=%d",
+                        "Worker restarted: %s network=%s proxy=%s reason=%s restart=%d",
                         worker_id,
+                        restart_network_key,
                         restart_proxy,
                         reason,
                         restart_count,
@@ -2488,18 +3104,19 @@ def run_dynamic_campaign(
                             "event_type": "worker_restarted",
                             "severity": "warning",
                             "failure_kind": "retryable",
-                            "message": f"Worker {worker_id} relanzado en {_proxy_label(restart_proxy)}.",
+                            "message": f"Worker {worker_id} relanzado en {_proxy_label(restart_network_key)}.",
                             "worker_id": worker_id,
+                            "network_key": restart_network_key,
                             "proxy_id": restart_proxy,
                             "reason": reason,
                             "restart_count": restart_count,
                         }
                     )
-                    _spawn_worker(worker_id, restart_proxy)
-                    _run_log("info", "Worker %s relanzado en proxy %s.", worker_id, restart_proxy)
+                    _spawn_worker(worker_id, restart_network_key)
+                    _run_log("info", "Worker %s relanzado en worker %s.", worker_id, restart_network_key)
                     _emit_live_progress(
                         "Running",
-                        f"Worker {worker_id} relanzado en {_proxy_label(restart_proxy)}.",
+                        f"Worker {worker_id} relanzado en {_proxy_label(restart_network_key)}.",
                     )
                     continue
 
@@ -2599,6 +3216,8 @@ def run_dynamic_campaign(
         skipped_preblocked=int(stats.get("skipped_preblocked", 0)),
         health_state=health_monitor.snapshot(),
         account_health=health_monitor.accounts_snapshot(),
+        preflight_blocked=blocked_accounts,
+        worker_plan=worker_plan,
     )
     _run_log(
         "info",
@@ -2732,8 +3351,10 @@ def _group_accounts_by_proxy(accounts: list[Dict[str, Any]]) -> Dict[str, list[D
             continue
         if _account_remaining_capacity(account) <= 0:
             continue
-        proxy_id = _explicit_worker_proxy_id(account) or LOCAL_WORKER_PROXY_ID
-        grouped.setdefault(proxy_id, []).append(account)
+        worker_key = _worker_network_key(account)
+        if not worker_key:
+            continue
+        grouped.setdefault(worker_key, []).append(account)
     return grouped
 
 
@@ -2779,10 +3400,10 @@ def _now_hms() -> str:
 
 
 def _proxy_label(proxy_id: str) -> str:
-    normalized = str(proxy_id or "").strip()
-    if not normalized or normalized == "__no_proxy__":
-        return "local"
-    return normalized
+    normalized = _normalize_effective_network_key(proxy_id)
+    if normalized == DIRECT_NETWORK_KEY:
+        return DIRECT_NETWORK_KEY
+    return normalized.split(":", 1)[1].strip() or DIRECT_NETWORK_KEY
 
 
 def _print_info_block(title: str, lines: list[str] | None = None) -> None:

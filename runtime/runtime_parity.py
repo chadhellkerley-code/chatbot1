@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from license_identity import apply_client_identity_env, set_client_isolation_enabled
 from paths import (
     accounts_root,
     app_root as resolve_app_root,
@@ -483,7 +484,11 @@ def _configure_browser_env(app_root: Path) -> tuple[Optional[str], Optional[str]
     )
 
 
-def _profiles_dir(app_root: Path) -> Path:
+def resolve_profiles_dir(
+    app_root: Path,
+    *,
+    set_env: bool = False,
+) -> Path:
     raw = (os.environ.get("PROFILES_DIR") or "").strip()
     if raw:
         candidate = Path(raw).expanduser()
@@ -492,7 +497,8 @@ def _profiles_dir(app_root: Path) -> Path:
     else:
         candidate = browser_profiles_root(app_root)
     candidate.mkdir(parents=True, exist_ok=True)
-    os.environ["PROFILES_DIR"] = str(candidate)
+    if set_env:
+        os.environ["PROFILES_DIR"] = str(candidate)
     return candidate
 
 
@@ -503,6 +509,9 @@ def bootstrap_runtime_env(
     force: bool = False,
 ) -> dict[str, Any]:
     normalized_mode = _normalize_mode(mode)
+    set_client_isolation_enabled(normalized_mode == "client")
+    if normalized_mode == "client":
+        apply_client_identity_env()
     cache_key = f"{normalized_mode}:{str(app_root_hint or '')}"
     if not force and cache_key in _BOOTSTRAP_CACHE:
         return dict(_BOOTSTRAP_CACHE[cache_key])
@@ -552,7 +561,7 @@ def bootstrap_runtime_env(
     _apply_env_values(managed_values, override=True)
     _apply_env_values(_DEFAULT_MANAGED_ENV, override=False)
 
-    profiles_dir = _profiles_dir(app_root)
+    profiles_dir = resolve_profiles_dir(app_root, set_env=True)
     browser_executable, browser_root = _configure_browser_env(app_root)
 
     result = {
@@ -577,31 +586,76 @@ def _storage_state_path_for_user(profiles_dir: Path, username: str) -> Path:
     return profiles_dir / safe / "storage_state.json"
 
 
-def run_runtime_preflight(
-    mode: str | None,
-    *,
-    strict: bool = False,
-    sync_connected: bool = True,
-) -> dict[str, Any]:
+def _new_runtime_preflight_report(mode: str | None) -> tuple[dict[str, Any], Path, Path, Path]:
     bootstrap = bootstrap_runtime_env(mode)
     app_root = Path(str(bootstrap.get("app_data_root") or "."))
-    profiles_dir = Path(str(bootstrap.get("profiles_dir") or browser_profiles_root(app_root)))
+    profiles_dir = resolve_profiles_dir(app_root)
     storage_dir = storage_root(app_root)
-    issues: list[dict[str, str]] = []
-    account_total = 0
-    connected_total = 0
-    disconnected_by_preflight: list[str] = []
-    connected_without_storage_state: list[str] = []
+    report = {
+        "mode": _normalize_mode(mode),
+        "app_data_root": str(app_root),
+        "profiles_dir": str(profiles_dir),
+        "storage_dir": str(storage_dir),
+        "browser_executable": "",
+        "account_total": 0,
+        "connected_total": 0,
+        "connected_without_storage_state": [],
+        "disconnected_by_preflight": [],
+        "issues": [],
+        "timestamp": int(time.time()),
+    }
+    return report, app_root, profiles_dir, storage_dir
 
+
+def _append_runtime_preflight_issue(
+    report: dict[str, Any],
+    *,
+    level: str,
+    code: str,
+    message: str,
+) -> None:
+    issues = report.setdefault("issues", [])
+    if not isinstance(issues, list):
+        issues = []
+        report["issues"] = issues
+    issues.append(
+        {
+            "level": str(level or "warning"),
+            "code": str(code or "").strip(),
+            "message": str(message or "").strip(),
+        }
+    )
+
+
+def _run_runtime_preflight_minimal_checks(report: dict[str, Any], *, storage_dir: Path) -> None:
     if not _is_file_writable(storage_dir / "runtime_preflight_write_test.tmp"):
-        issues.append(
-            {
-                "level": "critical",
-                "code": "data_root_not_writable",
-                "message": f"No write permissions in storage path: {storage_dir}",
-            }
+        _append_runtime_preflight_issue(
+            report,
+            level="critical",
+            code="data_root_not_writable",
+            message=f"No write permissions in storage path: {storage_dir}",
         )
 
+    missing_keys = [
+        key
+        for key in (
+            "AUTORESPONDER_DM_SCROLL_WAIT_MS",
+            "AUTORESPONDER_DM_SCROLL_ATTEMPTS",
+            "AUTORESPONDER_DM_STAGNANT_BASE_LIMIT",
+            "AUTORESPONDER_DM_STAGNANT_MAX_LIMIT",
+        )
+        if not str(os.environ.get(key) or "").strip()
+    ]
+    if missing_keys:
+        _append_runtime_preflight_issue(
+            report,
+            level="warning",
+            code="dm_tuning_missing",
+            message="Missing DM tuning env keys: " + ", ".join(missing_keys),
+        )
+
+
+def _resolve_runtime_preflight_browser(app_root: Path) -> Optional[Path]:
     browser_executable = str(os.environ.get("PLAYWRIGHT_CHROME_EXECUTABLE") or "").strip()
     browser_path = Path(browser_executable).expanduser() if browser_executable else None
     if not browser_path or not _is_valid_executable(browser_path):
@@ -624,33 +678,19 @@ def run_runtime_preflight(
     except Exception:
         pass
 
-    if browser_path is None or not _is_valid_executable(browser_path):
-        issues.append(
-            {
-                "level": "critical",
-                "code": "browser_not_found",
-                "message": "No valid Playwright browser executable found.",
-            }
-        )
+    return browser_path
 
-    missing_keys = [
-        key
-        for key in (
-            "AUTORESPONDER_DM_SCROLL_WAIT_MS",
-            "AUTORESPONDER_DM_SCROLL_ATTEMPTS",
-            "AUTORESPONDER_DM_STAGNANT_BASE_LIMIT",
-            "AUTORESPONDER_DM_STAGNANT_MAX_LIMIT",
-        )
-        if not str(os.environ.get(key) or "").strip()
-    ]
-    if missing_keys:
-        issues.append(
-            {
-                "level": "warning",
-                "code": "dm_tuning_missing",
-                "message": "Missing DM tuning env keys: " + ", ".join(missing_keys),
-            }
-        )
+
+def _run_runtime_preflight_connected_sync(
+    report: dict[str, Any],
+    *,
+    profiles_dir: Path,
+    sync_connected: bool,
+) -> None:
+    account_total = 0
+    connected_total = 0
+    disconnected_by_preflight: list[str] = []
+    connected_without_storage_state: list[str] = []
 
     try:
         from core.accounts import list_all, mark_connected
@@ -669,66 +709,117 @@ def run_runtime_preflight(
                 connected_without_storage_state.append(username)
                 if sync_connected:
                     try:
-                        mark_connected(username, False)
+                        mark_connected(username, False, invalidate_health=False)
                         disconnected_by_preflight.append(username)
                     except Exception:
                         pass
     except Exception as exc:
-        issues.append(
-            {
-                "level": "warning",
-                "code": "accounts_preflight_unavailable",
-                "message": f"Could not validate account/profile integrity: {exc}",
-            }
+        _append_runtime_preflight_issue(
+            report,
+            level="warning",
+            code="accounts_preflight_unavailable",
+            message=f"Could not validate account/profile integrity: {exc}",
         )
-
-    if connected_without_storage_state:
-        issues.append(
-            {
-                "level": "warning",
-                "code": "connected_without_storage_state",
-                "message": (
+    else:
+        if connected_without_storage_state:
+            _append_runtime_preflight_issue(
+                report,
+                level="warning",
+                code="connected_without_storage_state",
+                message=(
                     "Connected accounts without storage_state.json: "
                     + ", ".join(connected_without_storage_state[:20])
                     + (" ..." if len(connected_without_storage_state) > 20 else "")
                 ),
-            }
-        )
+            )
 
+    report["account_total"] = account_total
+    report["connected_total"] = connected_total
+    report["connected_without_storage_state"] = connected_without_storage_state
+    report["disconnected_by_preflight"] = disconnected_by_preflight
+
+
+def _finalize_runtime_preflight_report(
+    report: dict[str, Any],
+    *,
+    app_root: Path,
+    strict: bool,
+    write_report: bool,
+) -> dict[str, Any]:
+    issues = report.get("issues") if isinstance(report.get("issues"), list) else []
     critical_count = sum(1 for issue in issues if issue.get("level") == "critical")
     warning_count = sum(1 for issue in issues if issue.get("level") == "warning")
-
-    report = {
-        "mode": _normalize_mode(mode),
-        "app_data_root": str(app_root),
-        "profiles_dir": str(profiles_dir),
-        "storage_dir": str(storage_dir),
-        "browser_executable": str(browser_path) if browser_path else "",
-        "account_total": account_total,
-        "connected_total": connected_total,
-        "connected_without_storage_state": connected_without_storage_state,
-        "disconnected_by_preflight": disconnected_by_preflight,
-        "critical_count": critical_count,
-        "warning_count": warning_count,
-        "issues": issues,
-        "timestamp": int(time.time()),
-    }
+    report["critical_count"] = critical_count
+    report["warning_count"] = warning_count
 
     report_path = storage_root(app_root) / "runtime_preflight_report.json"
-    try:
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-    report["report_path"] = str(report_path)
+    if write_report:
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        report["report_path"] = str(report_path)
+    else:
+        report["report_path"] = ""
 
     if strict and critical_count > 0:
         raise RuntimeError(format_runtime_preflight(report))
 
     return report
+
+
+def run_runtime_preflight_minimal(
+    mode: str | None,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    report, app_root, _profiles_dir, storage_dir = _new_runtime_preflight_report(mode)
+    report["phase"] = "pre_show_minimal"
+    _run_runtime_preflight_minimal_checks(report, storage_dir=storage_dir)
+    return _finalize_runtime_preflight_report(
+        report,
+        app_root=app_root,
+        strict=strict,
+        write_report=False,
+    )
+
+
+def run_runtime_preflight(
+    mode: str | None,
+    *,
+    strict: bool = False,
+    sync_connected: bool = True,
+) -> dict[str, Any]:
+    report, app_root, profiles_dir, storage_dir = _new_runtime_preflight_report(mode)
+    report["phase"] = "post_show_full"
+    _run_runtime_preflight_minimal_checks(report, storage_dir=storage_dir)
+
+    browser_path = _resolve_runtime_preflight_browser(app_root)
+    if browser_path is None or not _is_valid_executable(browser_path):
+        _append_runtime_preflight_issue(
+            report,
+            level="critical",
+            code="browser_not_found",
+            message="No valid Playwright browser executable found.",
+        )
+    else:
+        report["browser_executable"] = str(browser_path)
+
+    _run_runtime_preflight_connected_sync(
+        report,
+        profiles_dir=profiles_dir,
+        sync_connected=sync_connected,
+    )
+    return _finalize_runtime_preflight_report(
+        report,
+        app_root=app_root,
+        strict=strict,
+        write_report=True,
+    )
 
 
 def format_runtime_preflight(report: dict[str, Any]) -> str:

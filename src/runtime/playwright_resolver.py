@@ -10,7 +10,7 @@ from typing import Optional
 
 from playwright.sync_api import sync_playwright
 
-from paths import browser_binaries_root, playwright_browsers_root, runtime_base
+from paths import browser_binaries_root, playwright_browsers_root, runtime_base, runtime_root
 
 _BASE_ROOT = runtime_base(Path(__file__).resolve().parents[2])
 _RUNTIME_BROWSERS_ROOT = browser_binaries_root(_BASE_ROOT)
@@ -235,7 +235,7 @@ def _bundled_chrome_roots() -> list[Path]:
         candidates.extend(
             [
                 base / "browsers",
-                base / "runtime" / "browsers",
+                runtime_root(base, scoped=False, honor_env=False) / "browsers",
                 base / "_internal" / "browsers",
             ]
         )
@@ -247,7 +247,7 @@ def _bundled_chrome_roots() -> list[Path]:
             candidates.extend(
                 [
                     exe_dir / "browsers",
-                    exe_dir / "runtime" / "browsers",
+                    runtime_root(exe_dir, scoped=False, honor_env=False) / "browsers",
                     exe_dir / "_internal" / "browsers",
                 ]
             )

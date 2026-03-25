@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import os
-import json
+import asyncio
 import contextlib
+import ctypes
+import json
+import logging
+import math
+import os
 import sqlite3
 import shutil
+import threading
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from paths import browser_profiles_root, runtime_base
-from typing import Optional, Tuple, Union, Any
+from typing import Any, Mapping, Optional, Tuple, Union
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright
 from src.runtime.playwright_resolver import (
@@ -19,45 +26,50 @@ from src.runtime.playwright_runtime import (
     PLAYWRIGHT_BASE_FLAGS,
     PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
     PLAYWRIGHT_BROWSER_MODE_DEFAULT,
+    PLAYWRIGHT_BROWSER_MODE_MANAGED,
     PlaywrightRuntime,
     is_driver_crash_error,
 )
+from runtime.runtime_parity import resolve_profiles_dir
 
-# Carpeta donde se guardan las sesiones persistentes (cookies, localStorage, etc.)
-# IMPORTANTE: Chrome real maneja mejor perfiles persistentes bajo LocalAppData
-# que dentro del proyecto en Desktop/Downloads. Si el usuario no define
-# PROFILES_DIR, usamos LocalAppData y migramos perfiles legacy bajo demanda.
 _BASE_ROOT = runtime_base(Path(__file__).resolve().parent.parent)
 ensure_local_playwright_browsers_env()
+_LOGGER = logging.getLogger(__name__)
 
 
-def _default_local_profiles_root() -> Path | None:
-    local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
-    if not local_app_data:
-        return None
-    try:
-        root = Path(local_app_data).expanduser() / "InstaCRM" / "runtime" / "browser_profiles"
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-    except Exception:
-        return None
+def _resolved_profiles_root() -> Path:
+    return resolve_profiles_dir(_BASE_ROOT)
 
 
-def _resolve_profiles_root(base_root: Path) -> Path:
-    profiles_env = (os.environ.get("PROFILES_DIR") or "").strip()
-    if profiles_env:
-        profiles_path = Path(profiles_env).expanduser()
-        resolved = profiles_path if profiles_path.is_absolute() else (base_root / profiles_path)
-        resolved.mkdir(parents=True, exist_ok=True)
-        return resolved
-    local_profiles = _default_local_profiles_root()
-    if local_profiles is not None:
-        return local_profiles
-    return browser_profiles_root(base_root)
+class _ProfilesRootProxy(os.PathLike[str]):
+    def __fspath__(self) -> str:
+        return str(self.resolve())
+
+    def __str__(self) -> str:
+        return str(self.resolve())
+
+    def __repr__(self) -> str:
+        return repr(self.resolve())
+
+    def __truediv__(self, other: object) -> Path:
+        return self.resolve() / other
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.resolve(), name)
+
+    def resolve(self) -> Path:
+        return _resolved_profiles_root()
+
+
+def _base_profiles_path() -> Path:
+    base_profiles = BASE_PROFILES
+    if isinstance(base_profiles, _ProfilesRootProxy):
+        return base_profiles.resolve()
+    return Path(base_profiles)
 
 
 _LEGACY_BASE_PROFILES = browser_profiles_root(_BASE_ROOT)
-BASE_PROFILES = _resolve_profiles_root(_BASE_ROOT)
+BASE_PROFILES = _ProfilesRootProxy()
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -69,7 +81,8 @@ def _env_flag(name: str, default: bool) -> bool:
 
 def _migrate_legacy_profile_dir(profile_path: Path) -> None:
     legacy_root = _LEGACY_BASE_PROFILES
-    if legacy_root == BASE_PROFILES:
+    current_root = _base_profiles_path()
+    if legacy_root == current_root:
         return
     legacy_path = legacy_root / profile_path.name
     if not legacy_path.exists():
@@ -144,18 +157,447 @@ _LOGIN_SYNC_BLOCK_PATTERNS = (
 )
 
 
-def build_launch_args(*, headless: bool, locale: Optional[str] = None) -> list[str]:
+@dataclass(frozen=True)
+class _WorkAreaRect:
+    left: int
+    top: int
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class _WindowRect:
+    left: int
+    top: int
+    width: int
+    height: int
+
+
+@dataclass
+class _VisibleCampaignWindow:
+    key: str
+    page: Page
+    target_count: int
+    sequence: int
+
+
+@dataclass
+class _VisibleCampaignScopeState:
+    launch_sequence: int = 0
+    last_launch_deadline: float = 0.0
+    windows: dict[str, _VisibleCampaignWindow] = field(default_factory=dict)
+
+
+def _read_primary_work_area() -> _WorkAreaRect:
+    if os.name == "nt":
+        class _WinRect(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        rect = _WinRect()
+        spi_get_work_area = 0x0030
+        if ctypes.windll.user32.SystemParametersInfoW(spi_get_work_area, 0, ctypes.byref(rect), 0):
+            width = max(1, int(rect.right - rect.left))
+            height = max(1, int(rect.bottom - rect.top))
+            if width > 0 and height > 0:
+                return _WorkAreaRect(
+                    left=int(rect.left),
+                    top=int(rect.top),
+                    width=width,
+                    height=height,
+                )
+    with contextlib.suppress(Exception):
+        import tkinter  # built-in
+
+        root = tkinter.Tk()
+        root.withdraw()
+        try:
+            width = max(1, int(root.winfo_screenwidth()))
+            height = max(1, int(root.winfo_screenheight()))
+        finally:
+            root.destroy()
+        return _WorkAreaRect(left=0, top=0, width=width, height=height)
+    return _WorkAreaRect(left=0, top=0, width=DEFAULT_VIEWPORT["width"], height=DEFAULT_VIEWPORT["height"])
+
+
+def _visible_grid(window_count: int) -> tuple[int, int]:
+    total = max(1, int(window_count or 1))
+    if total == 1:
+        return 1, 1
+    cols = max(1, math.ceil(math.sqrt(total)))
+    rows = max(1, math.ceil(total / cols))
+    return rows, cols
+
+
+def _clamp(value: int, minimum: int, maximum: int) -> int:
+    if minimum > maximum:
+        minimum, maximum = maximum, minimum
+    return max(minimum, min(maximum, int(value)))
+
+
+def _compute_compact_grid_window_rects(
+    total: int,
+    *,
+    area: _WorkAreaRect,
+    outer_margin: int,
+    gap: int,
+    usable_width: int,
+    usable_height: int,
+) -> list[_WindowRect]:
+    rows, cols = _visible_grid(total)
+    cell_width = max(320, (usable_width - (gap * (cols - 1))) // cols)
+    cell_height = max(240, (usable_height - (gap * (rows - 1))) // rows)
+    max_width = min(
+        usable_width,
+        _clamp(int(area.width * (0.50 if total == 1 else 0.52)), 540, 860),
+    )
+    max_height = min(
+        usable_height,
+        _clamp(int(area.height * (0.76 if total <= 2 else 0.82)), 420, 760),
+    )
+    tile_width = min(cell_width, max_width)
+    tile_height = min(cell_height, max_height)
+    cluster_width = (tile_width * cols) + (gap * (cols - 1))
+    cluster_height = (tile_height * rows) + (gap * (rows - 1))
+    origin_left = area.left + outer_margin + max(0, (usable_width - cluster_width) // 2)
+    origin_top = area.top + outer_margin + max(0, (usable_height - cluster_height) // 2)
+
+    rects: list[_WindowRect] = []
+    for index in range(total):
+        row = index // cols
+        col = index % cols
+        left = origin_left + (col * (tile_width + gap))
+        top = origin_top + (row * (tile_height + gap))
+        rects.append(
+            _WindowRect(
+                left=int(left),
+                top=int(top),
+                width=int(tile_width),
+                height=int(tile_height),
+            )
+        )
+    return rects
+
+
+def _compute_compact_cascade_window_rects(
+    total: int,
+    *,
+    area: _WorkAreaRect,
+    outer_margin: int,
+    usable_width: int,
+    usable_height: int,
+) -> list[_WindowRect]:
+    base_width = min(usable_width, _clamp(int(area.width * 0.32), 360, 520))
+    base_height = min(usable_height, _clamp(int(area.height * 0.56), 280, 460))
+    offset_x = _clamp(int(base_width * 0.14), 26, 48)
+    offset_y = _clamp(int(base_height * 0.12), 20, 40)
+    cascade_span_x = max(0, usable_width - base_width)
+    cascade_span_y = max(0, usable_height - base_height)
+    max_depth = min(
+        max(1, (cascade_span_x // max(1, offset_x)) + 1),
+        max(1, (cascade_span_y // max(1, offset_y)) + 1),
+    )
+    visible_depth = max(5, min(total, max_depth, 10))
+    cycle_shift_x = max(10, offset_x // 2)
+    cycle_shift_y = max(8, offset_y // 2)
+
+    rects: list[_WindowRect] = []
+    for index in range(total):
+        tier = index % visible_depth
+        cycle = index // visible_depth
+        left = area.left + outer_margin + min(cascade_span_x, (tier * offset_x) + (cycle * cycle_shift_x))
+        top = area.top + outer_margin + min(cascade_span_y, (tier * offset_y) + (cycle * cycle_shift_y))
+        rects.append(
+            _WindowRect(
+                left=int(left),
+                top=int(top),
+                width=int(base_width),
+                height=int(base_height),
+            )
+        )
+    return rects
+
+
+def _compute_visible_window_rects(window_count: int, work_area: Optional[_WorkAreaRect] = None) -> list[_WindowRect]:
+    total = max(1, int(window_count or 1))
+    area = work_area or _read_primary_work_area()
+    short_side = max(1, min(area.width, area.height))
+    outer_margin = max(8, min(18, short_side // 90))
+    gap = max(6, min(14, short_side // 130))
+    usable_width = max(320, area.width - (outer_margin * 2))
+    usable_height = max(240, area.height - (outer_margin * 2))
+    if total > 8:
+        return _compute_compact_cascade_window_rects(
+            total,
+            area=area,
+            outer_margin=outer_margin,
+            usable_width=usable_width,
+            usable_height=usable_height,
+        )
+    return _compute_compact_grid_window_rects(
+        total,
+        area=area,
+        outer_margin=outer_margin,
+        gap=gap,
+        usable_width=usable_width,
+        usable_height=usable_height,
+    )
+
+
+class _VisibleCampaignLayoutManager:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._scopes: dict[str, _VisibleCampaignScopeState] = {}
+
+    @staticmethod
+    def _normalize(config: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(config, Mapping):
+            return None
+        scope = str(config.get("scope") or "").strip()
+        if not scope:
+            return None
+        target_count = max(1, int(config.get("target_count") or 1))
+        stagger_min_ms = max(300, int(config.get("stagger_min_ms") or 300))
+        stagger_max_ms = max(stagger_min_ms, int(config.get("stagger_max_ms") or 800))
+        stagger_step_ms = max(1, int(config.get("stagger_step_ms") or 100))
+        return {
+            "scope": scope,
+            "target_count": target_count,
+            "layout_policy": "compact",
+            "stagger_min_ms": stagger_min_ms,
+            "stagger_max_ms": stagger_max_ms,
+            "stagger_step_ms": stagger_step_ms,
+        }
+
+    async def before_context_launch(self, config: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        normalized = self._normalize(config)
+        if normalized is None:
+            return None
+        wait_ms = 0
+        launch_index = 0
+        scope = normalized["scope"]
+        with self._lock:
+            state = self._scopes.setdefault(scope, _VisibleCampaignScopeState())
+            launch_index = state.launch_sequence
+            state.launch_sequence += 1
+            if normalized["target_count"] > 1 and launch_index > 0:
+                cycle_span = max(1, ((normalized["stagger_max_ms"] - normalized["stagger_min_ms"]) // normalized["stagger_step_ms"]) + 1)
+                interval_ms = min(
+                    normalized["stagger_max_ms"],
+                    normalized["stagger_min_ms"] + (((launch_index - 1) % cycle_span) * normalized["stagger_step_ms"]),
+                )
+                now = time.monotonic()
+                scheduled_at = max(now, state.last_launch_deadline) + (interval_ms / 1000.0)
+                wait_ms = max(0, int(round((scheduled_at - now) * 1000.0)))
+                state.last_launch_deadline = scheduled_at
+            else:
+                state.last_launch_deadline = time.monotonic()
+        launch_rects = _compute_visible_window_rects(normalized["target_count"])
+        normalized["launch_index"] = launch_index
+        normalized["initial_rect"] = launch_rects[min(launch_index, len(launch_rects) - 1)]
+        if wait_ms > 0:
+            await asyncio.sleep(wait_ms / 1000.0)
+        return normalized
+
+    async def attach_context(self, config: Mapping[str, Any] | None, *, ctx: BrowserContext, page: Page) -> None:
+        normalized = self._normalize(config)
+        if normalized is None:
+            return
+        scope = normalized["scope"]
+        key = f"{scope}:{id(ctx)}"
+        with self._lock:
+            state = self._scopes.setdefault(scope, _VisibleCampaignScopeState())
+            existing = state.windows.get(key)
+            if existing is None:
+                existing = _VisibleCampaignWindow(
+                    key=key,
+                    page=page,
+                    target_count=int(normalized["target_count"]),
+                    sequence=len(state.windows),
+                )
+                state.windows[key] = existing
+            else:
+                existing.page = page
+                existing.target_count = int(normalized["target_count"])
+        await self._retile_scope(scope)
+
+    async def release_context(self, config: Mapping[str, Any] | None, *, ctx: BrowserContext) -> None:
+        normalized = self._normalize(config)
+        if normalized is None:
+            return
+        scope = normalized["scope"]
+        should_retile = False
+        with self._lock:
+            state = self._scopes.get(scope)
+            if state is None:
+                return
+            state.windows.pop(f"{scope}:{id(ctx)}", None)
+            if state.windows:
+                should_retile = True
+            else:
+                self._scopes.pop(scope, None)
+        if should_retile:
+            await self._retile_scope(scope)
+
+    async def _retile_scope(self, scope: str) -> None:
+        with self._lock:
+            state = self._scopes.get(scope)
+            if state is None:
+                return
+            stale_keys = [
+                key
+                for key, handle in state.windows.items()
+                if self._page_closed(handle.page)
+            ]
+            for key in stale_keys:
+                state.windows.pop(key, None)
+            handles = sorted(state.windows.values(), key=lambda item: item.sequence)
+            if not handles:
+                self._scopes.pop(scope, None)
+                return
+            planned_count = max(max(handle.target_count for handle in handles), len(handles))
+        rects = _compute_visible_window_rects(planned_count)
+        for handle, rect in zip(handles, rects):
+            await self._apply_window_rect(handle.page, rect)
+
+    @staticmethod
+    def _page_closed(page: Page | None) -> bool:
+        if page is None:
+            return True
+        checker = getattr(page, "is_closed", None)
+        if callable(checker):
+            with contextlib.suppress(Exception):
+                return bool(checker())
+        return False
+
+    @staticmethod
+    async def _apply_window_rect(page: Page, rect: _WindowRect) -> None:
+        if _VisibleCampaignLayoutManager._page_closed(page):
+            return
+        context = getattr(page, "context", None)
+        new_cdp_session = getattr(context, "new_cdp_session", None)
+        if not callable(new_cdp_session):
+            _LOGGER.warning(
+                "Visible campaign layout skipped because CDP is unavailable for rect=%s",
+                rect,
+            )
+            return
+        session = None
+        try:
+            session = await new_cdp_session(page)
+            target_window = await session.send("Browser.getWindowForTarget")
+            window_id = int(target_window.get("windowId") or 0)
+            if window_id <= 0:
+                _LOGGER.warning(
+                    "Visible campaign layout skipped because Browser.getWindowForTarget returned no window id for rect=%s",
+                    rect,
+                )
+                return
+            with contextlib.suppress(Exception):
+                await session.send(
+                    "Browser.setWindowBounds",
+                    {
+                        "windowId": window_id,
+                        "bounds": {"windowState": "normal"},
+                    },
+                )
+            await session.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": {
+                        "left": int(rect.left),
+                        "top": int(rect.top),
+                        "width": int(rect.width),
+                        "height": int(rect.height),
+                    },
+                },
+            )
+        except Exception as exc:
+            _LOGGER.warning(
+                "Visible campaign layout apply failed for rect=%s: %s",
+                rect,
+                exc,
+            )
+        finally:
+            if session is not None:
+                detach = getattr(session, "detach", None)
+                if callable(detach):
+                    with contextlib.suppress(Exception):
+                        await detach()
+
+
+_VISIBLE_CAMPAIGN_LAYOUT_MANAGER = _VisibleCampaignLayoutManager()
+
+
+async def _focus_visible_page(page: Page) -> None:
+    if _VisibleCampaignLayoutManager._page_closed(page):
+        return
+    with contextlib.suppress(Exception):
+        await page.bring_to_front()
+    with contextlib.suppress(Exception):
+        await page.evaluate(
+            """() => {
+                try {
+                    window.focus();
+                } catch (_err) {
+                }
+            }"""
+        )
+    context = getattr(page, "context", None)
+    new_cdp_session = getattr(context, "new_cdp_session", None)
+    if not callable(new_cdp_session):
+        return
+    session = None
+    try:
+        session = await new_cdp_session(page)
+        with contextlib.suppress(Exception):
+            await session.send("Page.bringToFront")
+    finally:
+        if session is not None:
+            detach = getattr(session, "detach", None)
+            if callable(detach):
+                with contextlib.suppress(Exception):
+                    await detach()
+
+
+def build_launch_args(
+    *,
+    headless: bool,
+    locale: Optional[str] = None,
+    initial_window_rect: Optional[_WindowRect] = None,
+) -> list[str]:
     lang_value = (locale or "").strip()
-    args = [arg for arg in BASE_FLAGS if not arg.startswith("--lang=")]
+    args = [
+        arg
+        for arg in BASE_FLAGS
+        if (
+            not arg.startswith("--lang=")
+            and (initial_window_rect is None or arg not in {"--start-maximized", "--start-fullscreen", "--kiosk"})
+            and (initial_window_rect is None or not arg.startswith("--window-size="))
+            and (initial_window_rect is None or not arg.startswith("--window-position="))
+        )
+    ]
     if lang_value:
         args.append(f"--lang={lang_value}")
-    if not headless and HEADFUL_ADAPTIVE_VIEWPORT and "--start-maximized" not in args:
+    if not headless and initial_window_rect is not None:
+        args.extend(
+            [
+                f"--window-size={int(initial_window_rect.width)},{int(initial_window_rect.height)}",
+                f"--window-position={int(initial_window_rect.left)},{int(initial_window_rect.top)}",
+            ]
+        )
+    elif not headless and HEADFUL_ADAPTIVE_VIEWPORT and "--start-maximized" not in args:
         args.append("--start-maximized")
     return args
 
 
-def context_viewport_kwargs(*, headless: bool) -> dict:
-    if not headless and HEADFUL_ADAPTIVE_VIEWPORT:
+def context_viewport_kwargs(*, headless: bool, initial_window_rect: Optional[_WindowRect] = None) -> dict:
+    if not headless and (HEADFUL_ADAPTIVE_VIEWPORT or initial_window_rect is not None):
         return {"no_viewport": True}
     return {"viewport": dict(DEFAULT_VIEWPORT)}
 
@@ -299,12 +741,13 @@ class PlaywrightService:
         browser_mode: str = PLAYWRIGHT_BROWSER_MODE_DEFAULT,
     ) -> None:
         self._headless = headless
-        self._base_profiles = Path(base_profiles or BASE_PROFILES)
+        self._base_profiles = Path(base_profiles) if base_profiles is not None else _base_profiles_path()
         self._prefer_persistent = bool(prefer_persistent)
         normalized_browser_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
         if normalized_browser_mode not in {
             PLAYWRIGHT_BROWSER_MODE_DEFAULT,
             PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+            PLAYWRIGHT_BROWSER_MODE_MANAGED,
         }:
             normalized_browser_mode = PLAYWRIGHT_BROWSER_MODE_DEFAULT
         self._browser_mode = normalized_browser_mode
@@ -389,12 +832,40 @@ class PlaywrightService:
         proxy: Optional[dict] = None,
         *,
         safe_mode: bool = False,
+        visible_browser_layout: Mapping[str, Any] | None = None,
     ) -> BrowserContext:
         use_persistent_profile = self._use_persistent_profile(safe_mode=safe_mode)
 
         profile_path = Path(profile_dir)
         _migrate_legacy_profile_dir(profile_path)
         profile_path.mkdir(parents=True, exist_ok=True)
+        layout_config: dict[str, Any] | None = None
+        initial_window_rect: _WindowRect | None = None
+        if use_persistent_profile and not self._headless and not safe_mode:
+            layout_config = await _VISIBLE_CAMPAIGN_LAYOUT_MANAGER.before_context_launch(visible_browser_layout)
+            raw_initial_rect = layout_config.get("initial_rect") if isinstance(layout_config, Mapping) else None
+            if isinstance(raw_initial_rect, _WindowRect):
+                initial_window_rect = raw_initial_rect
+            elif isinstance(raw_initial_rect, Mapping):
+                try:
+                    initial_window_rect = _WindowRect(
+                        left=int(raw_initial_rect.get("left") or 0),
+                        top=int(raw_initial_rect.get("top") or 0),
+                        width=int(raw_initial_rect.get("width") or 0),
+                        height=int(raw_initial_rect.get("height") or 0),
+                    )
+                except Exception:
+                    initial_window_rect = None
+
+        launch_args = build_launch_args(
+            headless=self._headless,
+            locale=DEFAULT_LOCALE,
+            initial_window_rect=initial_window_rect,
+        )
+        viewport_kwargs = context_viewport_kwargs(
+            headless=self._headless,
+            initial_window_rect=initial_window_rect,
+        )
 
         storage_state_path: Optional[str] = None
         if storage_state:
@@ -413,11 +884,11 @@ class PlaywrightService:
             "proxy": context_proxy,
             "mode": "persistent" if use_persistent_profile else "shared",
             "executable_path": self._resolve_launch_executable(),
-            "launch_args": build_launch_args(headless=self._headless, locale=DEFAULT_LOCALE),
+            "launch_args": launch_args,
             "user_agent": DEFAULT_USER_AGENT,
             "locale": DEFAULT_LOCALE,
             "timezone_id": DEFAULT_TIMEZONE,
-            "viewport_kwargs": context_viewport_kwargs(headless=self._headless),
+            "viewport_kwargs": viewport_kwargs,
             "permissions": [],
             "launch_proxy": None if safe_mode else (None if use_persistent_profile else self._launch_proxy),
             "force_headless": True if safe_mode else self._headless,
@@ -449,6 +920,12 @@ class PlaywrightService:
                     page.set_default_navigation_timeout(30_000)
                 except Exception:
                     pass
+            else:
+                page = ctx.pages[0]
+            if layout_config is not None:
+                await _VISIBLE_CAMPAIGN_LAYOUT_MANAGER.attach_context(layout_config, ctx=ctx, page=page)
+                self._bind_visible_browser_layout_cleanup(ctx, layout_config)
+                await _focus_visible_page(page)
             return ctx
         except Exception as page_exc:
             with contextlib.suppress(Exception):
@@ -501,6 +978,25 @@ class PlaywrightService:
             with contextlib.suppress(Exception):
                 await ctx.route(pattern, _abort_login_sync)
 
+    @staticmethod
+    def _bind_visible_browser_layout_cleanup(
+        ctx: BrowserContext,
+        layout_config: Mapping[str, Any],
+    ) -> None:
+        event_emitter = getattr(ctx, "on", None)
+        if not callable(event_emitter):
+            return
+
+        def _on_close(*_args: Any) -> None:
+            with contextlib.suppress(RuntimeError):
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    _VISIBLE_CAMPAIGN_LAYOUT_MANAGER.release_context(layout_config, ctx=ctx)
+                )
+
+        with contextlib.suppress(Exception):
+            event_emitter("close", _on_close)
+
     async def record_diagnostic_failure(
         self,
         *,
@@ -546,8 +1042,9 @@ async def launch_persistent(
     - proxy: dict opcional: {"server": "http://ip:port", "username": "...", "password": "..."}
     - headful: si None, usa env HUMAN_HEADFUL (default true).
     """
-    BASE_PROFILES.mkdir(exist_ok=True)
-    user_data_dir = BASE_PROFILES / account_id
+    base_profiles = _base_profiles_path()
+    base_profiles.mkdir(exist_ok=True)
+    user_data_dir = base_profiles / account_id
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
     if headful is None:
@@ -564,7 +1061,7 @@ async def launch_persistent(
     if not storage_state_path and default_storage_state.exists():
         storage_state_path = str(default_storage_state)
     proxy_payload = proxy or None
-    recovery_dir = BASE_PROFILES / f"{account_id}__recovery"
+    recovery_dir = base_profiles / f"{account_id}__recovery"
 
     attempts: list[tuple[str, Path, Optional[dict]]] = [
         ("primary", user_data_dir, proxy_payload),
@@ -693,7 +1190,8 @@ async def ensure_context(
     - mode="persistent": contexto persistente por cuenta (uso interactivo).
     """
     runtime = PlaywrightRuntime(headless=not headful, owner_module=__name__)
-    profile_dir = BASE_PROFILES / account
+    base_profiles = _base_profiles_path()
+    profile_dir = base_profiles / account
     profile_dir.mkdir(parents=True, exist_ok=True)
     storage_state_path = profile_dir / "storage_state.json"
 

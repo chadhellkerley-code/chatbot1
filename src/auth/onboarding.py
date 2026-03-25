@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from core.accounts_helpers.csv_utils import _TOTP_HEADER_ALIASES, extract_totp_secret_from_row
+from core.totp_store import (
+    _normalize_secret,
+    generate_code as generate_totp_code,
+    get_secret as get_totp_secret,
+    save_secret as save_totp_secret,
+)
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from paths import accounts_root
 from src.auth.persistent_login import ChallengeRequired, ensure_logged_in_async
@@ -34,7 +41,7 @@ DELIMS = [",", ";", "\t"]
 HEADER_ALIASES: Dict[str, List[str]] = {
     "username": ["username", "user", "login"],
     "password": ["password", "pass"],
-    "totp_secret": ["totp_secret", "totp", "2fa", "otp"],
+    "totp_secret": list(_TOTP_HEADER_ALIASES),
     "proxy_url": ["proxy_url", "proxy", "http_proxy", "https_proxy"],
     "proxy_ip": ["proxy_ip", "ip", "host"],
     "proxy_port": ["proxy_port", "port"],
@@ -131,6 +138,7 @@ def _row_from_headers(headers: List[str], row: List[str]) -> Dict[str, Any]:
         while len(values) < len(EXPECTED_ORDER):
             values.append("")
         mapped = {EXPECTED_ORDER[i]: values[i] for i in range(len(EXPECTED_ORDER))}
+        totp_secret = extract_totp_secret_from_row({"totp_secret": mapped.get("totp_secret", "")})
         proxy_fields: Dict[str, str] = {}
         if mapped.get("proxy_ip") or mapped.get("proxy_port"):
             proxy_fields = {
@@ -142,7 +150,7 @@ def _row_from_headers(headers: List[str], row: List[str]) -> Dict[str, Any]:
         return {
             "username": mapped.get("username", ""),
             "password": mapped.get("password", ""),
-            "totp_secret": mapped.get("totp_secret", ""),
+            "totp_secret": totp_secret,
             "proxy_fields": proxy_fields,
         }
 
@@ -158,7 +166,12 @@ def _row_from_headers(headers: List[str], row: List[str]) -> Dict[str, Any]:
 
     username = get_by_alias(["username", "user", "login"])
     password = get_by_alias(["password", "pass"])
-    totp = get_by_alias(["totp_secret", "totp", "2fa", "otp"])
+    row_by_header = {
+        header: row[idx].strip()
+        for idx, header in enumerate(headers)
+        if idx < len(row)
+    }
+    totp = extract_totp_secret_from_row(row_by_header)
     proxy_url = get_by_alias(["proxy_url", "proxy", "http_proxy", "https_proxy"])
 
     if proxy_url:
@@ -240,7 +253,8 @@ def _make_account(username: str, password: str, totp_secret: str | None, proxy_f
     """
     Construye el dict 'account' en el formato que espera ensure_logged_in/login_and_persist.
     - username, password obligatorios
-    - totp_secret opcional
+    - totp_secret opcional como valor de entrada; el login siempre se resuelve
+      desde el store canÃ³nico si existe
     - proxy_fields puede venir como dict con ip/port/username/password o como {'url': ...}
     """
     acc = {"username": (username or "").strip(), "password": (password or "").strip()}
@@ -319,6 +333,36 @@ def _profile_path_for(username: str, profile_root: Union[str, Path]) -> Path:
     return browser_storage_state_path(username, profiles_root=profile_root or _DEFAULT_PROFILE_ROOT)
 
 
+def _persist_canonical_totp(username: str, raw_secret: str | None) -> Optional[str]:
+    candidate = str(raw_secret or "").strip()
+    if not candidate:
+        return None
+
+    normalized = _normalize_secret(candidate)
+    current = get_totp_secret(username)
+    if current != normalized:
+        save_totp_secret(username, normalized)
+    return normalized
+
+
+def _canonical_totp_payload(username: str, account: AccountPayload) -> Dict[str, Any]:
+    _persist_canonical_totp(username, account.get("totp_secret"))
+
+    secret = get_totp_secret(username)
+    if not secret:
+        if callable(account.get("totp_callback")):
+            logger.debug(
+                "Se ignorÃ³ totp_callback en memoria para @%s porque no existe secreto canÃ³nico.",
+                username,
+            )
+        return {}
+
+    return {
+        "totp_secret": secret,
+        "totp_callback": lambda _ignored, target=username: generate_totp_code(target) or "",
+    }
+
+
 async def login_and_persist_async(
     account: AccountPayload,
     *,
@@ -340,23 +384,7 @@ async def login_and_persist_async(
         }
 
     proxy_payload = proxy_from_account(account)
-
-    totp_secret = (account.get("totp_secret") or "").replace(" ", "")
-    totp_callback = account.get("totp_callback")
-    if totp_secret and not totp_callback:
-        try:
-            import pyotp
-        except Exception:  # pragma: no cover - pyotp opcional
-            pyotp = None  # type: ignore
-        if pyotp:
-            def _totp(_: str, secret: str = totp_secret) -> str:
-                return pyotp.TOTP(secret).now()
-            totp_callback = _totp
-            try:
-                current_totp = pyotp.TOTP(totp_secret).now()
-                logger.info("TOTP generado para @%s (cambia cada 30s): %s", username, current_totp)
-            except Exception:
-                pass
+    canonical_totp = _canonical_totp_payload(username, account)
 
     need_code = {"value": False}
 
@@ -373,10 +401,7 @@ async def login_and_persist_async(
         "proxy": proxy_payload,
         "code_provider": _code_provider,
     }
-    if totp_secret:
-        payload["totp_secret"] = totp_secret
-    if totp_callback:
-        payload["totp_callback"] = totp_callback
+    payload.update(canonical_totp)
 
     svc: Optional[PlaywrightService] = None
     ctx = page = None
@@ -601,8 +626,9 @@ async def login_account_playwright_async(
     *,
     headful: bool = True,
 ) -> Dict[str, Any]:
-    username = (account.get("username") or "").strip().lstrip("@")
-    password = (account.get("password") or "").strip()
+    login_account = dict(account)
+    username = (login_account.get("username") or "").strip().lstrip("@")
+    password = (login_account.get("password") or "").strip()
     trace = _login_trace(alias, username or "unknown")
 
     if not username or not password:
@@ -612,30 +638,33 @@ async def login_account_playwright_async(
             "status": "failed",
             "message": "missing_username_or_password",
             "profile_path": "",
-            "row_number": account.get("row_number"),
+            "row_number": login_account.get("row_number"),
         }
 
-    proxy_payload = proxy_from_account(account)
+    proxy_payload = proxy_from_account(login_account)
     if not proxy_payload:
         proxy_payload = normalize_playwright_proxy(
-            account.get("proxy"),
-            proxy_user=account.get("proxy_user"),
-            proxy_pass=account.get("proxy_pass"),
+            login_account.get("proxy"),
+            proxy_user=login_account.get("proxy_user"),
+            proxy_pass=login_account.get("proxy_pass"),
         )
     if proxy_payload:
-        account["proxy"] = proxy_payload
+        login_account["proxy"] = proxy_payload
     trace(_proxy_label(proxy_payload))
 
-    account["alias"] = alias
-    account["trace"] = trace
-    account.setdefault("strict_login", False)
-    account.setdefault("force_login", False)
-    account.setdefault("disable_safe_browser_recovery", True)
+    login_account.pop("totp_secret", None)
+    login_account.pop("totp_callback", None)
+    login_account.update(_canonical_totp_payload(username, account))
+    login_account["alias"] = alias
+    login_account["trace"] = trace
+    login_account.setdefault("strict_login", False)
+    login_account.setdefault("force_login", False)
+    login_account.setdefault("disable_safe_browser_recovery", True)
 
     headless = not headful
     svc = None
     ctx = None
-    progress_callback = account.get("login_progress_callback")
+    progress_callback = login_account.get("login_progress_callback")
 
     def _progress(state: str, message: str) -> None:
         if not callable(progress_callback):
@@ -648,7 +677,7 @@ async def login_account_playwright_async(
     try:
         _progress("running_login", "Resolviendo sesion")
         svc, ctx, page = await ensure_logged_in_async(
-            account,
+            login_account,
             headless=headless,
             profile_root=_DEFAULT_PROFILE_ROOT,
             proxy=proxy_payload,
@@ -663,7 +692,7 @@ async def login_account_playwright_async(
                 "status": "failed",
                 "message": feed_reason,
                 "profile_path": "",
-                "row_number": account.get("row_number"),
+                "row_number": login_account.get("row_number"),
             }
 
         _progress("confirming_inbox", "Confirmando inbox")
@@ -680,7 +709,7 @@ async def login_account_playwright_async(
                 "status": "ok",
                 "message": f"{feed_reason} -> {reason}",
                 "profile_path": profile_path,
-                "row_number": account.get("row_number"),
+                "row_number": login_account.get("row_number"),
             }
 
         errors = []
@@ -697,7 +726,7 @@ async def login_account_playwright_async(
             "status": "failed",
             "message": detail,
             "profile_path": "",
-            "row_number": account.get("row_number"),
+            "row_number": login_account.get("row_number"),
         }
     except ChallengeRequired:
         trace("FAIL reason=challenge_required")
@@ -706,7 +735,7 @@ async def login_account_playwright_async(
             "status": "failed",
             "message": "challenge_required",
             "profile_path": "",
-            "row_number": account.get("row_number"),
+            "row_number": login_account.get("row_number"),
         }
     except PlaywrightTimeoutError as exc:
         detail = f"timeout:{exc}"
@@ -716,7 +745,7 @@ async def login_account_playwright_async(
             "status": "failed",
             "message": detail,
             "profile_path": "",
-            "row_number": account.get("row_number"),
+            "row_number": login_account.get("row_number"),
         }
     except Exception as exc:
         detail = str(exc)
@@ -726,7 +755,7 @@ async def login_account_playwright_async(
             "status": "failed",
             "message": detail,
             "profile_path": "",
-            "row_number": account.get("row_number"),
+            "row_number": login_account.get("row_number"),
         }
     finally:
         if svc:
@@ -811,7 +840,8 @@ def onboard_accounts_from_csv(
                     "profile_path": "",
                 }
             else:
-                account_payload = _make_account(username, password, totp_secret, proxy_fields or {})
+                _persist_canonical_totp(username, totp_secret)
+                account_payload = _make_account(username, password, None, proxy_fields or {})
                 result = login_and_persist(account_payload, headless=headless, profile_root=_DEFAULT_PROFILE_ROOT)
 
             result["row_number"] = row_number

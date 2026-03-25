@@ -43,11 +43,12 @@ class AutomationAutoresponderPage(AutomationSectionPage):
         super().__init__(
             ctx,
             "Autoresponder",
-            "Configuracion de ejecucion y monitor en tiempo real del autoresponder.",
+            "Wrapper temporal del runtime operativo. El control principal ahora vive en Inbox.",
             route_key="automation_autoresponder_page",
             parent=parent,
         )
         self._start_button: QPushButton | None = None
+        self._stop_button: QPushButton | None = None
         self._stack = QStackedWidget()
         self.content_layout().addWidget(self._stack, 1)
 
@@ -80,7 +81,7 @@ class AutomationAutoresponderPage(AutomationSectionPage):
         root.setSpacing(12)
         panel, layout = self.create_panel(
             "Configuracion de autoresponder",
-            "Ajusta delays, concurrencia y modo solo follow-up antes de iniciar.",
+            "Vista heredada del runtime. El inicio y la detencion reales ahora se hacen solo desde Inbox.",
         )
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -128,7 +129,7 @@ class AutomationAutoresponderPage(AutomationSectionPage):
         self._accounts_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._accounts_preview.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self._accounts_preview)
-        self._start_button = QPushButton("Iniciar")
+        self._start_button = QPushButton("Abrir Inbox")
         self._start_button.setObjectName("PrimaryButton")
         self._start_button.clicked.connect(self._start)
         layout.addWidget(self._start_button, 0, Qt.AlignLeft)
@@ -192,13 +193,13 @@ class AutomationAutoresponderPage(AutomationSectionPage):
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
-        stop_button = QPushButton("Detener")
-        stop_button.setObjectName("DangerButton")
-        stop_button.clicked.connect(self._stop)
+        self._stop_button = QPushButton("Abrir Inbox")
+        self._stop_button.setObjectName("SecondaryButton")
+        self._stop_button.clicked.connect(self._stop)
         refresh_button = QPushButton("Recargar")
         refresh_button.setObjectName("SecondaryButton")
         refresh_button.clicked.connect(self.refresh_snapshot)
-        actions.addWidget(stop_button)
+        actions.addWidget(self._stop_button)
         actions.addWidget(refresh_button)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -237,7 +238,7 @@ class AutomationAutoresponderPage(AutomationSectionPage):
             capacity_text = f"{capacity_text}  {blocked_summary}".strip()
         self._capacity_hint.setText(capacity_text)
         if self._start_button is not None:
-            self._start_button.setEnabled(bool(ready_alias_accounts))
+            self._start_button.setEnabled(bool(alias))
 
         self._accounts_preview.setRowCount(len(alias_accounts))
         for row_index, row in enumerate(alias_accounts):
@@ -357,49 +358,21 @@ class AutomationAutoresponderPage(AutomationSectionPage):
         return f"{count} {noun} por seguridad: {preview}."
 
     def _start(self) -> None:
-        alias = str(self._alias_combo.currentData() or self._ctx.state.active_alias).strip()
-        payload = {
-            "run_id": datetime.now().strftime("autoresponder-%Y%m%d%H%M%S%f"),
-            "alias": alias,
-            "delay_min": int(self._delay_min.value()),
-            "delay_max": int(self._delay_max.value()),
-            "concurrency": int(self._concurrency.value()),
-            "threads": int(self._threads.value()),
-            "followup_only": self._followup_only.isChecked(),
-            "followup_schedule_label": str(self._flow_schedule.text() or "").strip(),
-        }
-        try:
-            self._ctx.tasks.start_task(
-                "autoresponder",
-                lambda: self._ctx.services.automation.start_autoresponder(payload),
-                metadata={"alias": alias},
-            )
-        except Exception as exc:
-            self.show_exception(exc, "No se pudo iniciar el autoresponder.")
-            return
-        self._last_summary_run_id = ""
-        self._pending_run_id = str(payload.get("run_id") or "")
-        self._start_pending = True
-        self._log.clear()
-        self._log_buffer = ""
-        self._capturing_logs = True
-        self._stack.setCurrentWidget(self._monitor_view)
-        self._run_summary.setText(
-            f"Ejecucion: {self._pending_run_id or '-'}  |  Alias: {alias or '-'}  |  Estado: Iniciando  |  "
-            f"Inicio: {datetime.now().isoformat(timespec='seconds')}  |  Mensaje: Preparando autoresponder..."
-        )
-        self._append_log_lines([f"[INFO] Preparando autoresponder para alias {alias or '-'}"])
-        self._timer.start()
-        self.set_status("Autoresponder iniciado.")
-        self.refresh_snapshot()
+        self._open_inbox_runtime()
 
     def _stop(self) -> None:
         try:
-            self._ctx.services.automation.stop_autoresponder("stop solicitado desde GUI")
+            self._open_inbox_runtime()
         except Exception as exc:
-            self.show_exception(exc, "No se pudo detener el autoresponder.")
+            self.show_exception(exc, "No se pudo abrir Inbox.")
             return
-        self.set_status("Deteniendo autoresponder...")
+
+    def _open_inbox_runtime(self) -> None:
+        alias = str(self._alias_combo.currentData() or self._ctx.state.active_alias).strip()
+        if alias:
+            self._ctx.state.active_alias = alias
+        self._ctx.open_route("inbox_page", {"source": "automation_autoresponder", "alias_id": alias} if alias else None)
+        self.set_status("El runtime operativo se administra desde Inbox.")
 
     def _on_logs_cleared(self) -> None:
         self._log_buffer = ""

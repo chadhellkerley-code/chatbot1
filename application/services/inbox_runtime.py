@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import time
 from collections import defaultdict
@@ -9,11 +10,15 @@ from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QFileSystemWatcher, QObject, Signal
 
+from src.inbox.message_timestamps import message_canonical_timestamp, message_sort_key
+
 from .base import ServiceContext
 
 
 _DEFAULT_IDLE_BACKEND_SHUTDOWN_SECONDS = 20.0
 _DEFAULT_IDLE_BACKEND_RETRY_SECONDS = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 def _include_thread(thread: dict[str, Any], filter_mode: str) -> bool:
@@ -199,14 +204,14 @@ class InboxProjectionBuilder:
                 if not key:
                     continue
                 previous = deduped.get(key)
-                candidate_ts = cls._coerce_timestamp(candidate.get("timestamp")) or 0.0
-                previous_ts = cls._coerce_timestamp((previous or {}).get("timestamp")) or 0.0
+                candidate_ts = message_canonical_timestamp(candidate) or 0.0
+                previous_ts = message_canonical_timestamp(previous) or 0.0
                 if previous is None or candidate_ts >= previous_ts:
                     deduped[key] = candidate
         rows = list(deduped.values())
         rows.sort(
             key=lambda item: (
-                cls._coerce_timestamp(item.get("timestamp")) or 0.0,
+                message_canonical_timestamp(item) or 0.0,
                 str(item.get("message_id") or "").strip(),
             )
         )
@@ -558,14 +563,26 @@ class InboxProjectionBuilder:
         payload["last_timestamp"] = payload.get("last_message_timestamp")
         payload["campaign_id"] = str(engine_row.get("campaign_id") or state_row.get("campaign_id") or "").strip()
         payload["lead_source"] = str(engine_row.get("source") or payload.get("account_alias") or "").strip()
-        payload["status"] = "closed" if bool(state_row.get("cerrado")) else str(state_row.get("status") or "open").strip() or "open"
+        payload["operational_status"] = (
+            str(payload.get("operational_status") or payload.get("status") or "").strip() or "open"
+        )
+        payload["status"] = payload["operational_status"]
+        payload["ui_status"] = (
+            str(payload.get("ui_status") or "").strip()
+            or ("closed" if bool(state_row.get("cerrado")) else str(state_row.get("status") or "").strip())
+        )
         payload["tags"] = tags
         payload["stage"] = str(
-            engine_row.get("stage")
+            payload.get("stage_id")
+            or engine_row.get("stage")
             or state_row.get("stage")
             or state_row.get("seguimiento_actual")
             or ""
         ).strip()
+        payload["owner"] = str(payload.get("owner") or "none").strip()
+        payload["bucket"] = str(payload.get("bucket") or "all").strip()
+        payload["last_action_type"] = str(payload.get("last_action_type") or "").strip()
+        payload["last_pack_sent"] = str(payload.get("last_pack_sent") or "").strip()
         return payload
 
     def build_rows(self, live_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -575,15 +592,30 @@ class InboxProjectionBuilder:
             key=lambda item: (
                 -(self._coerce_timestamp(item.get("last_message_timestamp")) or 0.0),
                 str(item.get("display_name") or "").lower(),
+                str(item.get("thread_key") or "").strip(),
             )
         )
         return rows
+
+    @classmethod
+    def _message_anchor_timestamp(cls, message: dict[str, Any]) -> float | None:
+        del cls
+        return message_canonical_timestamp(message)
+
+    @classmethod
+    def _normalize_thread_messages(cls, rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        ordered = [dict(row) for row in rows or [] if isinstance(row, dict)]
+        enumerated = list(enumerate(ordered))
+        enumerated.sort(key=lambda pair: message_sort_key(pair[1], position=pair[0]))
+        return [row for _, row in enumerated]
 
     def build_thread(self, thread_key: str, live_thread: dict[str, Any] | None) -> dict[str, Any] | None:
         del thread_key
         if not isinstance(live_thread, dict):
             return None
-        return copy.deepcopy(live_thread)
+        payload = copy.deepcopy(live_thread)
+        payload["messages"] = self._normalize_thread_messages(payload.get("messages"))
+        return payload
 
     def legacy_seed(self, thread_key: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         del thread_key
@@ -617,6 +649,9 @@ class InboxRuntime(QObject):
         self._started = False
         self._backend_started = False
         self._ui_active = False
+        self._worker_state = "stopped"
+        self._worker_last_heartbeat_at: float | None = None
+        self._worker_last_error = ""
         self._idle_backend_shutdown_seconds = max(0.1, float(idle_backend_shutdown_seconds or 0.1))
         self._idle_backend_retry_seconds = max(0.1, float(idle_backend_retry_seconds or 0.1))
         self._idle_shutdown_timer: threading.Timer | None = None
@@ -641,10 +676,15 @@ class InboxRuntime(QObject):
 
     def start(self) -> None:
         with self._worker_lock:
-            if self._started:
+            worker = self._worker
+            if self._started and worker is not None and worker.is_alive():
                 self._ensure_watcher()
                 return
+            if worker is not None and not worker.is_alive():
+                self._worker = None
+                self._started = False
             self._stop_event.clear()
+            self._mark_worker_state("starting", clear_error=True)
             self._worker = threading.Thread(
                 target=self._run_loop,
                 name="inbox-runtime",
@@ -668,6 +708,7 @@ class InboxRuntime(QObject):
         with self._state_lock:
             self._backend_started = False
             self._ui_active = False
+        self._mark_worker_state("stopped", clear_error=False)
         engine_shutdown = getattr(self._engine, "shutdown", None)
         if callable(engine_shutdown):
             engine_shutdown()
@@ -743,7 +784,13 @@ class InboxRuntime(QObject):
             cached = self._thread_cache.get(clean_key)
             if isinstance(cached, dict):
                 return copy.deepcopy(cached)
-        return None
+        live_thread = self._safe_engine_get_thread(clean_key)
+        detail = self._builder.build_thread(clean_key, live_thread)
+        if not isinstance(detail, dict):
+            return None
+        with self._state_lock:
+            self._thread_cache[clean_key] = copy.deepcopy(detail)
+            return copy.deepcopy(detail)
 
     def get_thread(self, thread_key: str) -> dict[str, Any] | None:
         clean_key = str(thread_key or "").strip()
@@ -813,15 +860,22 @@ class InboxRuntime(QObject):
             self._worker_lock.notify_all()
 
     def diagnostics(self) -> dict[str, Any]:
+        with self._worker_lock:
+            worker = self._worker
+            worker_alive = bool(worker is not None and worker.is_alive())
         with self._state_lock:
             return {
                 "projection_threads": len(self._rows_by_key),
                 "projection_unread": int(self._metrics.get("unread") or 0),
                 "projection_pending": int(self._metrics.get("pending") or 0),
                 "cached_thread_details": len(self._thread_cache),
-                "backend_started": bool(self._backend_started),
+                "backend_started": bool(self._backend_started and worker_alive),
                 "ui_active": bool(self._ui_active),
-                "projection_ready": self._projection_ready.is_set(),
+                "projection_ready": bool(self._projection_ready.is_set() and worker_alive),
+                "runtime_worker_alive": worker_alive,
+                "runtime_worker_state": str(self._worker_state or "stopped").strip() or "stopped",
+                "runtime_worker_last_heartbeat_at": self._worker_last_heartbeat_at,
+                "runtime_worker_last_error": str(self._worker_last_error or "").strip(),
             }
 
     def _cancel_idle_backend_shutdown(self) -> None:
@@ -934,38 +988,79 @@ class InboxRuntime(QObject):
             setter(bool(active))
 
     def _run_loop(self) -> None:
-        while True:
-            with self._worker_lock:
-                while not self._stop_event.is_set() and not self._pending_rebuild:
-                    self._worker_lock.wait(timeout=0.5)
-                if self._stop_event.is_set():
-                    return
-                reason = self._pending_reason or "refresh"
-                full = self._pending_full_rebuild
-                invalidate_legacy = self._pending_invalidate_legacy
-                thread_keys = list(self._pending_thread_keys)
-                account_ids = list(self._pending_account_ids)
-                open_thread_keys = list(self._pending_open_thread_keys)
-                self._pending_rebuild = False
-                self._pending_full_rebuild = False
-                self._pending_invalidate_legacy = False
-                self._pending_thread_keys.clear()
-                self._pending_account_ids.clear()
-                self._pending_open_thread_keys.clear()
-            for thread_key in open_thread_keys:
-                if thread_key:
-                    self._open_thread_in_worker(thread_key)
-            if open_thread_keys:
+        current_thread = threading.current_thread()
+        self._mark_worker_state("running", clear_error=True)
+        try:
+            while True:
+                with self._worker_lock:
+                    while not self._stop_event.is_set() and not self._pending_rebuild:
+                        self._mark_worker_state("idle", clear_error=False)
+                        self._worker_lock.wait(timeout=0.5)
+                    if self._stop_event.is_set():
+                        return
+                    self._mark_worker_state("running", clear_error=False)
+                    reason = self._pending_reason or "refresh"
+                    full = self._pending_full_rebuild
+                    invalidate_legacy = self._pending_invalidate_legacy
+                    thread_keys = list(self._pending_thread_keys)
+                    account_ids = list(self._pending_account_ids)
+                    open_thread_keys = list(self._pending_open_thread_keys)
+                    self._pending_rebuild = False
+                    self._pending_full_rebuild = False
+                    self._pending_invalidate_legacy = False
+                    self._pending_thread_keys.clear()
+                    self._pending_account_ids.clear()
+                    self._pending_open_thread_keys.clear()
                 for thread_key in open_thread_keys:
                     if thread_key:
-                        thread_keys.append(thread_key)
-            self._rebuild_projection(
-                reason=reason,
-                full=full,
-                thread_keys=thread_keys,
-                account_ids=account_ids,
-                invalidate_legacy=invalidate_legacy,
-            )
+                        self._mark_worker_state("running", clear_error=False)
+                        self._open_thread_in_worker(thread_key)
+                if open_thread_keys:
+                    for thread_key in open_thread_keys:
+                        if thread_key:
+                            thread_keys.append(thread_key)
+                self._mark_worker_state("running", clear_error=False)
+                self._rebuild_projection(
+                    reason=reason,
+                    full=full,
+                    thread_keys=thread_keys,
+                    account_ids=account_ids,
+                    invalidate_legacy=invalidate_legacy,
+                )
+        except Exception as exc:
+            logger.exception("Inbox runtime worker crashed")
+            self._projection_ready.clear()
+            self._mark_worker_state("error", error=f"{type(exc).__name__}: {exc}", clear_error=False)
+            engine_shutdown = getattr(self._engine, "shutdown", None)
+            if callable(engine_shutdown):
+                try:
+                    engine_shutdown()
+                except Exception:
+                    logger.exception("Inbox runtime worker could not shutdown engine cleanly after crash")
+            with self._state_lock:
+                self._backend_started = False
+        finally:
+            with self._worker_lock:
+                if self._worker is current_thread:
+                    self._worker = None
+                self._started = False
+            if self._stop_event.is_set():
+                self._mark_worker_state("stopped", clear_error=False)
+
+    def _mark_worker_state(
+        self,
+        state: str,
+        *,
+        error: str | None = None,
+        clear_error: bool,
+    ) -> None:
+        with self._state_lock:
+            self._worker_state = str(state or "stopped").strip() or "stopped"
+            self._worker_last_heartbeat_at = time.time()
+            if clear_error:
+                self._worker_last_error = ""
+            elif error is not None:
+                self._worker_last_error = str(error or "").strip()
 
     def _safe_engine_list_threads(self) -> list[dict[str, Any]]:
         try:
@@ -986,9 +1081,32 @@ class InboxRuntime(QObject):
         if not callable(opener):
             return True
         try:
-            return bool(opener(clean_key))
+            opened = bool(opener(clean_key))
         except Exception:
             return False
+        if opened:
+            self._hydrate_thread_after_open(clean_key, live_thread)
+        return opened
+
+    def _hydrate_thread_after_open(self, thread_key: str, live_thread: dict[str, Any]) -> bool:
+        if not self._thread_needs_full_hydration(live_thread):
+            return False
+        hydrator = getattr(self._engine, "hydrate_thread", None)
+        if not callable(hydrator):
+            return False
+        try:
+            return bool(hydrator(thread_key))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _thread_needs_full_hydration(thread: dict[str, Any] | None) -> bool:
+        if not isinstance(thread, dict):
+            return False
+        messages = [dict(item) for item in thread.get("messages") or [] if isinstance(item, dict)]
+        if not messages:
+            return True
+        return any(message_canonical_timestamp(message) is None for message in messages)
 
     def _safe_engine_get_thread(self, thread_key: str) -> dict[str, Any] | None:
         getter = getattr(self._engine, "get_thread", None)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, time, timedelta
+import os
 from typing import Any
 
 import health_store
@@ -18,6 +19,11 @@ from .base import ServiceContext, ServiceError, normalize_alias
 class SystemService:
     def __init__(self, context: ServiceContext) -> None:
         self.context = context
+
+    def _require_owner(self) -> None:
+        mode = str(os.environ.get("INSTACRM_BOOTSTRAP_MODE") or "owner").strip().lower()
+        if mode != "owner":
+            raise ServiceError("Esta accion del sistema solo esta disponible en modo owner.")
 
     def _license_admin(self) -> SupabaseLicenseClient:
         try:
@@ -76,9 +82,11 @@ class SystemService:
         }
 
     def list_licenses(self) -> list[dict[str, Any]]:
+        self._require_owner()
         return [item for item in self._license_admin().list_licenses() if isinstance(item, dict)]
 
     def fetch_license(self, license_key: str) -> dict[str, Any] | None:
+        self._require_owner()
         payload = self._license_admin().fetch_license(license_key)
         return dict(payload) if isinstance(payload, dict) else None
 
@@ -91,6 +99,7 @@ class SystemService:
         expires_at: str,
         notes: str = "",
     ) -> dict[str, Any]:
+        self._require_owner()
         return dict(
             self._license_admin().create_license(
                 client_name=client_name,
@@ -108,6 +117,7 @@ class SystemService:
         days: int = 30,
         email: str = "",
     ) -> dict[str, Any]:
+        self._require_owner()
         del email
         expires = datetime.now().astimezone() + timedelta(days=max(30, int(days or 30)))
         return self.create_license(
@@ -119,33 +129,37 @@ class SystemService:
         )
 
     def extend_license(self, license_key: str, *, days: int) -> dict[str, Any] | None:
+        self._require_owner()
         record = self._license_admin().extend_license(license_key, days=days)
         return dict(record) if isinstance(record, dict) else None
 
     def delete_license(self, license_key: str) -> bool:
+        self._require_owner()
         return bool(self.deactivate_license(license_key))
 
     def deactivate_license(self, license_key: str) -> dict[str, Any] | None:
+        self._require_owner()
         record = self._license_admin().deactivate_license(license_key)
         return dict(record) if isinstance(record, dict) else None
 
     def reset_device_activations(self, license_key: str) -> int:
+        self._require_owner()
         return int(self._license_admin().reset_device_activations(license_key))
 
     def list_license_activations(self, license_key: str) -> list[dict[str, Any]]:
+        self._require_owner()
         record = self.fetch_license(license_key)
         if not record:
             return []
-        rows = self._license_admin().list_license_activations(
-            str(record.get("license_key") or ""),
-            license_id=str(record.get("id") or ""),
-        )
+        rows = self._license_admin().list_license_activations(str(record.get("id") or ""))
         return [dict(row) for row in rows if isinstance(row, dict)]
 
     def check_updates(self) -> dict[str, Any]:
-        return dict(update_system.check_for_updates())
+        self._require_owner()
+        return update_system.check_for_updates(force=True)
 
     def update_config(self) -> dict[str, Any]:
+        self._require_owner()
         loader = getattr(update_system, "_load_update_config", None)
         if callable(loader):
             payload = loader()
@@ -153,6 +167,7 @@ class SystemService:
         return {}
 
     def save_update_config(self, updates: dict[str, Any]) -> dict[str, Any]:
+        self._require_owner()
         loader = getattr(update_system, "_load_update_config", None)
         saver = getattr(update_system, "_save_update_config", None)
         current = loader() if callable(loader) else {}
@@ -163,6 +178,7 @@ class SystemService:
         return payload
 
     def supabase_config(self) -> dict[str, str]:
+        self._require_owner()
         payload = read_supabase_config()
         return {
             "supabase_url": str(payload.get("supabase_url") or "").strip(),
@@ -170,6 +186,7 @@ class SystemService:
         }
 
     def save_supabase_config(self, *, supabase_url: str, supabase_key: str) -> dict[str, str]:
+        self._require_owner()
         payload = update_supabase_config(
             supabase_url=supabase_url,
             supabase_key=supabase_key,

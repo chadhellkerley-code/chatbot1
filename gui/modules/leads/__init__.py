@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from .leads_page import (
-    LeadsFilterConfigPage,
-    LeadsFilterPage,
     LeadsHomePage,
     LeadsImportPage,
     LeadsListsPage,
@@ -14,6 +12,4 @@ __all__ = [
     "LeadsTemplatesPage",
     "LeadsListsPage",
     "LeadsImportPage",
-    "LeadsFilterPage",
-    "LeadsFilterConfigPage",
 ]

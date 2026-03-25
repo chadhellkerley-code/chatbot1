@@ -12,113 +12,163 @@ def _configure_lead_status_store(monkeypatch, tmp_path) -> None:
     storage_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(lead_status_store, "_STORAGE", storage_dir)
     monkeypatch.setattr(lead_status_store, "_FILE", storage_dir / "lead_status.json")
+    lead_status_store._PREFILTER_SNAPSHOT_CACHE.clear()
 
 
-def test_lead_status_store_is_alias_scoped_and_preserves_legacy_entries(monkeypatch, tmp_path) -> None:
+def test_mark_lead_sent_updates_global_contact_store_with_real_ttl(monkeypatch, tmp_path) -> None:
     _configure_lead_status_store(monkeypatch, tmp_path)
     lead_status_store._FILE.write_text(
         json.dumps(
             {
                 "version": 1,
                 "leads": {
-                    "lead-1": {"status": "sent", "sent_by": "acct-1"},
-                    "lead-2": {"status": "skipped", "last_error": "already_contacted"},
+                    "lead-1": {"status": "sent", "sent_by": "acct-legacy"},
                 },
             }
         ),
         encoding="utf-8",
     )
 
-    assert lead_status_store.is_terminal_lead_status("lead-1", alias="matias") is False
-    assert lead_status_store.get_legacy_lead_status("lead-1") == {"status": "sent", "sent_by": "acct-1"}
-
     lead_status_store.mark_lead_sent("lead-1", sent_by="acct-1", alias="matias")
 
-    assert lead_status_store.is_terminal_lead_status("lead-1", alias="matias") is True
-    assert lead_status_store.is_terminal_lead_status("lead-1", alias="otro") is False
-
     payload = json.loads(lead_status_store._FILE.read_text(encoding="utf-8"))
-    assert payload["version"] == 2
+    global_entry = payload["global_contacted_leads"]["lead-1"]
+
+    assert payload["version"] == 3
     assert payload["aliases"]["matias"]["leads"]["lead-1"]["status"] == "sent"
     assert payload["legacy_global_leads"]["lead-1"]["status"] == "sent"
+    assert global_entry["last_status"] == "sent"
+    assert global_entry["last_alias"] == "matias"
+    assert global_entry["last_campaign"] == "matias"
+    assert global_entry["last_account"] == "acct-1"
+    assert lead_status_store.is_terminal_lead_status("lead-1", alias="matias") is True
+    assert lead_status_store.is_globally_contact_blocked("lead-1", now=global_entry["last_contacted_at"] + 10) is True
+    assert (
+        lead_status_store.is_globally_contact_blocked(
+            "lead-1",
+            now=global_entry["last_contacted_at"] + lead_status_store.GLOBAL_CONTACT_TTL_SECONDS,
+        )
+        is False
+    )
 
 
-def test_campaign_prefilter_uses_alias_scope_and_keeps_shared_registry_as_advisory(monkeypatch) -> None:
-    migrated_terminal: set[str] = {"scoped-terminal"}
-    terminal_updates: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = []
+def test_failed_and_skipped_statuses_do_not_create_global_contact(monkeypatch, tmp_path) -> None:
+    _configure_lead_status_store(monkeypatch, tmp_path)
 
+    lead_status_store.mark_lead_failed("lead-failed", reason="FLOW_TIMEOUT", alias="matias")
+    lead_status_store.mark_lead_skipped("lead-skipped", reason="username_not_found", alias="matias")
+
+    assert lead_status_store.get_global_contact_record("lead-failed") is None
+    assert lead_status_store.get_global_contact_record("lead-skipped") is None
+
+
+def test_campaign_prefilter_blocks_recent_global_contacts_across_aliases_and_allows_expired_ones(monkeypatch) -> None:
+    now_ts = 1_700_000_000
+    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.time.time", lambda: now_ts)
     monkeypatch.setattr(
         "src.dm_campaign.proxy_workers_runner.campaign_start_snapshot",
         lambda accounts, *, campaign_alias="": {
             "daily_counts": {account: 0 for account in accounts},
-            "campaign_registry": {"campaign-sent"},
-            "shared_registry": {"shared-only"},
+            "campaign_registry": {"campaign-history"},
+            "shared_registry": {"shared-history"},
         },
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner.get_prefilter_snapshot",
-        lambda alias: (
-            set(migrated_terminal),
-            {
-                "legacy-sent": {"status": "sent", "sent_by": "acct-1"},
-                "legacy-already-contacted": {"status": "skipped", "last_error": "already_contacted"},
-            },
-        ),
     )
     monkeypatch.setattr(
         "src.dm_campaign.proxy_workers_runner._campaign_account_usernames",
         lambda alias: {"acct-1"},
     )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner.apply_terminal_status_updates",
-        lambda *, alias="", sent_updates=(), skipped_updates=(): terminal_updates.append(
-            (alias, list(sent_updates), list(skipped_updates))
-        ),
-    )
 
     pending, stats = _filter_pending_leads_for_campaign(
         [
-            "scoped-terminal",
-            "campaign-sent",
-            "legacy-sent",
-            "shared-only",
-            "legacy-already-contacted",
+            "pepito",
+            "old-alias-sent",
+            "alias-skipped",
+            "expired-global",
+            "campaign-history",
+            "shared-history",
             "fresh",
         ],
-        alias="matias",
+        alias="nuevo1",
+        alias_status_map={
+            "old-alias-sent": {"status": "sent", "sent_timestamp": now_ts - lead_status_store.GLOBAL_CONTACT_TTL_SECONDS - 1},
+            "alias-skipped": {"status": "skipped", "skipped_timestamp": now_ts - 30},
+        },
+        global_contact_map={
+            "pepito": {"last_contacted_at": now_ts - 60, "last_status": "sent", "last_alias": "nuevo"},
+            "expired-global": {
+                "last_contacted_at": now_ts - lead_status_store.GLOBAL_CONTACT_TTL_SECONDS - 1,
+                "last_status": "sent",
+                "last_alias": "viejo",
+            },
+        },
     )
 
-    assert pending == ["shared-only", "legacy-already-contacted", "fresh"]
-    assert stats["blocked_total"] == 3
-    assert stats["blocked_by_alias_status"] == 1
-    assert stats["blocked_by_campaign_registry"] == 1
-    assert stats["blocked_by_legacy_campaign_status"] == 1
+    assert pending == [
+        "old-alias-sent",
+        "expired-global",
+        "campaign-history",
+        "shared-history",
+        "fresh",
+    ]
+    assert stats["blocked_total"] == 2
+    assert stats["blocked_by_global_contact"] == 1
+    assert stats["blocked_by_alias_skipped_status"] == 1
+    assert stats["advisory_alias_sent_ignored"] == 1
+    assert stats["advisory_campaign_registry_hits"] == 1
     assert stats["advisory_shared_registry_hits"] == 1
-    assert stats["advisory_legacy_status_ignored"] == 1
-    assert terminal_updates == [("matias", [("legacy-sent", "acct-1")], [])]
 
 
-def test_get_prefilter_snapshot_reuses_cached_file_snapshot(monkeypatch, tmp_path) -> None:
+def test_get_prefilter_snapshot_bootstraps_global_contacts_from_sent_log_and_reuses_cache(monkeypatch, tmp_path) -> None:
     _configure_lead_status_store(monkeypatch, tmp_path)
     lead_status_store._FILE.write_text(
         json.dumps(
             {
-                "version": 2,
+                "version": 3,
                 "aliases": {
                     "matias": {
                         "leads": {
-                            "lead-a": {"status": "sent"},
+                            "lead-a": {"status": "sent", "sent_timestamp": 100},
                         }
                     }
                 },
                 "legacy_global_leads": {
-                    "lead-b": {"status": "sent", "sent_by": "acct-1"},
+                    "lead-b": {"status": "sent", "sent_by": "acct-1", "sent_timestamp": 200},
                 },
+                "global_contacted_leads": {},
             }
         ),
         encoding="utf-8",
     )
-    lead_status_store._PREFILTER_SNAPSHOT_CACHE.clear()
+    (tmp_path / "storage" / "sent_log.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "ts": 300,
+                        "account": "acct-2",
+                        "to": "lead-c",
+                        "ok": True,
+                        "detail": "sent_verified",
+                        "source_engine": "campaign",
+                        "campaign_alias": "otro",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": 400,
+                        "account": "acct-3",
+                        "to": "lead-d",
+                        "ok": True,
+                        "detail": "sent_unverified",
+                        "source_engine": "campaign",
+                        "campaign_alias": "otro",
+                        "sent_unverified": True,
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     original_load_json_file = lead_status_store.load_json_file
     calls = {"count": 0}
@@ -129,13 +179,16 @@ def test_get_prefilter_snapshot_reuses_cached_file_snapshot(monkeypatch, tmp_pat
 
     monkeypatch.setattr(lead_status_store, "load_json_file", _counting_load_json_file)
 
-    first_terminal, first_legacy = lead_status_store.get_prefilter_snapshot("matias")
-    second_terminal, second_legacy = lead_status_store.get_prefilter_snapshot("matias")
+    first_alias_status, first_global = lead_status_store.get_prefilter_snapshot("matias")
+    second_alias_status, second_global = lead_status_store.get_prefilter_snapshot("matias")
 
-    assert first_terminal == {"lead-a"}
-    assert second_terminal == {"lead-a"}
-    assert first_legacy == {"lead-b": {"status": "sent", "sent_by": "acct-1"}}
-    assert second_legacy == {"lead-b": {"status": "sent", "sent_by": "acct-1"}}
+    assert first_alias_status["lead-a"]["status"] == "sent"
+    assert second_alias_status["lead-a"]["status"] == "sent"
+    assert first_global["lead-a"]["last_contacted_at"] == 100
+    assert first_global["lead-b"]["last_contacted_at"] == 200
+    assert first_global["lead-c"]["last_contacted_at"] == 300
+    assert "lead-d" not in first_global
+    assert second_global == first_global
     assert calls["count"] == 1
 
 

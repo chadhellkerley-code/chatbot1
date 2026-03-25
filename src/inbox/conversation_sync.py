@@ -335,7 +335,7 @@ def _snapshot_to_thread_row(
         "recipient_username": str(snapshot.get("recipient_username") or "").strip(),
         "display_name": display_name,
         "last_message_text": str((latest or {}).get("text") or snapshot.get("snippet") or "").strip(),
-        "last_message_timestamp": (latest or {}).get("timestamp") or fallback_activity_at,
+        "last_message_timestamp": (latest or {}).get("timestamp"),
         "last_message_direction": latest_direction or "unknown",
         "last_message_id": str((latest or {}).get("message_id") or "").strip(),
         "unread_count": unread_count,
@@ -343,9 +343,21 @@ def _snapshot_to_thread_row(
             str(snapshot.get("recipient_username") or "").strip()
             or display_name
         ],
+        "last_activity_timestamp": (latest or {}).get("timestamp") or fallback_activity_at,
         "latest_customer_message_at": latest_customer_message_at,
         "preview_messages": preview_messages,
     }
+
+
+def _coerce_preview_timestamp(raw: dict[str, Any]) -> float | None:
+    for key in ("timestamp", "timestamp_epoch"):
+        try:
+            stamp = float(raw.get(key)) if raw.get(key) is not None else None
+        except Exception:
+            stamp = None
+        if stamp is not None:
+            return stamp
+    return None
 
 
 def _normalize_preview_messages(raw_messages: Any) -> list[dict[str, Any]]:
@@ -360,10 +372,7 @@ def _normalize_preview_messages(raw_messages: Any) -> list[dict[str, Any]]:
         direction = str(raw.get("direction") or "").strip().lower() or "unknown"
         if direction not in {"inbound", "outbound", "unknown"}:
             direction = "unknown"
-        try:
-            timestamp = float(raw.get("timestamp")) if raw.get("timestamp") is not None else None
-        except Exception:
-            timestamp = None
+        timestamp = _coerce_preview_timestamp(raw)
         normalized.append(
             {
                 "message_id": message_id,

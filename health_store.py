@@ -399,6 +399,58 @@ def invalidate(username: str) -> None:
         )
 
 
+def rename_account(old_username: str, new_username: str) -> None:
+    old_key = _key(old_username)
+    new_key = _key(new_username)
+    if not old_key or not new_key or old_key == new_key:
+        return
+    with _LOCK, _connect() as connection:
+        connection.execute(
+            """
+            insert into account_health_state(username, state, reason, updated_at)
+            select ?, state, reason, updated_at
+            from account_health_state
+            where username = ?
+            on conflict(username) do update set
+                state = excluded.state,
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (new_key, old_key),
+        )
+        connection.execute(
+            """
+            insert into account_session_state(username, connected, source, reason, updated_at)
+            select ?, connected, source, reason, updated_at
+            from account_session_state
+            where username = ?
+            on conflict(username) do update set
+                connected = excluded.connected,
+                source = excluded.source,
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (new_key, old_key),
+        )
+        connection.execute(
+            """
+            insert into account_login_progress(username, run_id, state, message, updated_at)
+            select ?, run_id, state, message, updated_at
+            from account_login_progress
+            where username = ?
+            on conflict(username) do update set
+                run_id = excluded.run_id,
+                state = excluded.state,
+                message = excluded.message,
+                updated_at = excluded.updated_at
+            """,
+            (new_key, old_key),
+        )
+        connection.execute("delete from account_health_state where username = ?", (old_key,))
+        connection.execute("delete from account_session_state where username = ?", (old_key,))
+        connection.execute("delete from account_login_progress where username = ?", (old_key,))
+
+
 def _log_health(username: str, state: str, reason: str = "") -> None:
     account = (username or "").strip().lstrip("@")
     if not account:

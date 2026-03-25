@@ -8,13 +8,15 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 
 import requests
 
@@ -44,6 +46,24 @@ _UPDATE_ERROR_LOG = _UPDATE_STATE_DIR / "update_error.log"
 _DEFAULT_GITHUB_REPO = "chadhellkerley-code/chatbot"
 _DEFAULT_UPDATE_CHECK_INTERVAL = 3600  # 1 hora
 _GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
+_UPDATE_CAMPAIGN_ACTIVE_STATUSES = {"starting", "running", "stopping"}
+_UPDATE_RUNTIME_ACTIVE_STATES = {"starting", "running", "stopping"}
+_UPDATE_CAMPAIGN_STALE_SECONDS = 45.0
+_UPDATE_CONNECTOR_STALE_SECONDS = 60.0
+
+
+UpdateCheckStatus = Literal["update_available", "up_to_date", "error"]
+
+
+class UpdateCheckResult(TypedDict):
+    status: UpdateCheckStatus
+    checked: bool
+    update_available: bool
+    message: str
+    current_version: str
+    latest_version: Optional[str]
+    update_info: Optional[Dict[str, Any]]
+    github_repo: str
 
 
 def _ensure_update_dirs() -> None:
@@ -95,15 +115,13 @@ def _load_update_config() -> Dict[str, Any]:
             "check_interval_seconds": _DEFAULT_UPDATE_CHECK_INTERVAL,
             "last_check_ts": 0,
             "current_version": _get_current_version(),
-            "exe_asset_name": os.environ.get("UPDATE_EXE_ASSET", "").strip() or None,
         }
     try:
         data = load_json_file(_UPDATE_CONFIG_FILE, {}, label="update_system.config")
         resolved_version = _get_current_version()
         if data.get("current_version") != resolved_version:
             data["current_version"] = resolved_version
-        if "exe_asset_name" not in data:
-            data["exe_asset_name"] = os.environ.get("UPDATE_EXE_ASSET", "").strip() or None
+        data.pop("exe_asset_name", None)
         # Forzar repo fijo y oculto
         return data
     except Exception:
@@ -112,13 +130,238 @@ def _load_update_config() -> Dict[str, Any]:
             "check_interval_seconds": _DEFAULT_UPDATE_CHECK_INTERVAL,
             "last_check_ts": 0,
             "current_version": _get_current_version(),
-            "exe_asset_name": os.environ.get("UPDATE_EXE_ASSET", "").strip() or None,
         }
 
 
 def _save_update_config(config: Dict[str, Any]) -> None:
     """Guarda la configuración de actualizaciones."""
-    _write_update_state(_UPDATE_CONFIG_FILE, config)
+    normalized = dict(config)
+    normalized.pop("exe_asset_name", None)
+    _write_update_state(_UPDATE_CONFIG_FILE, normalized)
+
+
+def _query_sqlite_rows(db_path: Path, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+    try:
+        with sqlite3.connect(db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(query, params).fetchall()
+    except Exception:
+        return []
+    return [dict(row) for row in rows]
+
+
+def _coerce_timestamp(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _coerce_iso_timestamp(value: Any) -> float | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _timestamp_is_recent(timestamp: float | None, stale_after_seconds: float) -> bool:
+    if timestamp is None:
+        return False
+    return (time.time() - timestamp) <= max(1.0, float(stale_after_seconds or 1.0))
+
+
+def _load_update_campaign_state() -> dict[str, Any]:
+    rows = _query_sqlite_rows(
+        _INSTALL_ROOT / "data" / "app_state.db",
+        """
+        SELECT run_id, status, payload_json, synced_at
+        FROM campaign_state
+        ORDER BY synced_at DESC, started_at DESC, run_id DESC
+        LIMIT 1
+        """,
+    )
+    if not rows:
+        return {}
+    row = rows[0]
+    payload: dict[str, Any] = {}
+    raw_payload = str(row.get("payload_json") or "").strip()
+    if raw_payload:
+        try:
+            decoded = json.loads(raw_payload)
+        except Exception:
+            decoded = {}
+        if isinstance(decoded, dict):
+            payload = decoded
+    payload["run_id"] = str(payload.get("run_id") or row.get("run_id") or "").strip()
+    payload["status"] = str(payload.get("status") or row.get("status") or "").strip()
+    payload["_synced_at_ts"] = _coerce_iso_timestamp(row.get("synced_at"))
+    return payload
+
+
+def _runtime_alias_state_blocks_update(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    worker_state = str(state.get("worker_state") or "").strip().lower()
+    if not bool(state.get("is_running")) and worker_state not in _UPDATE_RUNTIME_ACTIVE_STATES:
+        return False
+    delay_max_ms = max(0, int(state.get("delay_max_ms") or 0))
+    stale_after = max(30.0, (delay_max_ms / 1000.0) + 20.0)
+    heartbeat = _coerce_timestamp(state.get("last_heartbeat_at")) or _coerce_timestamp(state.get("updated_at"))
+    return _timestamp_is_recent(heartbeat, stale_after)
+
+
+def _load_update_runtime_alias_states() -> list[dict[str, Any]]:
+    rows = _query_sqlite_rows(
+        _STORAGE_ROOT / "inbox_rm.sqlite3",
+        """
+        SELECT alias_id, is_running, worker_state, delay_max_ms, last_heartbeat_at, updated_at
+        FROM runtime_alias_state
+        ORDER BY alias_id ASC
+        """,
+    )
+    states: list[dict[str, Any]] = []
+    for row in rows:
+        payload = {
+            "alias_id": str(row.get("alias_id") or "").strip(),
+            "is_running": bool(row.get("is_running")),
+            "worker_state": str(row.get("worker_state") or "").strip(),
+            "delay_max_ms": int(row.get("delay_max_ms") or 0),
+            "last_heartbeat_at": _coerce_timestamp(row.get("last_heartbeat_at")),
+            "updated_at": _coerce_timestamp(row.get("updated_at")),
+        }
+        if _runtime_alias_state_blocks_update(payload):
+            states.append(payload)
+    return states
+
+
+def _load_update_pending_inbox_jobs() -> list[dict[str, Any]]:
+    return _query_sqlite_rows(
+        _STORAGE_ROOT / "inbox_rm.sqlite3",
+        """
+        SELECT id, task_type, job_type, thread_key, account_id, state
+        FROM inbox_send_queue_jobs
+        WHERE state IN ('queued', 'processing')
+        ORDER BY priority DESC, scheduled_at ASC, created_at ASC, id ASC
+        LIMIT 25
+        """,
+    )
+
+
+def _session_connector_state_blocks_update(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    connector_state = str(state.get("state") or "").strip().lower()
+    if connector_state not in {"ready", "degraded"}:
+        return False
+    heartbeat = _coerce_timestamp(state.get("last_heartbeat_at")) or _coerce_timestamp(state.get("updated_at"))
+    return _timestamp_is_recent(heartbeat, _UPDATE_CONNECTOR_STALE_SECONDS)
+
+
+def _load_update_session_connector_states() -> list[dict[str, Any]]:
+    rows = _query_sqlite_rows(
+        _STORAGE_ROOT / "inbox_rm.sqlite3",
+        """
+        SELECT account_id, alias_id, state, last_heartbeat_at, updated_at
+        FROM session_connector_state
+        ORDER BY alias_id ASC, account_id ASC
+        """,
+    )
+    states: list[dict[str, Any]] = []
+    for row in rows:
+        payload = {
+            "account_id": str(row.get("account_id") or "").strip(),
+            "alias_id": str(row.get("alias_id") or "").strip(),
+            "state": str(row.get("state") or "").strip(),
+            "last_heartbeat_at": _coerce_timestamp(row.get("last_heartbeat_at")),
+            "updated_at": _coerce_timestamp(row.get("updated_at")),
+        }
+        if _session_connector_state_blocks_update(payload):
+            states.append(payload)
+    return states
+
+
+def _evaluate_update_runtime_preflight(
+    *,
+    campaign_state: dict[str, Any] | None,
+    runtime_alias_states: list[dict[str, Any]] | None,
+    pending_inbox_jobs: list[dict[str, Any]] | None,
+    session_connectors: list[dict[str, Any]] | None,
+) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    details = {
+        "campaign_state": dict(campaign_state or {}),
+        "runtime_alias_states": [dict(item) for item in runtime_alias_states or [] if isinstance(item, dict)],
+        "pending_inbox_jobs": [dict(item) for item in pending_inbox_jobs or [] if isinstance(item, dict)],
+        "session_connectors": [dict(item) for item in session_connectors or [] if isinstance(item, dict)],
+    }
+
+    campaign = details["campaign_state"]
+    campaign_status = str(campaign.get("status") or "").strip().lower()
+    campaign_synced_at = _coerce_timestamp(campaign.get("_synced_at_ts"))
+    campaign_active = bool(campaign.get("task_active")) or campaign_status in _UPDATE_CAMPAIGN_ACTIVE_STATUSES
+    if campaign_active and _timestamp_is_recent(campaign_synced_at, _UPDATE_CAMPAIGN_STALE_SECONDS):
+        run_id = str(campaign.get("run_id") or "").strip() or "sin_run_id"
+        blockers.append(f"Campana activa detectada (run_id={run_id}, status={campaign_status or 'running'}).")
+
+    live_aliases = details["runtime_alias_states"]
+    if live_aliases:
+        alias_labels = [
+            f"{str(item.get('alias_id') or '').strip() or 'sin_alias'} ({str(item.get('worker_state') or 'running').strip() or 'running'})"
+            for item in live_aliases[:5]
+        ]
+        extra_aliases = len(live_aliases) - len(alias_labels)
+        alias_suffix = f" +{extra_aliases} mas" if extra_aliases > 0 else ""
+        blockers.append(f"Inbox runtime activo en alias: {', '.join(alias_labels)}{alias_suffix}.")
+
+    pending_jobs = details["pending_inbox_jobs"]
+    if pending_jobs:
+        job_types = sorted(
+            {
+                str(item.get("job_type") or item.get("task_type") or "").strip().lower() or "unknown"
+                for item in pending_jobs
+                if isinstance(item, dict)
+            }
+        )
+        blockers.append(
+            f"Inbox tiene jobs pendientes/procesando: {len(pending_jobs)} detectados"
+            + (f" ({', '.join(job_types[:5])})." if job_types else ".")
+        )
+
+    live_connectors = details["session_connectors"]
+    if live_connectors:
+        connector_labels = [
+            f"{str(item.get('account_id') or '').strip() or 'sin_cuenta'} ({str(item.get('state') or 'ready').strip() or 'ready'})"
+            for item in live_connectors[:5]
+        ]
+        extra_connectors = len(live_connectors) - len(connector_labels)
+        connector_suffix = f" +{extra_connectors} mas" if extra_connectors > 0 else ""
+        blockers.append(f"Conectores auxiliares del inbox vivos: {', '.join(connector_labels)}{connector_suffix}.")
+
+    return (not blockers), blockers, details
+
+
+def _check_update_runtime_preflight() -> tuple[bool, str, dict[str, Any]]:
+    ok_to_update, blockers, details = _evaluate_update_runtime_preflight(
+        campaign_state=_load_update_campaign_state(),
+        runtime_alias_states=_load_update_runtime_alias_states(),
+        pending_inbox_jobs=_load_update_pending_inbox_jobs(),
+        session_connectors=_load_update_session_connector_states(),
+    )
+    if ok_to_update:
+        return True, "Sin runtimes vivos detectados. El update puede continuar.", details
+    lines = [
+        "Update bloqueado: hay actividad operativa viva que puede dejar el estado inconsistente.",
+        *[f"- {item}" for item in blockers],
+        "Deten la actividad activa y reintenta el update.",
+    ]
+    return False, "\n".join(lines), details
 
 
 def _get_current_version() -> str:
@@ -295,10 +538,37 @@ def _list_release_assets(repo: str) -> List[str]:
         return []
 
 
+def _build_update_check_result(
+    *,
+    status: UpdateCheckStatus,
+    message: str,
+    current_version: str,
+    github_repo: str,
+    checked: bool = True,
+    latest_version: Optional[str] = None,
+    update_info: Optional[Dict[str, Any]] = None,
+) -> UpdateCheckResult:
+    normalized_info = dict(update_info) if isinstance(update_info, dict) else None
+    normalized_latest = str(latest_version or "").strip() or None
+    if normalized_latest is None and normalized_info:
+        candidate = str(normalized_info.get("version") or "").strip()
+        normalized_latest = candidate or None
+    return {
+        "status": status,
+        "checked": bool(checked),
+        "update_available": status == "update_available",
+        "message": str(message or "").strip(),
+        "current_version": str(current_version or "").strip(),
+        "latest_version": normalized_latest,
+        "update_info": normalized_info,
+        "github_repo": str(github_repo or "").strip(),
+    }
+
+
 def check_for_updates(
     github_repo: Optional[str] = None,
     force: bool = False,
-) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+) -> UpdateCheckResult:
     """
     Verifica si hay actualizaciones disponibles desde GitHub.
     
@@ -307,25 +577,42 @@ def check_for_updates(
         force: Forzar verificación incluso si no es momento
     
     Returns:
-        (hay_actualizacion, info_actualizacion, mensaje)
+        Dict estructurado con status, message, version actual y release detectada.
     """
     config = _load_update_config()
-    github_repo = _DEFAULT_GITHUB_REPO
+    github_repo = str(github_repo or _DEFAULT_GITHUB_REPO).strip() or _DEFAULT_GITHUB_REPO
     current_version = config.get("current_version", _get_current_version())
     
     if not force:
         last_check = config.get("last_check_ts", 0)
         check_interval = config.get("check_interval_seconds", _DEFAULT_UPDATE_CHECK_INTERVAL)
         if time.time() - last_check < check_interval:
-            return False, None, "Aún no es momento de verificar actualizaciones."
+            return _build_update_check_result(
+                status="up_to_date",
+                checked=False,
+                message="Aún no es momento de verificar actualizaciones.",
+                current_version=current_version,
+                github_repo=github_repo,
+            )
     
     release_info = _get_latest_release_from_github(github_repo)
     if not release_info:
-        return False, None, "No se pudo conectar con GitHub o no hay releases disponibles."
+        return _build_update_check_result(
+            status="error",
+            message="No se pudo conectar con GitHub o no hay releases disponibles.",
+            current_version=current_version,
+            github_repo=github_repo,
+        )
     
     latest_version = release_info.get("version", "")
     if not latest_version:
-        return False, None, "No se pudo determinar la versión disponible."
+        return _build_update_check_result(
+            status="error",
+            message="No se pudo determinar la versión disponible.",
+            current_version=current_version,
+            update_info=release_info,
+            github_repo=github_repo,
+        )
     
     # Comparar versiones (puede ser tag como "v1.0.1" o "1.0.1")
     current_clean = current_version.lstrip("v")
@@ -334,12 +621,26 @@ def check_for_updates(
     if latest_clean == current_clean:
         config["last_check_ts"] = time.time()
         _save_update_config(config)
-        return False, None, f"Ya tienes la versión más reciente ({current_version})."
+        return _build_update_check_result(
+            status="up_to_date",
+            message=f"Ya tienes la versión más reciente ({current_version}).",
+            current_version=current_version,
+            latest_version=latest_version,
+            update_info=release_info,
+            github_repo=github_repo,
+        )
     
     config["last_check_ts"] = time.time()
     _save_update_config(config)
     
-    return True, release_info, f"Actualización disponible: {latest_version} (actual: {current_version})"
+    return _build_update_check_result(
+        status="update_available",
+        message=f"Actualización disponible: {latest_version} (actual: {current_version})",
+        current_version=current_version,
+        latest_version=latest_version,
+        update_info=release_info,
+        github_repo=github_repo,
+    )
 
 
 def _staging_dir_for_version(version: str) -> Path:
@@ -366,7 +667,7 @@ def _staged_manifest_candidates(payload_root: Path) -> List[Path]:
     return [
         payload_root / "update_manifest.json",
         payload_root / "app" / "update_manifest.json",
-        payload_root / "storage" / "update_manifest.json",
+        storage_root(payload_root, scoped=False, honor_env=False) / "update_manifest.json",
         payload_root / "app" / "app_version.json",
     ]
 
@@ -382,6 +683,52 @@ def _load_staged_manifest(payload_root: Path) -> Dict[str, Any]:
         if isinstance(payload, dict):
             return payload
     return {}
+
+
+def _expected_executable_name(manifest: Optional[Dict[str, Any]] = None) -> str:
+    candidates: List[str] = []
+    if isinstance(manifest, dict):
+        candidates.append(str(manifest.get("executable_name") or "").strip())
+
+    for manifest_path in (
+        _APP_ROOT / "app_version.json",
+        _APP_ROOT / "update_manifest.json",
+        _UPDATE_MANIFEST_FILE,
+    ):
+        if not manifest_path.exists():
+            continue
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        candidates.append(str(payload.get("executable_name") or "").strip())
+
+    for candidate in candidates:
+        if candidate:
+            return Path(candidate).name
+
+    if getattr(sys, "frozen", False):
+        current_name = Path(getattr(sys, "executable", "") or "").name
+        if current_name:
+            return current_name
+    return "InstaCRM.exe" if sys.platform.startswith("win") else "InstaCRM"
+
+
+def _validate_staged_release_payload(
+    payload_root: Path,
+    manifest: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    exe_name = _expected_executable_name(manifest)
+    payload_exe = payload_root / exe_name
+    payload_app = payload_root / "app"
+
+    if not payload_exe.exists() or not payload_exe.is_file():
+        return False, f"El ZIP descargado no contiene el ejecutable requerido ({exe_name})."
+    if not payload_app.exists() or not payload_app.is_dir():
+        return False, "El ZIP descargado no contiene la carpeta app/ requerida por el layout distribuido."
+    return True, "payload_full_package_ok"
 
 
 def _verify_staged_manifest(payload_root: Path, manifest: Dict[str, Any]) -> Tuple[bool, str]:
@@ -519,25 +866,7 @@ def _download_asset_to_path(download_url: str, dest_path: Path) -> Tuple[bool, s
         return False, f"Error al descargar asset: {exc}"
 
 
-def _is_frozen_onedir_layout() -> bool:
-    if not getattr(sys, "frozen", False):
-        return False
-    try:
-        exe_dir = Path(sys.executable).resolve().parent
-    except Exception:
-        return False
-    return (exe_dir / "_internal").exists()
-
-
-def _installation_requires_full_package_update() -> bool:
-    try:
-        exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else _INSTALL_ROOT
-    except Exception:
-        exe_dir = _INSTALL_ROOT
-    return _is_frozen_onedir_layout() or (exe_dir / "app").exists()
-
-
-def _schedule_exe_replace_windows(source_path: Path, target_path: Path) -> Tuple[bool, str]:
+def _schedule_exe_replace_windows_legacy(source_path: Path, target_path: Path) -> Tuple[bool, str]:
     """Programa el reemplazo del EXE usando un .bat (Windows)."""
     try:
         _UPDATE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -577,6 +906,9 @@ def _schedule_staged_update_windows(
     backup: bool = True,
 ) -> Tuple[bool, str]:
     try:
+        runtime_ok, runtime_message, _runtime_details = _check_update_runtime_preflight()
+        if not runtime_ok:
+            return False, runtime_message
         _ensure_update_dirs()
         version = str(stage_info.get("version") or "latest")
         payload_root = Path(str(stage_info.get("payload_root") or ""))
@@ -584,7 +916,8 @@ def _schedule_staged_update_windows(
         if not payload_root.exists():
             return False, "El stage no contiene payload utilizable."
 
-        exe_name = Path(getattr(sys, "executable", "") or "InstaCRM.exe").name or "InstaCRM.exe"
+        manifest = stage_info.get("manifest") if isinstance(stage_info.get("manifest"), dict) else {}
+        exe_name = _expected_executable_name(manifest)
         install_root = _INSTALL_ROOT
         target_exe = install_root / exe_name
         payload_exe = payload_root / exe_name
@@ -734,7 +1067,9 @@ catch {{
         return False, f"No se pudo programar la actualización staged: {exc}"
 
 
-def _update_executable_from_release() -> None:
+def _update_executable_from_release_legacy() -> None:
+    _check_and_apply_update()
+    return
     """Descarga y programa la actualización del EXE desde GitHub Release."""
     # Safety guard: one-dir builds depend on sibling folders (_internal, browsers, etc.).
     # Replacing only the .exe can leave runtime in a broken mixed state.
@@ -809,6 +1144,11 @@ def _update_executable_from_release() -> None:
     press_enter()
 
 
+def _update_executable_from_release() -> None:
+    """Compatibilidad legacy: redirige al flujo full-package."""
+    _check_and_apply_update()
+
+
 def update_single_file_from_release(
     repo: str,
     asset_name: str,
@@ -879,6 +1219,10 @@ def apply_update(
         message = "La actualización debe ser un archivo ZIP."
         _report_failure(message)
         return False, message
+    runtime_ok, runtime_message, _runtime_details = _check_update_runtime_preflight()
+    if not runtime_ok:
+        _report_failure(runtime_message)
+        return False, runtime_message
 
     try:
         staged_ok, stage_info, stage_message = _stage_update_archive(update_file)
@@ -890,14 +1234,16 @@ def apply_update(
         manifest = stage_info.get("manifest") or {}
         version = str(manifest.get("version") or stage_info.get("version") or "unknown")
 
-        if _installation_requires_full_package_update() and not (payload_root / "app").exists():
+        payload_ok, payload_message = _validate_staged_release_payload(payload_root, manifest)
+        if not payload_ok:
             _remove_path(Path(str(stage_info.get("stage_root") or "")))
-            message = (
+            # Payload invalid for the only supported update model.
+            (
                 False,
                 "El ZIP descargado no contiene la carpeta app/ requerida para esta instalación multiparte.",
             )
-            _report_failure(message[1])
-            return message
+            _report_failure(payload_message)
+            return False, payload_message
 
         if sys.platform.startswith("win"):
             success, message = _schedule_staged_update_windows(stage_info, backup=backup)
@@ -930,16 +1276,18 @@ def auto_update_check() -> None:
         return
     
     github_repo = _DEFAULT_GITHUB_REPO
-    has_update, update_info, message = check_for_updates(
+    result = check_for_updates(
         github_repo=github_repo,
         force=False,
     )
-    
-    if has_update and update_info:
+
+    update_info = result.get("update_info") if isinstance(result, dict) else None
+    message = str(result.get("message") or "").strip() if isinstance(result, dict) else ""
+    if result.get("status") == "update_available" and isinstance(update_info, dict):
         print(style_text(f"[Actualización] {message}", color=Fore.YELLOW))
 
 
-def menu_updates() -> None:
+def _menu_updates_legacy() -> None:
     """Menú de gestión de actualizaciones."""
     while True:
         banner()
@@ -954,11 +1302,11 @@ def menu_updates() -> None:
         print(f"Versión actual: {style_text(current_version, color=Fore.GREEN, bold=True)}")
         print(f"Verificación automática: {'Habilitada' if auto_check else 'Deshabilitada'}")
         print()
-        print("1) Actualizar programa (EXE)")
-        print("2) Configurar nombre del EXE")
+        print("Modelo soportado: paquete completo (ZIP con EXE + app/).")
+        print()
         print("3) Habilitar/Deshabilitar verificación automática")
-        print("4) Ver historial de actualizaciones")
-        print("5) Volver")
+        print("2) Habilitar/Deshabilitar verificacion automatica")
+        print("3) Ver historial de actualizaciones")
         print()
         
         choice = ask("Opción: ").strip()
@@ -978,19 +1326,61 @@ def menu_updates() -> None:
             press_enter()
 
 
+def menu_updates() -> None:
+    """Menú alineado al único flujo soportado: full-package."""
+    while True:
+        banner()
+        print(full_line())
+        print(style_text("Sistema de Actualizaciones (GitHub)", color=Fore.CYAN, bold=True))
+        print(full_line())
+
+        config = _load_update_config()
+        current_version = config.get("current_version", _get_current_version())
+        auto_check = config.get("auto_check_enabled", True)
+
+        print(f"Version actual: {style_text(current_version, color=Fore.GREEN, bold=True)}")
+        print(f"Verificacion automatica: {'Habilitada' if auto_check else 'Deshabilitada'}")
+        print()
+        print("Modelo soportado: paquete completo (ZIP con EXE + app/).")
+        print()
+        print("1) Descargar e instalar actualizacion")
+        print("2) Habilitar/Deshabilitar verificacion automatica")
+        print("3) Ver historial de actualizaciones")
+        print("4) Volver")
+        print()
+
+        choice = ask("Opcion: ").strip()
+
+        if choice == "1":
+            _check_and_apply_update()
+        elif choice == "2":
+            _toggle_auto_check()
+        elif choice == "3":
+            _show_update_history()
+        elif choice == "4":
+            break
+        else:
+            warn("Opcion invalida.")
+            press_enter()
+
+
 def _check_and_apply_update() -> None:
     """Verifica y aplica actualizaciones si están disponibles."""
     config = _load_update_config()
     github_repo = config.get("github_repo", _DEFAULT_GITHUB_REPO)
     
     print("Verificando actualizaciones en GitHub...")
-    has_update, update_info, message = check_for_updates(
+    result = check_for_updates(
         github_repo=github_repo,
         force=True,
     )
-    
-    if not has_update:
-        warn(message)
+
+    status = str(result.get("status") or "").strip()
+    update_info = result.get("update_info") if isinstance(result, dict) else None
+    message = str(result.get("message") or "").strip() if isinstance(result, dict) else ""
+
+    if status != "update_available" or not isinstance(update_info, dict):
+        warn(message or "No se pudo verificar actualizaciones.")
         press_enter()
         return
     
@@ -1007,6 +1397,12 @@ def _check_and_apply_update() -> None:
     choice = ask("¿Descargar e instalar esta actualización? (s/N): ").strip().lower()
     if choice != "s":
         warn("Actualización cancelada.")
+        press_enter()
+        return
+
+    runtime_ok, runtime_message, _runtime_details = _check_update_runtime_preflight()
+    if not runtime_ok:
+        warn(runtime_message)
         press_enter()
         return
     
@@ -1091,7 +1487,7 @@ def _configure_github_repo() -> None:
     press_enter()
 
 
-def _configure_exe_asset_name() -> None:
+def _configure_exe_asset_name_legacy() -> None:
     """Configura el nombre del asset EXE en GitHub Releases."""
     config = _load_update_config()
     current_name = config.get("exe_asset_name") or ""
@@ -1103,6 +1499,13 @@ def _configure_exe_asset_name() -> None:
         ok(f"Asset EXE configurado: {new_name}")
     else:
         warn("Sin cambios.")
+    press_enter()
+
+
+def _configure_exe_asset_name() -> None:
+    """Compatibilidad legacy: el modelo EXE-only ya no está soportado."""
+    warn("La configuracion de asset EXE fue retirada.")
+    print("El unico flujo soportado es actualizar con ZIP full-package (EXE + app/).")
     press_enter()
 
 

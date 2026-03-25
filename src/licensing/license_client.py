@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -14,7 +15,8 @@ from typing import Any
 
 import requests
 
-from config import read_app_config, read_env_local
+from license_identity import apply_client_identity_env, clear_client_identity_env
+from paths import runtime_base, runtime_root
 
 from .device_id import DeviceIdentity, collect_device_identity
 
@@ -22,23 +24,24 @@ from .device_id import DeviceIdentity, collect_device_identity
 logger = logging.getLogger(__name__)
 
 INVALID_LICENSE_MESSAGE = (
-    "Esta licencia no es válida o fue desactivada.\n"
+    "Licencia inválida o desactivada.\n"
     "Contacte al soporte para continuar."
 )
 DEVICE_LIMIT_MESSAGE = (
-    "Esta licencia ya alcanzó el límite máximo de dispositivos permitidos.\n"
-    "El acceso fue bloqueado automáticamente por el sistema de licencias."
+    "Máximo de dispositivos alcanzado."
 )
 LICENSE_EXPIRED_MESSAGE = (
-    "Esta licencia ha expirado.\n"
-    "Por favor contacte al soporte para renovarla."
+    "Licencia expirada."
 )
 LICENSE_VALIDATION_UNAVAILABLE_MESSAGE = (
-    "No se pudo validar la licencia con el servidor.\n"
-    "Verifique la conexion e intente nuevamente."
+    "Sin conexión. Reintentar."
+)
+SUPABASE_AUTH_FAILED_MESSAGE = (
+    "No se pudo autenticar con Supabase.\n"
+    "Contacte al soporte para continuar."
 )
 LICENSE_FILE_MISSING_MESSAGE = (
-    "No se encontró un archivo de licencia local en la carpeta de la aplicación."
+    "Licencia requerida."
 )
 SUPABASE_NOT_CONFIGURED_MESSAGE = (
     "Falta la configuración de Supabase.\n"
@@ -48,12 +51,13 @@ SUPABASE_NOT_CONFIGURED_MESSAGE = (
 _DEFAULT_MAX_DEVICES = 2
 _LICENSE_TABLE = "licenses"
 _ACTIVATION_TABLE = "license_activations"
-_CLIENT_KEY_NAMES = ("SUPABASE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY")
-_ADMIN_KEY_NAMES = ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "SUPABASE_ANON_KEY")
 _LICENSE_FILE_ENV_NAMES = ("LICENSE_FILE", "INSTACRM_LICENSE_FILE")
 _LICENSE_FILE_NAMES = ("license.key", "license.json", "license_payload.json")
 _RUNTIME_CONTEXT_LOCK = threading.RLock()
 _RUNTIME_CONTEXT: "LicenseRuntimeContext | None" = None
+_LICENSE_CACHE_FILENAME = "license.json"
+_LICENSE_CACHE_BYPASS_AGE = timedelta(hours=24)
+_LICENSE_CACHE_OFFLINE_GRACE = timedelta(days=3)
 
 
 def _utc_now() -> datetime:
@@ -84,6 +88,241 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _license_cache_path() -> Path:
+    default_root = Path(__file__).resolve().parents[2]
+    return runtime_root(default_root) / _LICENSE_CACHE_FILENAME
+
+
+def _local_license_key_path() -> Path:
+    default_root = Path(__file__).resolve().parents[2]
+    return runtime_base(default_root) / "license.key"
+
+
+def save_local_license_key(license_key: str) -> Path | None:
+    clean_key = str(license_key or "").strip()
+    if not clean_key:
+        return None
+    path = _local_license_key_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(clean_key + "\n", encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        return None
+    return path
+
+
+def load_local_license_cache() -> dict[str, Any] | None:
+    path = _license_cache_path()
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return dict(payload)
+
+
+def save_local_license_cache(payload: dict[str, Any]) -> Path | None:
+    path = _license_cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+    compact = {key: value for key, value in dict(payload or {}).items() if value is not None}
+    try:
+        blob = json.dumps(compact, indent=2, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return None
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(blob + "\n", encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        return None
+    return path
+
+
+def _load_license_cache() -> dict[str, Any] | None:
+    return load_local_license_cache()
+
+
+def _save_license_cache(data: dict[str, Any]) -> Path | None:
+    return save_local_license_cache(data)
+
+
+def _is_cache_valid(cache: dict[str, Any]) -> bool:
+    now = _utc_now()
+    expires_at = _parse_iso(cache.get("expires_at"))
+    if expires_at is not None and expires_at < now:
+        return False
+    validated_at = _parse_iso(cache.get("validated_at"))
+    if validated_at is None:
+        return False
+    return now - validated_at < _LICENSE_CACHE_BYPASS_AGE
+
+
+def _cache_payload_allows_use(
+    payload: dict[str, Any] | None,
+    *,
+    license_key: str,
+    device_id: str,
+    now: datetime,
+    max_age: timedelta,
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    clean_key = _extract_license_key(payload)
+    if not clean_key or clean_key != str(license_key or "").strip():
+        return False
+    clean_device = str(payload.get("device_id") or "").strip()
+    if not clean_device or clean_device != str(device_id or "").strip():
+        return False
+    validated_at = _parse_iso(payload.get("validated_at"))
+    if validated_at is None:
+        return False
+    if now - validated_at > max_age:
+        return False
+    expires_at = _parse_iso(payload.get("expires_at"))
+    if expires_at is not None and expires_at < now:
+        return False
+    return True
+
+
+def _cache_payload_expired(payload: dict[str, Any] | None, *, now: datetime) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    expires_at = _parse_iso(payload.get("expires_at"))
+    return bool(expires_at is not None and expires_at < now)
+
+
+def _context_from_cache(
+    payload: dict[str, Any],
+    *,
+    device: DeviceIdentity,
+    app_version: str,
+) -> "LicenseRuntimeContext":
+    license_key = _extract_license_key(payload)
+    expires_at = str(payload.get("expires_at") or "").strip()
+    return LicenseRuntimeContext(
+        license_key=license_key,
+        license_id="",
+        device_id=device.device_id,
+        machine_name=device.hostname,
+        os_user=device.os_user,
+        mac_address=device.mac_address,
+        status="active",
+        expires_at=expires_at,
+        max_devices=_DEFAULT_MAX_DEVICES,
+        plan_name="",
+        client_name="",
+        notes="",
+        app_version=str(app_version or os.environ.get("APP_VERSION") or "").strip(),
+        activation_id="",
+    )
+
+
+def license_failure_reason(code: str) -> str:
+    clean = str(code or "").strip().lower()
+    if clean in {"license_expired"}:
+        return "expired"
+    if clean in {"device_limit_reached"}:
+        return "max devices"
+    if clean in {"license_invalid", "license_inactive"}:
+        return "invalid key"
+    if clean in {"offline_cache_expired", "offline_cache_missing"}:
+        return "offline expired"
+    return clean or "license_error"
+
+
+def format_license_user_message(exc: "LicenseStartupError") -> str:
+    reason = license_failure_reason(exc.code)
+    base = str(exc.user_message or "").strip() or INVALID_LICENSE_MESSAGE
+    return f"{base}\n\nMotivo: {reason}"
+
+
+def activate_and_cache_license(
+    license_key: str,
+    *,
+    device: DeviceIdentity | None = None,
+    app_version: str = "",
+) -> "LicenseRuntimeContext":
+    clean_key = str(license_key or "").strip()
+    if not clean_key:
+        raise LicenseStartupError(
+            code="license_missing",
+            user_message=LICENSE_FILE_MISSING_MESSAGE,
+            detail="No license key was provided.",
+        )
+    device = device or collect_device_identity()
+    clean_version = str(
+        app_version or os.environ.get("APP_VERSION") or os.environ.get("CLIENT_VERSION") or ""
+    ).strip()
+    client = SupabaseLicenseClient(admin=False)
+    context = client.validate_and_activate(clean_key, device=device, app_version=clean_version)
+    apply_client_identity_env(context.license_key)
+    save_local_license_key(context.license_key)
+    save_local_license_cache(
+        {
+            "license_key": context.license_key,
+            "device_id": context.device_id,
+            "validated_at": _utc_now_iso(),
+            "expires_at": context.expires_at,
+        }
+    )
+    return context
+
+
+def _prompt_license_ui() -> str:
+    try:
+        from PySide6.QtWidgets import QApplication
+    except Exception as exc:  # pragma: no cover
+        raise LicenseStartupError(
+            code="license_missing",
+            user_message=LICENSE_FILE_MISSING_MESSAGE,
+            detail="License activation UI is unavailable (PySide6 not installed).",
+        ) from exc
+
+    app = QApplication.instance()
+    if app is None:  # pragma: no cover
+        app = QApplication([])
+
+    try:
+        from gui.license_activation_dialog import LicenseDialog
+    except Exception as exc:  # pragma: no cover
+        raise LicenseStartupError(
+            code="license_missing",
+            user_message=LICENSE_FILE_MISSING_MESSAGE,
+            detail="License activation UI module is unavailable.",
+        ) from exc
+
+    dialog = LicenseDialog()
+    if dialog.exec():
+        license_key = str(dialog.get_key() or "").strip()
+        if license_key:
+            return license_key
+
+    raise LicenseStartupError(
+        code="license_missing",
+        user_message=LICENSE_FILE_MISSING_MESSAGE,
+        detail="License activation was cancelled or no key was provided.",
+    )
 
 
 def _candidate_roots() -> list[Path]:
@@ -171,7 +410,31 @@ def _parse_license_key_blob(raw: str) -> str:
 
 
 def load_local_license_key() -> str:
+    processed: set[str] = set()
+    for env_name in _LICENSE_FILE_ENV_NAMES:
+        raw = (os.environ.get(env_name) or "").strip()
+        if not raw:
+            continue
+        candidate = Path(raw).expanduser()
+        processed.add(str(candidate))
+        if not candidate.is_file():
+            continue
+        try:
+            raw_text = candidate.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        license_key = _parse_license_key_blob(raw_text)
+        if license_key:
+            return license_key
+
+    cached = load_local_license_cache()
+    if cached:
+        cached_key = _extract_license_key(cached)
+        if cached_key:
+            return cached_key
     for candidate in _license_file_candidates():
+        if str(candidate) in processed:
+            continue
         if not candidate.is_file():
             continue
         try:
@@ -190,39 +453,31 @@ def generate_license_key() -> str:
     return "-".join(groups)
 
 
+def _get_embedded_supabase_config() -> tuple[str, str]:
+    url = "https://sizacwrksmozgtjtonuu.supabase.co"
+
+    PART1 = "c2Jfc2VjcmV0X3dnRWJP"
+    PART2 = "XzRuVDMtZkdacUFPZFFl"
+    PART3 = "TndfSGxUbTR6c2U="
+
+    encoded = PART1 + PART2 + PART3
+    key = base64.b64decode(encoded).decode().strip()
+    clean_url = url.rstrip("/")
+
+    if not clean_url or not key:
+        raise LicenseStartupError(
+            code="supabase_not_configured",
+            user_message=SUPABASE_NOT_CONFIGURED_MESSAGE,
+            detail="Embedded Supabase credentials are incomplete.",
+        )
+
+    return clean_url, key
+
+
 @dataclass(frozen=True)
 class SupabaseConfig:
     url: str
     key: str
-
-    @classmethod
-    def from_env(cls, *, admin: bool = False) -> "SupabaseConfig":
-        env_local = read_env_local()
-        app_config = read_app_config()
-        merged = {**app_config, **env_local, **os.environ}
-        url = str(
-            merged.get("SUPABASE_URL")
-            or merged.get("supabase_url")
-            or ""
-        ).strip()
-        key_names = _ADMIN_KEY_NAMES if admin else _CLIENT_KEY_NAMES
-        key = ""
-        for name in key_names:
-            candidate = str(
-                merged.get(name)
-                or (merged.get("supabase_key") if name == "SUPABASE_KEY" else "")
-                or ""
-            ).strip()
-            if candidate:
-                key = candidate
-                break
-        if not url or not key:
-            raise LicenseStartupError(
-                code="supabase_not_configured",
-                user_message=SUPABASE_NOT_CONFIGURED_MESSAGE,
-                detail="Supabase credentials are not configured.",
-            )
-        return cls(url=url.rstrip("/"), key=key)
 
 
 class LicenseStartupError(RuntimeError):
@@ -292,6 +547,10 @@ def set_runtime_context(context: LicenseRuntimeContext | None) -> None:
     global _RUNTIME_CONTEXT
     with _RUNTIME_CONTEXT_LOCK:
         _RUNTIME_CONTEXT = context
+    if context is None:
+        clear_client_identity_env()
+        return
+    apply_client_identity_env(context.license_key)
 
 
 def clear_runtime_context() -> None:
@@ -345,6 +604,12 @@ class SupabaseRestClient:
                 payload = response.json()
             except Exception:
                 payload = response.text
+            if response.status_code in {401, 403}:
+                raise LicenseStartupError(
+                    code="supabase_auth_failed",
+                    user_message=SUPABASE_AUTH_FAILED_MESSAGE,
+                    detail=f"{response.status_code}: {payload}",
+                )
             raise SupabaseRestError(
                 status_code=response.status_code,
                 message=f"{response.status_code}: {payload}",
@@ -430,84 +695,36 @@ class SupabaseRestClient:
         )
 
 
-def _error_mentions_column(error: SupabaseRestError, column_name: str) -> bool:
-    text = f"{error.message} {error.payload}"
-    return str(column_name or "") in text
-
-
-def _activation_device_value(row: dict[str, Any]) -> str:
-    for key in ("device_id", "client_fingerprint", "machine_id"):
-        value = str(row.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _activation_last_seen_value(row: dict[str, Any]) -> str:
-    for key in ("last_seen", "last_seen_at", "activated_at", "created_at"):
-        value = str(row.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _activation_machine_name_value(row: dict[str, Any]) -> str:
-    for key in ("machine_name", "hostname", "machine", "user_agent"):
-        value = str(row.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _activation_status_value(row: dict[str, Any]) -> str:
-    if "status" in row:
-        return str(row.get("status") or "").strip().lower()
-    if "is_active" in row:
-        return "active" if bool(row.get("is_active")) else "inactive"
-    if row.get("deactivated_at"):
-        return "inactive"
-    return "active"
-
-
 def _activation_is_active(row: dict[str, Any]) -> bool:
-    return _activation_status_value(row) in {"", "active", "enabled"}
+    return str(row["status"]).strip().lower() == "active"
 
 
 def _normalize_license_row(row: dict[str, Any]) -> dict[str, Any]:
-    status = str(row.get("status") or "").strip().lower()
-    if not status:
-        status = "active" if bool(row.get("is_active", True)) else "inactive"
     return {
-        "id": str(row.get("id") or "").strip(),
-        "license_key": str(row.get("license_key") or "").strip(),
-        "status": status,
-        "expires_at": str(row.get("expires_at") or "").strip(),
-        "max_devices": max(1, _coerce_int(row.get("max_devices"), _DEFAULT_MAX_DEVICES)),
-        "client_name": str(
-            row.get("client_name")
-            or row.get("name")
-            or row.get("customer_name")
-            or ""
-        ).strip(),
-        "plan_name": str(row.get("plan_name") or row.get("plan") or "").strip(),
-        "notes": str(row.get("notes") or "").strip(),
-        "created_at": str(row.get("created_at") or "").strip(),
-        "last_seen_at": str(row.get("last_seen_at") or row.get("last_seen") or "").strip(),
+        "id": str(row["id"]).strip(),
+        "license_key": str(row["license_key"]).strip(),
+        "status": str(row["status"]).strip().lower(),
+        "expires_at": str(row["expires_at"]).strip(),
+        "max_devices": max(1, _coerce_int(row["max_devices"], _DEFAULT_MAX_DEVICES)),
+        "client_name": str(row["client_name"]).strip(),
+        "plan_name": str(row["plan_name"]).strip(),
+        "notes": "",
+        "created_at": str(row["created_at"]).strip(),
+        "last_seen_at": str(row["last_seen_at"]).strip(),
     }
 
 
 def _normalize_activation_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        "id": str(row.get("id") or "").strip(),
-        "license_key": str(row.get("license_key") or "").strip(),
-        "license_id": str(row.get("license_id") or "").strip(),
-        "device_id": _activation_device_value(row),
-        "machine_name": _activation_machine_name_value(row),
-        "os_user": str(row.get("os_user") or "").strip(),
-        "status": _activation_status_value(row),
-        "activated_at": str(row.get("activated_at") or row.get("created_at") or "").strip(),
-        "last_seen": _activation_last_seen_value(row),
-        "payload": dict(row),
+        "id": str(row["id"]).strip(),
+        "license_id": str(row["license_id"]).strip(),
+        "device_id": str(row["device_id"]).strip(),
+        "machine_name": str(row["machine_name"]).strip(),
+        "os_user": str(row["os_user"]).strip(),
+        "mac_address": str(row["mac_address"]).strip(),
+        "status": str(row["status"]).strip().lower(),
+        "activated_at": str(row["activated_at"]).strip(),
+        "last_seen_at": str(row["last_seen_at"]).strip(),
     }
 
 
@@ -518,7 +735,11 @@ class SupabaseLicenseClient:
         admin: bool = False,
         rest_client: SupabaseRestClient | None = None,
     ) -> None:
-        self.config = rest_client.config if rest_client is not None else SupabaseConfig.from_env(admin=admin)
+        if rest_client is not None:
+            self.config = rest_client.config
+        else:
+            url, key = _get_embedded_supabase_config()
+            self.config = SupabaseConfig(url=url, key=key)
         self.rest = rest_client or SupabaseRestClient(self.config)
         self.admin = bool(admin)
 
@@ -551,6 +772,7 @@ class SupabaseLicenseClient:
         expires_at: str | datetime,
         notes: str = "",
     ) -> dict[str, Any]:
+        del notes
         clean_client_name = str(client_name or "").strip()
         if not clean_client_name:
             raise ValueError("client_name is required")
@@ -560,7 +782,6 @@ class SupabaseLicenseClient:
             "plan_name": str(plan_name or "").strip(),
             "max_devices": max(1, int(max_devices or _DEFAULT_MAX_DEVICES)),
             "expires_at": self._normalize_expiration(expires_at),
-            "notes": str(notes or "").strip(),
             "status": "active",
             "created_at": _utc_now_iso(),
         }
@@ -606,71 +827,27 @@ class SupabaseLicenseClient:
         record["status"] = "active"
         return record
 
-    def list_license_activations(
-        self,
-        license_key: str,
-        *,
-        license_id: str = "",
-    ) -> list[dict[str, Any]]:
-        filters_to_try: list[dict[str, Any]] = []
-        if license_key:
-            filters_to_try.append({"license_key": f"eq.{license_key}"})
-        if license_id:
-            filters_to_try.append({"license_id": f"eq.{license_id}"})
-        filters_to_try.append({})
-        last_error: SupabaseRestError | None = None
-        for filters in filters_to_try:
-            for order in ("last_seen.desc", "last_seen_at.desc", "activated_at.desc", "created_at.desc", ""):
-                try:
-                    rows = self.rest.select(
-                        _ACTIVATION_TABLE,
-                        filters=filters or None,
-                        order=order,
-                    )
-                except SupabaseRestError as exc:
-                    last_error = exc
-                    if filters and any(
-                        _error_mentions_column(exc, column_name)
-                        for column_name in filters.keys()
-                    ):
-                        break
-                    if order and _error_mentions_column(exc, order.split(".", 1)[0]):
-                        continue
-                    raise
-                normalized = [_normalize_activation_row(row) for row in rows if isinstance(row, dict)]
-                if not filters:
-                    filtered: list[dict[str, Any]] = []
-                    for row in normalized:
-                        if license_key and str(row.get("license_key") or "").strip() == license_key:
-                            filtered.append(row)
-                        elif license_id and str(row.get("license_id") or "").strip() == license_id:
-                            filtered.append(row)
-                    normalized = filtered
-                return normalized
-        if last_error is not None:
-            raise last_error
-        return []
+    def list_license_activations(self, license_id: str) -> list[dict[str, Any]]:
+        clean_id = str(license_id or "").strip()
+        if not clean_id:
+            return []
+        rows = self.rest.select(
+            _ACTIVATION_TABLE,
+            filters={"license_id": f"eq.{clean_id}"},
+            order="last_seen_at.desc",
+        )
+        return [_normalize_activation_row(row) for row in rows if isinstance(row, dict)]
 
     def reset_device_activations(self, license_key: str) -> int:
         record = self.fetch_license(license_key)
-        if not record:
+        license_id = str((record or {}).get("id") or "").strip()
+        if not license_id:
             return 0
-        filters_to_try = [{"license_key": f"eq.{record['license_key']}"}]
-        if record.get("id"):
-            filters_to_try.append({"license_id": f"eq.{record['id']}"})
-        last_error: SupabaseRestError | None = None
-        for filters in filters_to_try:
-            try:
-                deleted = self.rest.delete(_ACTIVATION_TABLE, filters=filters)
-            except SupabaseRestError as exc:
-                last_error = exc
-                if any(_error_mentions_column(exc, key) for key in filters.keys()):
-                    continue
-                raise
-            return len(deleted) if isinstance(deleted, list) else 0
-        if last_error is not None:
-            raise last_error
-        return 0
+        deleted = self.rest.delete(
+            _ACTIVATION_TABLE,
+            filters={"license_id": f"eq.{license_id}"},
+        )
+        return len(deleted) if isinstance(deleted, list) else 0
 
     def validate_license_key(self, license_key: str) -> dict[str, Any]:
         record = self.fetch_license(license_key)
@@ -705,7 +882,7 @@ class SupabaseLicenseClient:
     ) -> LicenseRuntimeContext:
         record = self.validate_license_key(license_key)
         device = device or collect_device_identity()
-        activation = self._activate_device(record, device=device, app_version=app_version)
+        activation = self._activate_device(record, device=device)
         self._touch_license(record["license_key"])
         context = LicenseRuntimeContext(
             license_key=record["license_key"],
@@ -735,26 +912,28 @@ class SupabaseLicenseClient:
         return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
     def _touch_license(self, license_key: str) -> None:
-        try:
-            self.rest.update(
-                _LICENSE_TABLE,
-                {"last_seen_at": _utc_now_iso()},
-                filters={"license_key": f"eq.{license_key}"},
-                returning="minimal",
-            )
-        except Exception:
-            logger.debug("Could not update license last_seen_at", exc_info=True)
+        self.rest.update(
+            _LICENSE_TABLE,
+            {"last_seen_at": _utc_now_iso()},
+            filters={"license_key": f"eq.{license_key}"},
+            returning="minimal",
+        )
 
     def _activate_device(
         self,
         record: dict[str, Any],
         *,
         device: DeviceIdentity,
-        app_version: str = "",
     ) -> dict[str, Any]:
         license_key = str(record.get("license_key") or "").strip()
         license_id = str(record.get("id") or "").strip()
-        activations = self.list_license_activations(license_key, license_id=license_id)
+        if not license_id:
+            raise LicenseStartupError(
+                code="license_invalid",
+                user_message=INVALID_LICENSE_MESSAGE,
+                detail=f"License {license_key} is missing id.",
+            )
+        activations = self.list_license_activations(license_id)
         by_device: dict[str, dict[str, Any]] = {}
         for row in activations:
             device_key = str(row.get("device_id") or "").strip()
@@ -765,29 +944,52 @@ class SupabaseLicenseClient:
                 by_device[device_key] = row
                 continue
             current_seen = (
-                _parse_iso(current.get("last_seen"))
+                _parse_iso(current.get("last_seen_at"))
                 or _parse_iso(current.get("activated_at"))
                 or datetime.min.replace(tzinfo=timezone.utc)
             )
             row_seen = (
-                _parse_iso(row.get("last_seen"))
+                _parse_iso(row.get("last_seen_at"))
                 or _parse_iso(row.get("activated_at"))
                 or datetime.min.replace(tzinfo=timezone.utc)
             )
             if row_seen >= current_seen:
                 by_device[device_key] = row
 
+        by_mac: dict[str, dict[str, Any]] = {}
+        for row in activations:
+            mac_key = str(row.get("mac_address") or "").strip().lower()
+            if not mac_key:
+                continue
+            current = by_mac.get(mac_key)
+            if current is None:
+                by_mac[mac_key] = row
+                continue
+            current_seen = (
+                _parse_iso(current.get("last_seen_at"))
+                or _parse_iso(current.get("activated_at"))
+                or datetime.min.replace(tzinfo=timezone.utc)
+            )
+            row_seen = (
+                _parse_iso(row.get("last_seen_at"))
+                or _parse_iso(row.get("activated_at"))
+                or datetime.min.replace(tzinfo=timezone.utc)
+            )
+            if row_seen >= current_seen:
+                by_mac[mac_key] = row
+
         existing = by_device.get(device.device_id)
+        if existing is None:
+            mac_key = str(device.mac_address or "").strip().lower()
+            if mac_key:
+                existing = by_mac.get(mac_key)
         max_devices = max(1, _coerce_int(record.get("max_devices"), _DEFAULT_MAX_DEVICES))
         active_devices = [row for row in by_device.values() if _activation_is_active(row)]
 
         if existing is not None:
             updated = self._update_activation(
                 existing,
-                license_key=license_key,
-                license_id=license_id,
                 device=device,
-                app_version=app_version,
             )
             return updated or existing
 
@@ -802,158 +1004,173 @@ class SupabaseLicenseClient:
             )
 
         return self._insert_activation(
-            license_key=license_key,
             license_id=license_id,
             device=device,
-            app_version=app_version,
         )
 
     def _update_activation(
         self,
         current: dict[str, Any],
         *,
-        license_key: str,
-        license_id: str,
         device: DeviceIdentity,
-        app_version: str,
     ) -> dict[str, Any] | None:
-        del license_key, license_id, app_version
         activation_id = str(current.get("id") or "").strip()
         if not activation_id:
             return None
-        payloads = [
-            {
-                "last_seen": _utc_now_iso(),
-                "machine_name": device.hostname,
-                "os_user": device.os_user,
-                "status": "active",
-            },
-            {
-                "last_seen_at": _utc_now_iso(),
-                "machine_name": device.hostname,
-                "os_user": device.os_user,
-                "status": "active",
-            },
-            {"last_seen_at": _utc_now_iso()},
-        ]
-        for payload in payloads:
-            try:
-                updated = self.rest.update(
-                    _ACTIVATION_TABLE,
-                    payload,
-                    filters={"id": f"eq.{activation_id}"},
-                )
-            except SupabaseRestError as exc:
-                if any(_error_mentions_column(exc, key) for key in payload):
-                    continue
-                raise
-            if isinstance(updated, list) and updated:
-                return _normalize_activation_row(dict(updated[0]))
-            if isinstance(updated, dict):
-                return _normalize_activation_row(updated)
-            break
-        return {
-            **current,
-            "last_seen": _utc_now_iso(),
+        payload = {
+            "device_id": device.device_id,
             "machine_name": device.hostname,
             "os_user": device.os_user,
+            "mac_address": device.mac_address,
+            "last_seen_at": _utc_now_iso(),
             "status": "active",
         }
+        updated = self.rest.update(
+            _ACTIVATION_TABLE,
+            payload,
+            filters={"id": f"eq.{activation_id}"},
+        )
+        if isinstance(updated, list) and updated:
+            return _normalize_activation_row(dict(updated[0]))
+        if isinstance(updated, dict):
+            return _normalize_activation_row(updated)
+        return _normalize_activation_row({**current, **payload})
 
     def _insert_activation(
         self,
         *,
-        license_key: str,
         license_id: str,
         device: DeviceIdentity,
-        app_version: str,
     ) -> dict[str, Any]:
         now_iso = _utc_now_iso()
-        payloads: list[dict[str, Any]] = [
-            {
-                "license_key": license_key,
-                "license_id": license_id or None,
-                "device_id": device.device_id,
-                "machine_name": device.hostname,
-                "os_user": device.os_user,
-                "mac_address": device.mac_address,
-                "activated_at": now_iso,
-                "last_seen": now_iso,
-                "status": "active",
-            },
-            {
-                "license_key": license_key,
-                "license_id": license_id or None,
-                "device_id": device.device_id,
-                "machine_name": device.hostname,
-                "os_user": device.os_user,
-                "mac_address": device.mac_address,
-                "activated_at": now_iso,
-                "last_seen_at": now_iso,
-                "status": "active",
-            },
-        ]
-        if license_id:
-            payloads.append(
-                {
-                    "license_id": license_id,
-                    "client_fingerprint": device.device_id,
-                    "activated_at": now_iso,
-                    "last_seen_at": now_iso,
-                    "user_agent": (
-                        f"InstaCRM/{app_version or os.environ.get('APP_VERSION') or 'unknown'}"
-                    ),
-                }
-            )
-        last_error: SupabaseRestError | None = None
-        for payload in payloads:
-            compact_payload = {
-                key: value
-                for key, value in payload.items()
-                if value not in (None, "")
-            }
-            try:
-                created = self.rest.insert(_ACTIVATION_TABLE, compact_payload)
-            except SupabaseRestError as exc:
-                last_error = exc
-                if any(_error_mentions_column(exc, key) for key in compact_payload):
-                    continue
-                raise
-            if isinstance(created, list) and created:
-                return _normalize_activation_row(dict(created[0]))
-            if isinstance(created, dict):
-                return _normalize_activation_row(created)
-            return _normalize_activation_row(compact_payload)
-        if last_error is not None:
-            raise last_error
-        return _normalize_activation_row(payloads[0])
+        payload = {
+            "license_id": license_id,
+            "device_id": device.device_id,
+            "machine_name": device.hostname,
+            "os_user": device.os_user,
+            "mac_address": device.mac_address,
+            "activated_at": now_iso,
+            "last_seen_at": now_iso,
+            "status": "active",
+        }
+        created = self.rest.insert(_ACTIVATION_TABLE, payload)
+        if isinstance(created, list) and created:
+            return _normalize_activation_row(dict(created[0]))
+        if isinstance(created, dict):
+            return _normalize_activation_row(created)
+        return _normalize_activation_row(payload)
 
 
 def launch_with_license() -> LicenseRuntimeContext:
     current = get_runtime_context()
     if current is not None:
         return current
-    license_key = load_local_license_key()
-    if not license_key:
-        raise LicenseStartupError(
-            code="license_missing",
-            user_message=LICENSE_FILE_MISSING_MESSAGE,
-            detail="No local license key was found.",
-        )
-    client = SupabaseLicenseClient(admin=False)
     device = collect_device_identity()
+    license_key = load_local_license_key()
     app_version = str(
         os.environ.get("APP_VERSION") or os.environ.get("CLIENT_VERSION") or ""
     ).strip()
-    try:
-        return client.validate_and_activate(
+    now = _utc_now()
+    cached_payload = load_local_license_cache()
+    if license_key and _cache_payload_allows_use(
+        cached_payload,
+        license_key=license_key,
+        device_id=device.device_id,
+        now=now,
+        max_age=_LICENSE_CACHE_BYPASS_AGE,
+    ):
+        context = _context_from_cache(
+            cached_payload or {},
+            device=device,
+            app_version=app_version,
+        )
+        set_runtime_context(context)
+        logger.info("License startup: using cached validation (fresh).")
+        return context
+
+    if not license_key:
+        license_key = _prompt_license_ui()
+        context = activate_and_cache_license(
             license_key,
             device=device,
             app_version=app_version,
         )
+        set_runtime_context(context)
+        return context
+
+    client = SupabaseLicenseClient(admin=False)
+    try:
+        context = client.validate_and_activate(
+            license_key,
+            device=device,
+            app_version=app_version,
+        )
+    except LicenseStartupError as exc:
+        if exc.code == "supabase_request_failed":
+            if _cache_payload_allows_use(
+                cached_payload,
+                license_key=license_key,
+                device_id=device.device_id,
+                now=now,
+                max_age=_LICENSE_CACHE_OFFLINE_GRACE,
+            ):
+                context = _context_from_cache(
+                    cached_payload or {},
+                    device=device,
+                    app_version=app_version,
+                )
+                set_runtime_context(context)
+                logger.warning(
+                    "License startup: Supabase unavailable, using cached validation (offline)."
+                )
+                return context
+            if _cache_payload_expired(cached_payload, now=now):
+                raise LicenseStartupError(
+                    code="license_expired",
+                    user_message=LICENSE_EXPIRED_MESSAGE,
+                    detail="Cached license indicates expiration and server validation failed.",
+                ) from exc
+            raise LicenseStartupError(
+                code="offline_cache_expired",
+                user_message=LICENSE_VALIDATION_UNAVAILABLE_MESSAGE,
+                detail="Server validation failed and offline cache is missing/too old.",
+            ) from exc
+        raise
     except SupabaseRestError as exc:
+        if _cache_payload_allows_use(
+            cached_payload,
+            license_key=license_key,
+            device_id=device.device_id,
+            now=now,
+            max_age=_LICENSE_CACHE_OFFLINE_GRACE,
+        ):
+            context = _context_from_cache(
+                cached_payload or {},
+                device=device,
+                app_version=app_version,
+            )
+            set_runtime_context(context)
+            logger.warning("License startup: Supabase error, using cached validation (offline).")
+            return context
+        if _cache_payload_expired(cached_payload, now=now):
+            raise LicenseStartupError(
+                code="license_expired",
+                user_message=LICENSE_EXPIRED_MESSAGE,
+                detail="Cached license indicates expiration and server validation failed.",
+            ) from exc
         raise LicenseStartupError(
-            code="supabase_request_failed",
+            code="offline_cache_expired",
             user_message=LICENSE_VALIDATION_UNAVAILABLE_MESSAGE,
             detail=exc.message,
         ) from exc
+
+    save_local_license_cache(
+        {
+            "license_key": context.license_key,
+            "device_id": context.device_id,
+            "validated_at": _utc_now_iso(),
+            "expires_at": context.expires_at,
+        }
+    )
+    save_local_license_key(context.license_key)
+    return context

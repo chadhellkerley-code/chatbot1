@@ -40,4 +40,4 @@ def test_calculate_workers_prioritizes_proxy_groups_with_ready_sessions() -> Non
     ):
         payload = calculate_workers(accounts)
 
-    assert payload["ordered_worker_ids"][:2] == ["proxy-b", "proxy-a"]
+    assert payload["ordered_worker_ids"][:2] == ["proxy:proxy-b", "proxy:proxy-a"]

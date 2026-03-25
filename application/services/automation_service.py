@@ -13,9 +13,9 @@ from automation.whatsapp import WhatsAppDataStore
 from config import read_app_config, read_env_local, update_app_config, update_env_local
 from core import accounts as accounts_module
 from core import responder as responder_module
-from runtime.runtime import request_stop
+from paths import storage_root
 
-from .base import ServiceContext, ServiceError, scripted_module_io
+from .base import ServiceContext, ServiceError
 
 
 _OBJECTION_PROMPTS_KEY = "automation_objection_prompts"
@@ -23,14 +23,77 @@ logger = logging.getLogger(__name__)
 
 
 class AutomationService:
-    def __init__(self, context: ServiceContext) -> None:
+    def __init__(self, context: ServiceContext, inbox_service: Any | None = None) -> None:
         self.context = context
+        self._inbox_service = inbox_service
         self._autoresponder_lock = threading.RLock()
         self._autoresponder_state: dict[str, Any] = {}
         self._sync_legacy_storage()
 
+    def _inbox_runtime_bridge(self) -> Any | None:
+        inbox_service = self._inbox_service
+        if inbox_service is None:
+            return None
+        return getattr(inbox_service, "_automation", None)
+
+    def _runtime_bridge_snapshot(self, alias: str) -> dict[str, Any]:
+        bridge = self._inbox_runtime_bridge()
+        if bridge is None:
+            return {}
+        status = bridge.status(alias)
+        account_rows = [
+            {
+                "account": str(row.get("username") or "").strip(),
+                "active": True,
+                "blocked": False,
+                "blocked_reason": "",
+                "safety_state": "usable",
+                "safety_reason": "",
+                "safety_message": "Lista",
+                "proxy": str(
+                    row.get("proxy_url")
+                    or row.get("proxy")
+                    or row.get("assigned_proxy_id")
+                    or ""
+                ).strip(),
+            }
+            for row in bridge.alias_accounts(alias)
+            if isinstance(row, dict)
+        ]
+        stats = dict(status.get("stats") or {})
+        return {
+            "run_id": f"inbox-runtime:{alias}",
+            "alias": str(alias or "").strip(),
+            "status": "Running" if bool(status.get("is_running")) else "Stopped",
+            "message": str(status.get("last_error") or "").strip() or (
+                "Runtime operativo desde Inbox." if bool(status.get("is_running")) else "Runtime detenido."
+            ),
+            "task_active": bool(status.get("is_running")),
+            "started_at": "",
+            "finished_at": "",
+            "delay_min": max(0, int(status.get("delay_min_ms") or 0)) // 1000,
+            "delay_max": max(0, int(status.get("delay_max_ms") or 0)) // 1000,
+            "concurrency": 1,
+            "threads": 0,
+            "followup_only": str(status.get("mode") or "").strip().lower() == "followup",
+            "followup_schedule_label": "",
+            "accounts_total": len(account_rows),
+            "accounts_active": len(account_rows),
+            "accounts_blocked": 0,
+            "account_rows": account_rows,
+            "current_account": str(status.get("current_account_id") or "").strip(),
+            "next_account": str(status.get("next_account_id") or "").strip(),
+            "mode": str(status.get("mode") or "both").strip(),
+            "turns_per_account": int(status.get("max_turns_per_account") or 1),
+            "message_success": int(stats.get("queued_jobs") or 0),
+            "message_failed": int(stats.get("errors") or 0),
+            "followup_success": 0,
+            "followup_failed": 0,
+            "agendas_generated": 0,
+        }
+
     def _legacy_storage_root(self) -> Path:
-        return Path(self.context.root_dir) / "storage"
+        return storage_root(Path(self.context.root_dir), scoped=False, honor_env=False)
 
     def _sync_legacy_json_file(
         self,
@@ -151,6 +214,78 @@ class AutomationService:
         if clean_alias and clean_alias != str(current.get("alias") or "").strip():
             return {}
         return current
+
+    @staticmethod
+    def _autoresponder_inbox_only_message() -> str:
+        return "El runtime de autoresponder/follow-up ahora se administra solo desde Inbox."
+
+    def _autoresponder_wrapper_snapshot(self, alias: str) -> dict[str, Any]:
+        clean_alias = str(alias or "").strip()
+        if not clean_alias:
+            return {}
+        bridge = self._inbox_runtime_bridge()
+        if bridge is not None:
+            snapshot = self._runtime_bridge_snapshot(clean_alias)
+            if snapshot and bool(snapshot.get("task_active")):
+                return snapshot
+            if snapshot:
+                wrapped = dict(snapshot)
+                wrapped.update(
+                    {
+                        "status": "Idle",
+                        "message": self._autoresponder_inbox_only_message(),
+                        "task_active": False,
+                    }
+                )
+                return wrapped
+        account_rows = []
+        accounts_blocked = 0
+        for row in self.alias_account_rows(clean_alias):
+            if not isinstance(row, dict):
+                continue
+            blocked = bool(row.get("blocked"))
+            if blocked:
+                accounts_blocked += 1
+            account_rows.append(
+                {
+                    "account": str(row.get("username") or "").strip(),
+                    "proxy": str(row.get("proxy") or ""),
+                    "blocked": blocked,
+                    "blocked_reason": str(row.get("blocked_reason") or ""),
+                    "blocked_remaining_seconds": float(row.get("blocked_remaining_seconds") or 0.0),
+                    "safety_state": str(row.get("safety_state") or ("blocked" if blocked else "usable")).strip() or "usable",
+                    "safety_reason": str(row.get("safety_reason") or row.get("blocked_reason") or "").strip(),
+                    "safety_message": str(
+                        row.get("safety_message")
+                        or row.get("blocked_reason")
+                        or ("Lista" if not blocked else "Cuenta bloqueada")
+                    ).strip(),
+                }
+            )
+        return {
+            "run_id": "",
+            "alias": clean_alias,
+            "status": "Idle",
+            "message": self._autoresponder_inbox_only_message(),
+            "started_at": "",
+            "finished_at": "",
+            "delay_min": 45,
+            "delay_max": 76,
+            "concurrency": 1,
+            "threads": 0,
+            "followup_only": False,
+            "followup_schedule_label": self.resolve_followup_schedule_label(clean_alias),
+            "accounts_total": len(account_rows),
+            "accounts_active": max(0, len(account_rows) - accounts_blocked),
+            "accounts_blocked": accounts_blocked,
+            "message_success": 0,
+            "message_failed": 0,
+            "followup_success": 0,
+            "followup_failed": 0,
+            "agendas_generated": 0,
+            "account_rows": account_rows,
+            "task_active": False,
+        }
 
     def _all_account_records(self) -> list[dict[str, Any]]:
         return [dict(item) for item in accounts_module.list_all() if isinstance(item, dict)]
@@ -861,182 +996,20 @@ class AutomationService:
         alias = str(config.get("alias") or "").strip()
         if not alias:
             raise ServiceError("Alias invalido para autoresponder.")
-        run_id = str(config.get("run_id") or "").strip() or datetime.now().strftime("autoresponder-%Y%m%d%H%M%S%f")
-        delay_min = max(1, int(config.get("delay_min") or 45))
-        delay_max = max(delay_min, int(config.get("delay_max") or delay_min))
-        max_concurrency = self.max_alias_concurrency(alias)
-        concurrency = min(max_concurrency, max(1, int(config.get("concurrency") or 1)))
-        threads = max(1, int(config.get("threads") or 20))
-        followup_only = str(config.get("followup_only") or "").strip().lower() in {"s", "si", "y", "yes", "true", "1"}
-        followup_label = str(config.get("followup_schedule_label") or "").strip() or self.resolve_followup_schedule_label(alias)
-        followup_hours = str(config.get("followup_hours") or "").strip() or followup_label
-        target_accounts = self._autoresponder_targets(alias)
-        startability = self._autoresponder_startability(target_accounts)
-        alias_rows_by_username = {
-            row["username"].lower(): row
-            for row in self.alias_account_rows(alias)
-            if str(row.get("username") or "").strip()
-        }
-        startable_accounts = {
-            self._account_username(item).lower()
-            for item in (startability.get("startable_accounts") or [])
-            if self._account_username(item)
-        }
-        account_status_by_username = {
-            self._account_username(item.get("username")).lower(): dict(item)
-            for item in (startability.get("account_statuses") or [])
-            if isinstance(item, dict) and self._account_username(item.get("username"))
-        }
-        skipped_by_username = {
-            self._account_username(item.get("username")).lower(): dict(item)
-            for item in (startability.get("skipped_accounts") or [])
-            if isinstance(item, dict) and self._account_username(item.get("username"))
-        }
-        account_rows = [
-            {
-                "account": username,
-                "active": username.lower() in startable_accounts,
-                "blocked": bool(
-                    (account_status_by_username.get(username.lower()) or {}).get("blocked")
-                    or (alias_rows_by_username.get(username.lower()) or {}).get("blocked")
-                    or username.lower() in skipped_by_username
-                ),
-                "blocked_reason": str(
-                    (
-                        (account_status_by_username.get(username.lower()) or {}).get("message")
-                        or (alias_rows_by_username.get(username.lower()) or {}).get("safety_message")
-                        or (alias_rows_by_username.get(username.lower()) or {}).get("blocked_reason")
-                        or skipped_by_username.get(username.lower(), {}).get("message")
-                        or skipped_by_username.get(username.lower(), {}).get("reason")
-                        or ""
-                    )
-                ).strip(),
-                "blocked_remaining_seconds": float(
-                    (
-                        (account_status_by_username.get(username.lower()) or {}).get("remaining_seconds")
-                        or (alias_rows_by_username.get(username.lower()) or {}).get("blocked_remaining_seconds")
-                        or skipped_by_username.get(username.lower(), {}).get("remaining_seconds")
-                        or 0.0
-                    )
-                ),
-                "safety_state": str(
-                    (
-                        (account_status_by_username.get(username.lower()) or {}).get("safety_state")
-                        or (alias_rows_by_username.get(username.lower()) or {}).get("safety_state")
-                        or ("usable" if username.lower() in startable_accounts else "blocked")
-                    )
-                ).strip(),
-                "safety_reason": str(
-                    (
-                        (account_status_by_username.get(username.lower()) or {}).get("reason")
-                        or (alias_rows_by_username.get(username.lower()) or {}).get("safety_reason")
-                        or skipped_by_username.get(username.lower(), {}).get("reason")
-                        or ""
-                    )
-                ).strip(),
-                "safety_message": str(
-                    (
-                        (account_status_by_username.get(username.lower()) or {}).get("message")
-                        or (alias_rows_by_username.get(username.lower()) or {}).get("safety_message")
-                        or skipped_by_username.get(username.lower(), {}).get("message")
-                        or ("Lista" if username.lower() in startable_accounts else "")
-                    )
-                ).strip(),
-                "proxy": str((alias_rows_by_username.get(username.lower()) or {}).get("proxy") or ""),
-            }
-            for username in target_accounts
-        ]
-        accounts_blocked = sum(1 for row in account_rows if bool(row.get("blocked")))
-        self._update_autoresponder_state(
-            {
-                "run_id": run_id,
-                "alias": alias,
-                "status": "Starting",
-                "message": "Starting autoresponder engine...",
-                "started_at": str(config.get("started_at") or datetime.now().isoformat(timespec="seconds")),
-                "finished_at": "",
-                "delay_min": delay_min,
-                "delay_max": delay_max,
-                "concurrency": concurrency,
-                "threads": threads,
-                "followup_only": followup_only,
-                "followup_schedule_label": followup_label,
-                "accounts_total": len(target_accounts),
-                "accounts_active": len(startable_accounts),
-                "accounts_blocked": accounts_blocked,
-                "task_active": True,
-                "account_rows": account_rows,
-                "message_success": 0,
-                "message_failed": 0,
-                "followup_success": 0,
-                "followup_failed": 0,
-                "agendas_generated": 0,
-            },
-            replace=True,
-        )
-        if target_accounts and not startable_accounts:
-            self._update_autoresponder_state(
-                {
-                    "status": "Failed",
-                    "message": "No hay cuentas seguras listas para iniciar este autoresponder.",
-                    "finished_at": datetime.now().isoformat(timespec="seconds"),
-                    "task_active": False,
-                }
-            )
-            return self.current_autoresponder_snapshot(alias=alias)
-        responses = [
-            alias,
-            str(delay_min),
-            str(delay_max),
-            str(concurrency),
-            str(threads),
-            followup_hours,
-            "y" if followup_only else "n",
-        ]
-        run_result: dict[str, Any] | None = None
-        try:
-            with scripted_module_io(responder_module, responses):
-                run_result = responder_module._activate_bot()
-        except Exception as exc:
-            self._update_autoresponder_state(
-                {
-                    "status": "Failed",
-                    "message": str(exc) or exc.__class__.__name__,
-                    "finished_at": datetime.now().isoformat(timespec="seconds"),
-                    "task_active": False,
-                }
-            )
-            raise
-        result_payload = dict(run_result) if isinstance(run_result, dict) else {}
-        result_status = str(result_payload.get("status") or "").strip().lower()
-        result_reason = str(result_payload.get("reason") or "").strip()
-        if result_status in {"activation_blocked", "failed"}:
-            final_status = "Failed"
-            final_message = result_reason or "Autoresponder no pudo activarse."
-        else:
-            final_status = "Stopped"
-            final_message = result_reason or "Autoresponder finalizado."
-        self._update_autoresponder_state(
-            {
-                "status": final_status,
-                "message": final_message,
-                "finished_at": datetime.now().isoformat(timespec="seconds"),
-                "task_active": False,
-            }
-        )
-        return self.current_autoresponder_snapshot(alias=alias)
+        snapshot = self._autoresponder_wrapper_snapshot(alias)
+        self._update_autoresponder_state(snapshot, replace=True)
+        return snapshot
 
     def stop_autoresponder(self, reason: str = "autoresponder stopped from GUI") -> None:
         current = self.current_autoresponder_snapshot()
-        if current:
-            self._update_autoresponder_state(
-                {
-                    "status": "Stopping",
-                    "message": "Solicitando stop seguro del autoresponder...",
-                    "task_active": True,
-                }
-            )
-        request_stop(str(reason or "").strip() or "autoresponder stopped from GUI")
+        alias = str((current or {}).get("alias") or "").strip()
+        if not alias:
+            return
+        snapshot = self._autoresponder_wrapper_snapshot(alias)
+        if snapshot and not bool(snapshot.get("task_active")):
+            snapshot = dict(snapshot)
+            snapshot["message"] = self._autoresponder_inbox_only_message()
+        self._update_autoresponder_state(snapshot, replace=True)
 
     def _runtime_metric(self, payload: dict[str, Any], *keys: str) -> int:
         for key in keys:
@@ -1052,6 +1025,15 @@ class AutomationService:
         clean_alias = str(alias or "").strip()
         if not clean_alias:
             return {}
+        bridge = self._inbox_runtime_bridge()
+        if bridge is not None:
+            snapshot = self._runtime_bridge_snapshot(clean_alias)
+            state = self.current_autoresponder_snapshot(alias=clean_alias)
+            if state:
+                merged = dict(state)
+                merged.update(snapshot)
+                return merged
+            return snapshot
         getter = getattr(responder_module, "_get_autoresponder_runtime_controller", None)
         runtime = None
         if callable(getter):

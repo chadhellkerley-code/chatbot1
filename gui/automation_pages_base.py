@@ -39,10 +39,8 @@ logger = logging.getLogger(__name__)
 
 AUTOMATION_SUBSECTIONS: tuple[tuple[str, str], ...] = (
     ("automation_config_page", "Config"),
-    ("automation_autoresponder_page", "Autoresponder"),
     ("automation_packs_page", "Packs"),
     ("automation_flow_page", "Flow"),
-    ("automation_whatsapp_page", "WhatsApp"),
 )
 
 
@@ -107,13 +105,42 @@ class AutomationSectionPage(SectionPage):
             title,
             subtitle,
             section_title="Automatizaciones",
-            section_subtitle="Submenu horizontal para config, autoresponder, packs, flow y WhatsApp.",
+            section_subtitle="Submenu horizontal para config, packs y flow.",
             section_routes=AUTOMATION_SUBSECTIONS,
             route_key=route_key,
             back_button=back_button,
             scrollable=scrollable,
             parent=parent,
         )
+        self._apply_compact_automation_chrome()
+
+    def _apply_compact_automation_chrome(self) -> None:
+        self.set_content_margins((16, 10, 16, 14))
+        self.content_layout().setSpacing(8)
+
+        header = self.page_header_widget()
+        header_layout = header.layout() if header is not None else None
+        if isinstance(header_layout, QVBoxLayout):
+            header_layout.setContentsMargins(12, 4, 12, 4)
+            header_layout.setSpacing(1)
+            main_row = header_layout.itemAt(0).layout() if header_layout.count() else None
+            if isinstance(main_row, QHBoxLayout):
+                main_row.setSpacing(6)
+                actions_row = main_row.itemAt(0).layout() if main_row.count() else None
+                if isinstance(actions_row, QHBoxLayout):
+                    actions_row.setSpacing(4)
+
+        section_nav = self.section_nav_widget()
+        nav_layout = section_nav.layout()
+        if isinstance(nav_layout, QVBoxLayout):
+            nav_layout.setContentsMargins(12, 10, 12, 10)
+            nav_layout.setSpacing(6)
+            nav_row = nav_layout.itemAt(2).layout() if nav_layout.count() >= 3 else None
+            if isinstance(nav_row, QHBoxLayout):
+                nav_row.setSpacing(6)
+        for button in section_nav.findChildren(QPushButton):
+            if button.objectName() == "SectionSubnavButton":
+                button.setMinimumHeight(34)
 
     def _show_dark_message(self, title: str, message: str, *, detail: str = "", danger: bool = False) -> None:
         dialog = AutomationMessageDialog(
@@ -149,14 +176,16 @@ class AutomationHomePage(AutomationSectionPage):
         super().__init__(
             ctx,
             "Automatizaciones",
-            "Centro operativo para configuracion, autoresponder, packs, flow y WhatsApp.",
+            "Centro operativo para configuraciones, packs y flow.",
             route_key=None,
             back_button=False,
             parent=parent,
         )
         panel, layout = self.create_panel(
             "Centro de automatizaciones",
-            "Vista general del estado actual del modulo con accesos rapidos a los paneles operativos.",
+            "Accesos principales para configuraciones, packs y flow del modulo.",
+            margins=(16, 16, 16, 16),
+            spacing=10,
         )
         self._summary = QLabel("")
         self._summary.setObjectName("SectionPanelHint")
@@ -165,30 +194,29 @@ class AutomationHomePage(AutomationSectionPage):
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(10)
+        grid.setSpacing(8)
         self._cards = {
-            "config": ClickableMetricCard("Alias activo", "-"),
-            "autoresponder": ClickableMetricCard("Hydration pendiente", "0"),
+            "config": ClickableMetricCard("Config", "-"),
             "packs": ClickableMetricCard("Packs", "0"),
-            "whatsapp": ClickableMetricCard("WhatsApp activos", "0"),
+            "flow": ClickableMetricCard("Flow", "Listo"),
         }
         self._cards["config"].clicked.connect(lambda: self._ctx.open_route("automation_config_page", None))
-        self._cards["autoresponder"].clicked.connect(lambda: self._ctx.open_route("automation_autoresponder_page", None))
         self._cards["packs"].clicked.connect(lambda: self._ctx.open_route("automation_packs_page", None))
-        self._cards["whatsapp"].clicked.connect(lambda: self._ctx.open_route("automation_whatsapp_page", None))
-        for index, key in enumerate(("config", "autoresponder", "packs", "whatsapp")):
-            grid.addWidget(self._cards[key], index // 2, index % 2)
+        self._cards["flow"].clicked.connect(lambda: self._ctx.open_route("automation_flow_page", None))
+        for index, key in enumerate(("config", "packs", "flow")):
+            grid.addWidget(self._cards[key], 0, index)
+            grid.setColumnStretch(index, 1)
         layout.addLayout(grid)
         self.content_layout().addWidget(panel)
+        self.content_layout().addStretch(1)
         self._snapshot_request_id = 0
         self._snapshot_loading = False
         self._snapshot_cache: dict[str, Any] | None = None
 
     def _apply_snapshot(self, payload: dict[str, Any]) -> None:
         self._cards["config"].set_value(str(payload.get("alias") or self._ctx.state.active_alias or "-"))
-        self._cards["autoresponder"].set_value(payload.get("pending_hydration", 0))
         self._cards["packs"].set_value(payload.get("packs", 0))
-        self._cards["whatsapp"].set_value(payload.get("runs_active", 0))
+        self._cards["flow"].set_value("Listo")
         self._summary.setText(str(payload.get("summary") or ""))
         self.clear_status()
 
