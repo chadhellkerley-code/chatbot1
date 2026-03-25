@@ -13,6 +13,9 @@ venv/
 env/
 ENV/
 
+# Node dependencies
+node_modules/
+
 # Environment variables
 .env
 .env.local
