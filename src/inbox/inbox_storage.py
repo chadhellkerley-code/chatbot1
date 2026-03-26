@@ -101,6 +101,7 @@ class InboxStorage:
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA temp_store=MEMORY")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout=5000")
 
     def _create_schema(self) -> None:
         with self._lock:
@@ -1193,10 +1194,11 @@ class InboxStorage:
         self._conn.execute(
             """
             INSERT INTO inbox_thread_state(thread_key, state_json)
-            VALUES(?, ?)
+            SELECT ?, ?
+            WHERE EXISTS(SELECT 1 FROM inbox_threads WHERE thread_key = ?)
             ON CONFLICT(thread_key) DO UPDATE SET state_json = excluded.state_json
             """,
-            (thread_key, self._encode_json(normalized)),
+            (thread_key, self._encode_json(normalized), thread_key),
         )
 
     def _thread_stage_has_operational_evidence_locked(
@@ -2134,11 +2136,11 @@ class InboxStorage:
             if seen_text:
                 thread["last_seen_text"] = str(seen_text or "").strip()
                 thread["last_seen_at"] = self._coerce_timestamp(seen_at) or time.time()
+            self._upsert_thread_record(thread)
             if mark_read:
                 state = self._load_thread_state(clean_key)
                 state["last_opened_at"] = time.time()
                 self._save_thread_state(clean_key, state)
-            self._upsert_thread_record(thread)
             self._save_blocks(clean_key, blocks)
             self._conn.commit()
 

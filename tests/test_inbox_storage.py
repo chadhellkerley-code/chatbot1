@@ -254,6 +254,61 @@ def test_inbox_storage_keeps_synced_activity_even_if_it_predates_session_start(t
         storage.shutdown()
 
 
+def test_inbox_storage_mark_read_creates_state_for_new_thread_without_fk_error(tmp_path: Path) -> None:
+    storage = InboxStorage(tmp_path)
+    try:
+        storage.replace_messages(
+            "acc1:thread-brand-new",
+            [
+                {
+                    "message_id": "msg-1",
+                    "text": "hola",
+                    "timestamp": 101.0,
+                    "direction": "inbound",
+                }
+            ],
+            mark_read=True,
+        )
+
+        thread = storage.get_thread("acc1:thread-brand-new")
+        assert thread is not None
+        assert thread["unread_count"] == 0
+
+        state = storage.snapshot()["state"]["threads"].get("acc1:thread-brand-new")
+        assert isinstance(state, dict)
+        assert isinstance(state.get("last_opened_at"), float)
+    finally:
+        storage.shutdown()
+
+
+def test_inbox_storage_update_thread_state_tolerates_parent_row_gap_between_connections(tmp_path: Path) -> None:
+    primary = InboxStorage(tmp_path)
+    secondary = InboxStorage(tmp_path)
+    thread_key = "acc1:thread-race"
+    try:
+        primary.upsert_threads([_thread_row("acc1", "thread-race", timestamp=100.0)])
+
+        for idx in range(30):
+            with primary._lock:
+                primary._conn.execute("DELETE FROM inbox_threads WHERE thread_key = ?", (thread_key,))
+                primary._conn.commit()
+
+            # Must not raise IntegrityError even if the parent row is temporarily absent.
+            secondary.update_thread_state(thread_key, {"tick": idx})
+
+            with primary._lock:
+                primary._upsert_thread_record(primary._thread_shell(thread_key))
+                primary._conn.commit()
+
+        secondary.update_thread_state(thread_key, {"tick": 999})
+        state = secondary.snapshot()["state"]["threads"].get(thread_key)
+        assert isinstance(state, dict)
+        assert state.get("tick") == 999
+    finally:
+        secondary.shutdown()
+        primary.shutdown()
+
+
 def test_inbox_storage_backdates_existing_session_start_when_requested(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
