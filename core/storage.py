@@ -1,0 +1,1099 @@
+# storage.py
+# -*- coding: utf-8 -*-
+import json
+import logging
+import re
+import threading
+import time
+from collections import Counter, OrderedDict, defaultdict
+from datetime import datetime, timedelta, time as dtime, timezone
+from pathlib import Path
+from typing import Iterable, Iterator, List, Optional
+
+try:  # pragma: no cover - depende de la versiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de Python
+    from zoneinfo import ZoneInfo as _BuiltinZoneInfo
+except Exception:  # pragma: no cover - fallback si falta la stdlib
+    _BuiltinZoneInfo = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - depende de dependencia opcional
+    from backports import zoneinfo as _backports_zoneinfo  # type: ignore
+except Exception:  # pragma: no cover - fallback si falta el backport
+    _backports_zoneinfo = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - depende de dependencia opcional
+    from dateutil import tz as _dateutil_tz  # type: ignore
+except Exception:  # pragma: no cover - si falta dateutil
+    _dateutil_tz = None  # type: ignore[assignment]
+
+from config import SETTINGS, read_env_local, update_env_local
+from core.storage_atomic import (
+    atomic_append_jsonl,
+    atomic_write_json,
+    atomic_write_text,
+    load_json_file,
+    load_jsonl_entries,
+)
+from ui import Fore, banner, full_line, style_text
+from utils import ask, ok, press_enter, warn
+from paths import exports_root, storage_root
+
+BASE = Path(__file__).resolve().parent.parent
+STO = storage_root(BASE)
+SENT = STO / "sent_log.jsonl"
+AUTO = STO / "autoresponder_state.json"
+STATE = STO / "state.json"
+CONVERSATIONS = STO / "conversation_events.jsonl"
+EXPORTS = exports_root(BASE)
+logger = logging.getLogger(__name__)
+
+# App/business timezone for daily counters, sent-log day bucketing, dashboard
+# "today" metrics, and quota calculations. This is intentionally separate from
+# the live browser/session timezone used by campaign Playwright contexts.
+TZ_LABEL = "America/Argentina/Cordoba"
+
+
+def _normalize_paused_accounts(value) -> list[str]:
+    """Normaliza el formato persistido de cuentas pausadas."""
+
+    normalized: list[str] = []
+    if isinstance(value, list):
+        for entry in value:
+            candidate = ""
+            if isinstance(entry, str):
+                candidate = entry.strip()
+            elif isinstance(entry, dict):
+                candidate = str(entry.get("username") or entry.get("account") or "").strip()
+            if candidate:
+                normalized.append(candidate)
+    return normalized
+
+
+def _load_timezone(label: str):
+    """Obtiene una zona horaria vÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lida sin importar la disponibilidad de zoneinfo."""
+
+    for provider in (_BuiltinZoneInfo, getattr(_backports_zoneinfo, "ZoneInfo", None)):
+        if provider is None:
+            continue
+        try:
+            return provider(label)
+        except Exception:
+            continue
+    if _dateutil_tz is not None:
+        tzinfo = _dateutil_tz.gettz(label)
+        if tzinfo is not None:
+            return tzinfo
+    return timezone.utc
+
+
+TZ = _load_timezone(TZ_LABEL)
+_UTC_TZ = _load_timezone("UTC")
+_CAMPAIGN_SNAPSHOT_LOCK = threading.RLock()
+_CAMPAIGN_SNAPSHOT_CACHE: OrderedDict[
+    tuple[str, tuple[str, ...] | None, tuple[int, int] | None],
+    tuple[dict[str, int], set[str], set[str]],
+] = OrderedDict()
+_CAMPAIGN_SNAPSHOT_LIMIT = 64
+
+
+def refresh_runtime_paths(base: Path | None = None) -> dict[str, Path]:
+    global BASE, STO, SENT, AUTO, STATE, CONVERSATIONS, EXPORTS
+
+    resolved_base = Path(base) if base is not None else Path(__file__).resolve().parent.parent
+    BASE = resolved_base
+    STO = storage_root(BASE)
+    SENT = STO / "sent_log.jsonl"
+    AUTO = STO / "autoresponder_state.json"
+    STATE = STO / "state.json"
+    CONVERSATIONS = STO / "conversation_events.jsonl"
+    EXPORTS = exports_root(BASE)
+    with _CAMPAIGN_SNAPSHOT_LOCK:
+        _CAMPAIGN_SNAPSHOT_CACHE.clear()
+    return {
+        "base": BASE,
+        "storage_root": STO,
+        "sent_log": SENT,
+        "autoresponder_state": AUTO,
+        "state": STATE,
+        "conversation_events": CONVERSATIONS,
+        "exports_root": EXPORTS,
+    }
+
+
+def _now_local() -> datetime:
+    return datetime.now(TZ)
+
+
+def _start_of_day(dt: datetime) -> datetime:
+    return datetime.combine(dt.date(), dtime.min, tzinfo=TZ)
+
+
+def _load_state() -> dict:
+    if not STATE.exists():
+        return {
+            "last_daily_reset": None,
+            "daily_sent": 0,
+            "daily_errors": 0,
+            "last_reset_display": None,
+        }
+    try:
+        data = load_json_file(STATE, {}, label="storage.state")
+    except Exception:
+        data = {}
+    data.setdefault("last_daily_reset", None)
+    data.setdefault("daily_sent", 0)
+    data.setdefault("daily_errors", 0)
+    data.setdefault("last_reset_display", None)
+    data["paused_accounts"] = _normalize_paused_accounts(data.get("paused_accounts"))
+    return data
+
+
+def _save_state(state: dict) -> None:
+    try:
+        atomic_write_json(STATE, state)
+    except Exception:
+        logger.exception("No se pudo guardar storage.state: %s", STATE)
+
+
+def _iter_records() -> Iterator[dict]:
+    if not SENT.exists():
+        return iter(())
+    def _generator() -> Iterator[dict]:
+        for obj in load_jsonl_entries(SENT, label="storage.sent_log"):
+            if not isinstance(obj, dict):
+                continue
+            ts = obj.get("ts")
+            if ts is None:
+                continue
+            try:
+                dt = datetime.fromtimestamp(float(ts), tz=_UTC_TZ).astimezone(TZ)
+            except Exception:
+                continue
+            obj["local_dt"] = dt
+            yield obj
+    return _generator()
+
+
+def _status_from_record(entry: dict) -> str:
+    detail = (entry.get("detail") or "").strip()
+    if detail:
+        lowered = detail.lower()
+        if "fall" in lowered or "error" in lowered:
+            return "EnvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o fallido"
+        if "interes" in lowered:
+            return "Interesado"
+        if "sin respuesta" in lowered:
+            return "Sin respuesta"
+        return detail
+    return "Mensaje enviado" if entry.get("ok") else "EnvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o fallido"
+
+
+def _iter_conversation_events() -> Iterator[dict]:
+    if not CONVERSATIONS.exists():
+        return iter(())
+
+    def _generator() -> Iterator[dict]:
+        for obj in load_jsonl_entries(CONVERSATIONS, label="storage.conversation_events"):
+            if not isinstance(obj, dict):
+                continue
+            ts = obj.get("ts")
+            if ts is None:
+                continue
+            try:
+                dt = datetime.fromtimestamp(float(ts), tz=_UTC_TZ).astimezone(TZ)
+            except Exception:
+                continue
+            obj["local_dt"] = dt
+            yield obj
+
+    return _generator()
+
+
+def conversation_rows(
+    *,
+    account_filter: Optional[str] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> List[dict]:
+    """Devuelve una vista plana del estado de conversaciones recientes."""
+
+    account_key = account_filter.lower().lstrip("@") if account_filter else None
+    latest: dict[tuple[str, str], dict] = {}
+    for entry in _iter_records():
+        local_dt: datetime | None = entry.get("local_dt")
+        if not local_dt:
+            continue
+        if start and local_dt < start:
+            continue
+        if end and local_dt > end:
+            continue
+        account = str(entry.get("account", ""))
+        if account_key and account.lower().lstrip("@") != account_key:
+            continue
+        recipient = str(entry.get("to", ""))
+        key = (account, recipient)
+        status = _status_from_record(entry)
+        payload = {
+            "timestamp": local_dt,
+            "account": account,
+            "recipient": recipient,
+            "status": status,
+        }
+        previous = latest.get(key)
+        if previous is None or previous["timestamp"] <= local_dt:
+            latest[key] = payload
+    for event in _iter_conversation_events():
+        local_dt: datetime | None = event.get("local_dt")
+        if not local_dt:
+            continue
+        if start and local_dt < start:
+            continue
+        if end and local_dt > end:
+            continue
+        account = str(event.get("account", ""))
+        if account_key and account.lower().lstrip("@") != account_key:
+            continue
+        recipient = str(event.get("to", ""))
+        key = (account, recipient)
+        status = str(event.get("status", "")).strip() or "Mensaje enviado"
+        payload = {
+            "timestamp": local_dt,
+            "account": account,
+            "recipient": recipient,
+            "status": status,
+        }
+        previous = latest.get(key)
+        if previous is None or previous["timestamp"] <= local_dt:
+            latest[key] = payload
+    cutoff = datetime.now(TZ) - timedelta(hours=48)
+    for payload in latest.values():
+        if payload["status"] == "Mensaje enviado" and payload["timestamp"] <= cutoff:
+            payload["status"] = "Sin respuesta"
+    rows = sorted(latest.values(), key=lambda item: item["timestamp"], reverse=True)
+    return rows
+
+
+def export_conversation_state(rows: List[dict]) -> Path:
+    """Exporta el estado de conversaciones a un Excel dentro de storage/exports."""
+
+    timestamp = _now_local().strftime("%Y%m%d-%H%M%S")
+    path = EXPORTS / f"conversation_state_{timestamp}.xlsx"
+    payload_rows = []
+    for row in rows:
+        ts = row["timestamp"].strftime("%Y-%m-%d %H:%M")
+        payload_rows.append([ts, row["account"], row["recipient"], row["status"]])
+    _write_excel(
+        path,
+        ["fecha_hora", "cuenta_emisora", "cuenta_receptora", "estado"],
+        payload_rows,
+    )
+    return path
+
+
+def _write_excel(path: Path, headers: list[str], rows: Iterable[Iterable[object]]) -> None:
+    try:
+        from openpyxl import Workbook
+    except Exception as exc:
+        raise RuntimeError(
+            "ERROR DE BUILD: falta la dependencia 'openpyxl' para exportar a Excel."
+        ) from exc
+    wb = Workbook()
+    ws = wb.active
+    ws.append(list(headers))
+    for row in rows:
+        ws.append(list(row))
+    wb.save(path)
+
+
+def purge_conversations_before(cutoff: datetime) -> int:
+    """Elimina registros anteriores al cutoff (en zona local)."""
+
+    if not SENT.exists():
+        return 0
+
+    try:
+        cutoff_utc = cutoff.astimezone(_UTC_TZ)
+    except Exception:
+        cutoff_utc = cutoff
+
+    kept_lines: List[str] = []
+    removed = 0
+    for obj in load_jsonl_entries(SENT, label="storage.sent_log"):
+        ts = obj.get("ts")
+        if ts is None:
+            kept_lines.append(json.dumps(obj, ensure_ascii=False))
+            continue
+        try:
+            dt_utc = datetime.fromtimestamp(float(ts), tz=_UTC_TZ)
+        except Exception:
+            kept_lines.append(json.dumps(obj, ensure_ascii=False))
+            continue
+        if dt_utc < cutoff_utc:
+            removed += 1
+            continue
+        kept_lines.append(json.dumps(obj, ensure_ascii=False))
+
+    if kept_lines:
+        atomic_write_text(SENT, "\n".join(kept_lines) + "\n")
+    else:
+        atomic_write_text(SENT, "")
+    return removed
+
+
+def _counts_for_date(date: datetime.date) -> tuple[int, int]:
+    sent = 0
+    errors = 0
+    for obj in _iter_records():
+        if obj.get("skipped") or obj.get("skip_reason"):
+            continue
+        local_dt = obj.get("local_dt")
+        if not local_dt or local_dt.date() != date:
+            continue
+        if obj.get("ok"):
+            sent += 1
+        else:
+            errors += 1
+    return sent, errors
+
+
+def _ensure_state_today(state: dict) -> dict:
+    today = _now_local().date()
+    today_iso = today.isoformat()
+    needs_reset = state.get("last_daily_reset") != today_iso or state.get("daily_sent") is None
+    if needs_reset:
+        sent_today, errors_today = _counts_for_date(today)
+        state["last_daily_reset"] = today_iso
+        state["daily_sent"] = sent_today
+        state["daily_errors"] = errors_today
+        state["last_reset_display"] = _start_of_day(_now_local()).strftime("%Y-%m-%d %H:%M")
+        state["paused_accounts"] = []
+        _save_state(state)
+    else:
+        state.setdefault("paused_accounts", [])
+    return state
+
+
+def _increment_daily(okflag: bool) -> None:
+    state = _ensure_state_today(_load_state())
+    if okflag:
+        state["daily_sent"] = int(state.get("daily_sent", 0)) + 1
+    else:
+        state["daily_errors"] = int(state.get("daily_errors", 0)) + 1
+    state.setdefault("last_reset_display", _start_of_day(_now_local()).strftime("%Y-%m-%d %H:%M"))
+    _save_state(state)
+
+
+def paused_accounts_today() -> list[str]:
+    """Devuelve las cuentas pausadas por protecciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n diaria en la fecha actual."""
+
+    state = _ensure_state_today(_load_state())
+    paused = state.get("paused_accounts", [])
+    if not isinstance(paused, list):
+        paused = []
+        state["paused_accounts"] = paused
+        _save_state(state)
+    return list(paused)
+
+
+def mark_account_paused(username: str) -> None:
+    """Marca una cuenta como pausada por el resto del dÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a actual."""
+
+    username = (username or "").strip()
+    if not username:
+        return
+    state = _ensure_state_today(_load_state())
+    paused = state.get("paused_accounts", [])
+    if not isinstance(paused, list):
+        paused = []
+    normalized = username.lower()
+    if all(str(entry).strip().lower() != normalized for entry in paused):
+        paused.append(username)
+        state["paused_accounts"] = paused
+        _save_state(state)
+
+
+def log_sent(
+    account: str,
+    username: str,
+    okflag: bool,
+    detail: str = "",
+    *,
+    started_at: str | None = None,
+    duration_ms: int | None = None,
+    template_id: str | None = None,
+    template_name: str | None = None,
+    selected_variant: str | None = None,
+    cancelled: bool | None = None,
+    verified: bool | None = None,
+    skip: bool = False,
+    skip_reason: str | None = None,
+    sent_unverified: bool = False,
+    diagnostic_ref: str | None = None,
+    source_engine: str | None = None,
+    campaign_alias: str | None = None,
+    leads_alias: str | None = None,
+    run_id: str | None = None,
+):
+    rec = {
+        "ts": int(time.time()),
+        "account": account,
+        "to": username,
+        "ok": bool(okflag),
+        "detail": detail,
+    }
+    if skip:
+        rec["skipped"] = True
+    if skip_reason:
+        rec["skip_reason"] = skip_reason
+    if sent_unverified:
+        rec["sent_unverified"] = True
+    if started_at:
+        rec["started_at"] = started_at
+    if duration_ms is not None:
+        rec["duration_ms"] = int(duration_ms)
+    if template_id:
+        rec["template_id"] = template_id
+    if template_name:
+        rec["template_name"] = template_name
+    if selected_variant:
+        rec["selected_variant"] = selected_variant
+    if cancelled is not None:
+        rec["cancelled"] = bool(cancelled)
+    if verified is not None:
+        rec["verified"] = bool(verified)
+    if diagnostic_ref:
+        rec["diagnostic_ref"] = str(diagnostic_ref)
+    if source_engine:
+        rec["source_engine"] = str(source_engine).strip().lower()
+    if campaign_alias:
+        rec["campaign_alias"] = str(campaign_alias).strip().lower()
+    if leads_alias:
+        rec["leads_alias"] = str(leads_alias).strip().lower()
+    if run_id:
+        rec["run_id"] = str(run_id).strip()
+    atomic_append_jsonl(SENT, rec)
+    if not skip:
+        _increment_daily(bool(okflag))
+
+
+def log_conversation_status(
+    account: str, username: str, status: str, *, timestamp: int | None = None
+) -> None:
+    status = status.strip()
+    if not status:
+        return
+    record = {
+        "ts": int(timestamp or time.time()),
+        "account": account,
+        "to": username,
+        "status": status,
+    }
+    atomic_append_jsonl(CONVERSATIONS, record)
+
+
+def normalize_contact_username(raw: object) -> str:
+    value = str(raw or "").strip().lstrip("@")
+    if not value:
+        return ""
+    # Normalize common BOM/zero-width leftovers to avoid false mismatches.
+    for bad in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u200e", "\u200f", "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â»ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿"):
+        value = value.replace(bad, "")
+    return value.strip().lower()
+
+
+_TERMINAL_LEAD_REASON_CODES = {
+    "skipped_username_not_found",
+    "username_not_found",
+    "user_not_found",
+}
+
+_TERMINAL_LEAD_DETAIL_TOKENS = (
+    "skipped_username_not_found",
+    "skipped_ui_not_found",
+    "username does not exist",
+    "user not found",
+    "unknown user",
+    "inactive user",
+    "no existe o no esta disponible",
+    "usuario no existe",
+    "usuario no encontrado",
+    "usuario no disponible",
+)
+
+
+def _record_blocks_future_sends(obj: dict) -> bool:
+    """Return True when a record should block future sends for the lead."""
+    if not isinstance(obj, dict):
+        return False
+    # Manual campaign cancellations must stay retryable.
+    if bool(obj.get("cancelled")):
+        return False
+    if bool(obj.get("ok")):
+        return True
+    reason = str(obj.get("reason_code") or obj.get("skip_reason") or "").strip().lower()
+    if reason in _TERMINAL_LEAD_REASON_CODES:
+        return True
+    detail = str(obj.get("detail") or "").strip().lower()
+    if not detail:
+        return False
+    return any(token in detail for token in _TERMINAL_LEAD_DETAIL_TOKENS)
+
+
+def _normalize_record_label(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _record_matches_send_scope(
+    obj: dict[str, object],
+    *,
+    source_engine: str | None = None,
+    campaign_alias: str | None = None,
+    run_id: str | None = None,
+    include_legacy: bool = True,
+) -> bool:
+    source_filter = _normalize_record_label(source_engine)
+    alias_filter = _normalize_record_label(campaign_alias)
+    run_filter = str(run_id or "").strip()
+    record_source = _normalize_record_label(obj.get("source_engine"))
+    record_alias = _normalize_record_label(obj.get("campaign_alias"))
+    record_run_id = str(obj.get("run_id") or "").strip()
+    if not include_legacy and not record_source:
+        return False
+    if source_filter and record_source != source_filter:
+        return False
+    if alias_filter and record_alias != alias_filter:
+        return False
+    if run_filter and record_run_id != run_filter:
+        return False
+    return True
+
+
+def successful_contacts_index(
+    *,
+    source_engine: str | None = None,
+    campaign_alias: str | None = None,
+    include_legacy: bool = True,
+) -> dict[str, set[str]]:
+    """
+    Index of leads blocked for new sends.
+
+    With no filters it preserves the historical global behavior.
+    When filters are provided it can return a scoped subset, for example
+    only Campaign Engine sends for a specific campaign alias.
+
+    Blocks when:
+    - send finished OK
+    - failure was terminal (lead not found)
+    Excludes:
+    - manually cancelled sends (retry allowed)
+    key=normalized lead, value=set(accounts that created the block)
+    """
+    index: dict[str, set[str]] = {}
+    if not SENT.exists():
+        return index
+    for obj in load_jsonl_entries(SENT, label="storage.sent_log"):
+        if not _record_matches_send_scope(
+            obj,
+            source_engine=source_engine,
+            campaign_alias=campaign_alias,
+            include_legacy=include_legacy,
+        ):
+            continue
+        if not _record_blocks_future_sends(obj):
+            continue
+        lead = normalize_contact_username(obj.get("to", ""))
+        if not lead:
+            continue
+        account = str(obj.get("account", "")).strip().lstrip("@")
+        if not account:
+            account = "-"
+        index.setdefault(lead, set()).add(account)
+    return index
+
+
+def already_contacted(username: str) -> bool:
+    target = normalize_contact_username(username)
+    if not target:
+        return False
+    if not SENT.exists():
+        return False
+    for obj in load_jsonl_entries(SENT, label="storage.sent_log"):
+        if not _record_blocks_future_sends(obj):
+            continue
+        candidate = normalize_contact_username(obj.get("to", ""))
+        if candidate and candidate == target:
+            return True
+    return False
+
+
+def sent_totals() -> tuple[int, int]:
+    """Devuelve totales acumulados de envÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­os OK y con error."""
+    ok_count = 0
+    error_count = 0
+    for obj in _iter_records():
+        if obj.get("skipped") or obj.get("skip_reason"):
+            continue
+        if obj.get("ok"):
+            ok_count += 1
+        else:
+            error_count += 1
+    return ok_count, error_count
+
+
+def sent_totals_today() -> tuple[int, int, str, str]:
+    state = _ensure_state_today(_load_state())
+    sent_today = int(state.get("daily_sent", 0))
+    errors_today = int(state.get("daily_errors", 0))
+    last_reset = state.get("last_reset_display") or _start_of_day(_now_local()).strftime(
+        "%Y-%m-%d %H:%M"
+    )
+    return sent_today, errors_today, last_reset, TZ_LABEL
+
+
+def sent_counts_today_by_account(
+    accounts: Iterable[str] | None = None,
+    *,
+    source_engine: str | None = None,
+    campaign_alias: str | None = None,
+    run_id: str | None = None,
+    include_legacy: bool = True,
+) -> dict[str, int]:
+    requested: set[str] | None = None
+    if accounts is not None:
+        requested = {
+            str(item or "").strip().lstrip("@").lower()
+            for item in accounts
+            if str(item or "").strip()
+        }
+        if not requested:
+            return {}
+
+    today = _now_local().date()
+    counts: Counter[str] = Counter()
+    for obj in _iter_records():
+        if not _record_matches_send_scope(
+            obj,
+            source_engine=source_engine,
+            campaign_alias=campaign_alias,
+            run_id=run_id,
+            include_legacy=include_legacy,
+        ):
+            continue
+        if obj.get("skipped") or obj.get("skip_reason") or not obj.get("ok"):
+            continue
+        local_dt = obj.get("local_dt")
+        if not local_dt or local_dt.date() != today:
+            continue
+        account = str(obj.get("account") or "").strip().lstrip("@").lower()
+        if not account:
+            continue
+        if requested is not None and account not in requested:
+            continue
+        counts[account] += 1
+
+    if requested is None:
+        return {key: int(value) for key, value in counts.items()}
+    return {key: int(counts.get(key, 0)) for key in requested}
+
+
+def campaign_start_snapshot(
+    accounts: Iterable[str] | None = None,
+    *,
+    campaign_alias: str = "",
+) -> dict[str, object]:
+    requested: set[str] | None = None
+    if accounts is not None:
+        requested = {
+            str(item or "").strip().lstrip("@").lower()
+            for item in accounts
+            if str(item or "").strip()
+        }
+        if not requested:
+            return {
+                "daily_counts": {},
+                "campaign_registry": set(),
+                "shared_registry": set(),
+            }
+    requested_key = tuple(sorted(requested)) if requested is not None else None
+    alias_key = str(campaign_alias or "").strip().lower()
+    file_token = (int(SENT.stat().st_mtime_ns), int(SENT.stat().st_size)) if SENT.exists() else None
+    cache_key = (alias_key, requested_key, file_token)
+    with _CAMPAIGN_SNAPSHOT_LOCK:
+        cached = _CAMPAIGN_SNAPSHOT_CACHE.get(cache_key)
+        if cached is not None:
+            _CAMPAIGN_SNAPSHOT_CACHE.move_to_end(cache_key)
+            cached_daily_counts, cached_campaign_registry, cached_shared_registry = cached
+            return {
+                "daily_counts": dict(cached_daily_counts),
+                "campaign_registry": set(cached_campaign_registry),
+                "shared_registry": set(cached_shared_registry),
+            }
+
+    day_start = _start_of_day(_now_local()).astimezone(_UTC_TZ).timestamp()
+    day_end = (_start_of_day(_now_local()) + timedelta(days=1)).astimezone(_UTC_TZ).timestamp()
+    daily_counts: Counter[str] = Counter()
+    campaign_registry: set[str] = set()
+    shared_registry: set[str] = set()
+    campaign_scope = {
+        "source_engine": "campaign",
+        "campaign_alias": alias_key or None,
+        "include_legacy": False,
+    }
+
+    if SENT.exists():
+        for obj in load_jsonl_entries(SENT, label="storage.sent_log"):
+            if not isinstance(obj, dict):
+                continue
+
+            lead = normalize_contact_username(obj.get("to", ""))
+            if lead and _record_blocks_future_sends(obj):
+                shared_registry.add(lead)
+                if _record_matches_send_scope(obj, **campaign_scope):
+                    campaign_registry.add(lead)
+
+            if obj.get("skipped") or obj.get("skip_reason") or not obj.get("ok"):
+                continue
+
+            ts = obj.get("ts")
+            if ts is None:
+                continue
+            try:
+                ts_value = float(ts)
+            except Exception:
+                continue
+            if ts_value < day_start or ts_value >= day_end:
+                continue
+
+            account = str(obj.get("account") or "").strip().lstrip("@").lower()
+            if not account:
+                continue
+            if requested is not None and account not in requested:
+                continue
+            daily_counts[account] += 1
+
+    if requested is None:
+        daily_counts_payload = {key: int(value) for key, value in daily_counts.items()}
+    else:
+        daily_counts_payload = {key: int(daily_counts.get(key, 0)) for key in requested}
+    result = {
+        "daily_counts": daily_counts_payload,
+        "campaign_registry": campaign_registry,
+        "shared_registry": shared_registry,
+    }
+    with _CAMPAIGN_SNAPSHOT_LOCK:
+        _CAMPAIGN_SNAPSHOT_CACHE[cache_key] = (
+            dict(daily_counts_payload),
+            set(campaign_registry),
+            set(shared_registry),
+        )
+        _CAMPAIGN_SNAPSHOT_CACHE.move_to_end(cache_key)
+        while len(_CAMPAIGN_SNAPSHOT_CACHE) > _CAMPAIGN_SNAPSHOT_LIMIT:
+            _CAMPAIGN_SNAPSHOT_CACHE.popitem(last=False)
+    return result
+
+
+def sent_count_today_for_account(
+    account: str,
+    *,
+    source_engine: str | None = None,
+    campaign_alias: str | None = None,
+    run_id: str | None = None,
+    include_legacy: bool = True,
+) -> int:
+    clean_account = str(account or "").strip().lstrip("@").lower()
+    if not clean_account:
+        return 0
+    return int(
+        sent_counts_today_by_account(
+            [clean_account],
+            source_engine=source_engine,
+            campaign_alias=campaign_alias,
+            run_id=run_id,
+            include_legacy=include_legacy,
+        ).get(clean_account, 0)
+    )
+
+
+def _records_list() -> list[dict]:
+    return list(_iter_records())
+
+
+def _print_records(records: Iterable[dict], limit: int | None = None) -> None:
+    shown = 0
+    for obj in records:
+        if limit is not None and shown >= limit:
+            break
+        ts = obj.get("local_dt") or datetime.fromtimestamp(obj.get("ts", 0), tz=_UTC_TZ).astimezone(TZ)
+        if obj.get("skipped") or obj.get("skip_reason"):
+            status = "SKIP"
+        else:
+            status = "OK" if obj.get("ok") else "ERROR"
+        detail = obj.get("detail", "")
+        timestamp = ts.strftime("%Y-%m-%d %H:%M:%S")
+        print(
+            f"{timestamp}  @{obj.get('account')} -> @{obj.get('to')}  [{status}] {detail}"
+        )
+        shown += 1
+    if shown == 0:
+        print("(sin registros)")
+
+
+def _filter_by_account(records: list[dict]) -> None:
+    alias = ask("Alias/cuenta (vacÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o para cancelar): ").strip()
+    if not alias:
+        warn("Sin cambios.")
+        press_enter()
+        return
+    filtered = [r for r in records if str(r.get("account", "")).lower() == alias.lower()]
+    banner()
+    print(style_text(f"Ãšltimos envÃ­os para @{alias}:", bold=True, color=Fore.CYAN))
+    _print_records(reversed(filtered))
+    press_enter()
+
+
+def _filter_by_date(records: list[dict]) -> None:
+    start_raw = ask("Desde (YYYY-MM-DD, vacÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o para cancelar): ").strip()
+    if not start_raw:
+        warn("Sin cambios.")
+        press_enter()
+        return
+    end_raw = ask("Hasta (YYYY-MM-DD, vacÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o = hoy): ").strip()
+    try:
+        start_date = datetime.strptime(start_raw, "%Y-%m-%d").date()
+    except ValueError:
+        warn("Formato invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lido. Use YYYY-MM-DD.")
+        press_enter()
+        return
+    if end_raw:
+        try:
+            end_date = datetime.strptime(end_raw, "%Y-%m-%d").date()
+        except ValueError:
+            warn("Formato invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lido en fecha final.")
+            press_enter()
+            return
+    else:
+        end_date = _now_local().date()
+    if end_date < start_date:
+        warn("La fecha final debe ser mayor o igual a la inicial.")
+        press_enter()
+        return
+    filtered = []
+    for rec in records:
+        local_dt = rec.get("local_dt")
+        if not local_dt:
+            continue
+        if start_date <= local_dt.date() <= end_date:
+            filtered.append(rec)
+    banner()
+    print(
+        style_text(
+            f"EnvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­os entre {start_date} y {end_date}:", bold=True, color=Fore.CYAN
+        )
+    )
+    _print_records(reversed(filtered))
+    press_enter()
+
+
+def _export_sent_log_excel(records: list[dict]) -> None:
+    if not records:
+        warn("No hay registros para exportar.")
+        press_enter()
+        return
+    path = STO / "sent_log.xlsx"
+    payload_rows = []
+    for rec in records:
+        ts = rec.get("local_dt") or datetime.fromtimestamp(rec.get("ts", 0), tz=_UTC_TZ).astimezone(TZ)
+        status = "OK" if rec.get("ok") else "ERROR"
+        detail = str(rec.get("detail", "")).replace("\n", " ").replace(",", " ")
+        payload_rows.append([ts.strftime("%Y-%m-%d %H:%M:%S"), rec.get("account"), rec.get("to"), status, detail])
+    try:
+        _write_excel(
+            path,
+            ["timestamp", "account", "to", "status", "detail"],
+            payload_rows,
+        )
+    except Exception as exc:
+        warn(str(exc))
+        press_enter()
+        return
+    ok(f"Exportado a {path}")
+    press_enter()
+
+
+def _aggregate_stats(records: Iterable[dict], days: int) -> dict:
+    now = _now_local()
+    start_date = now.date() - timedelta(days=days - 1)
+    start_dt = datetime.combine(start_date, dtime.min, tzinfo=TZ)
+    totals = {
+        "sent": 0,
+        "errors": 0,
+        "per_day": defaultdict(lambda: {"sent": 0, "errors": 0}),
+        "per_account": Counter(),
+    }
+    for rec in records:
+        local_dt = rec.get("local_dt")
+        if not local_dt or local_dt < start_dt:
+            continue
+        date_key = local_dt.date()
+        if rec.get("ok"):
+            totals["sent"] += 1
+            totals["per_day"][date_key]["sent"] += 1
+            if rec.get("account"):
+                totals["per_account"][rec["account"]] += 1
+        else:
+            totals["errors"] += 1
+            totals["per_day"][date_key]["errors"] += 1
+    return totals
+
+
+def _render_stats(title: str, data: dict) -> None:
+    print(full_line())
+    print(style_text(title, color=Fore.CYAN, bold=True))
+    print(full_line())
+    print(
+        style_text(
+            f"Enviados: {data['sent']} | Errores: {data['errors']}",
+            color=Fore.GREEN if data["sent"] else Fore.WHITE,
+            bold=True,
+        )
+    )
+    if data["per_day"]:
+        print(style_text("Por dÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a:", bold=True))
+        for day in sorted(data["per_day"].keys()):
+            item = data["per_day"][day]
+            print(f"  {day}: enviados {item['sent']} | errores {item['errors']}")
+    if data["per_account"]:
+        print(style_text("Top cuentas:", bold=True))
+        for idx, (account, count) in enumerate(data["per_account"].most_common(5), start=1):
+            print(f"  {idx}) @{account} - {count}")
+    else:
+        print("(sin cuentas registradas)")
+    print()
+
+
+def _show_statistics(records: list[dict]) -> None:
+    banner()
+    if not records:
+        print(style_text("Sin registros de envÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­os para calcular estadÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sticas.", color=Fore.YELLOW))
+        press_enter()
+        return
+    print(style_text("Estadisticas", color=Fore.CYAN, bold=True))
+    daily = _aggregate_stats(records, 1)
+    weekly = _aggregate_stats(records, 7)
+    monthly = _aggregate_stats(records, 30)
+    _render_stats("Estadisticas (HOY)", daily)
+    _render_stats("Ultimos 7 dias", weekly)
+    _render_stats("Ultimos 30 dias", monthly)
+    press_enter()
+
+
+def menu_logs():
+    while True:
+        records = _records_list()
+        banner()
+        print(style_text("REGISTROS Y ESTADISTICAS", color=Fore.CYAN, bold=True))
+        print(full_line())
+        print("1) Ver ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltimos envÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­os")
+        print("2) Filtrar por alias/cuenta")
+        print("3) Filtrar por rango de fechas")
+        print("4) Ver estadisticas (Diarias / Semanales / Mensuales)")
+        print("5) Exportar Excel")
+        print("6) Volver")
+        print()
+        choice = ask("OpciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n: ").strip()
+        if choice == "1":
+            banner()
+            print(style_text("Ultimos envios:", bold=True, color=Fore.CYAN))
+            _print_records(records[-50:])
+            press_enter()
+        elif choice == "2":
+            _filter_by_account(records)
+        elif choice == "3":
+            _filter_by_date(records)
+        elif choice == "4":
+            _show_statistics(records)
+        elif choice == "5":
+            _export_sent_log_excel(records)
+        elif choice == "6":
+            break
+        else:
+            warn("OpciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lida.")
+            press_enter()
+
+
+def get_auto_state() -> dict:
+    if not AUTO.exists():
+        return {}
+    try:
+        payload = load_json_file(AUTO, {}, label="storage.autoresponder_state")
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_auto_state(state: dict):
+    atomic_write_json(AUTO, state)
+
+
+def _current_supabase() -> tuple[str, str]:
+    env_local = read_env_local()
+    url = env_local.get("SUPABASE_URL") or SETTINGS.supabase_url or ""
+    key = env_local.get("SUPABASE_KEY") or SETTINGS.supabase_key or ""
+    return url, key
+
+
+def _is_valid_url(url: str) -> bool:
+    return bool(re.match(r"^https?://", url))
+
+
+def menu_supabase() -> None:
+    while True:
+        banner()
+        url, key = _current_supabase()
+        print(full_line())
+        print(style_text("ConfiguraciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de Supabase", color=Fore.CYAN, bold=True))
+        print(full_line())
+        print(f"URL actual: {url or '(sin definir)'}")
+        masked = f"{key[:4]}********" if key else "(sin definir)"
+        print(f"API Key: {masked}")
+        print()
+        print("1) Configurar SUPABASE_URL")
+        print("2) Configurar SUPABASE_KEY")
+        print("3) Probar conexiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n")
+        print("4) Volver")
+        print()
+        choice = ask("OpciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n: ").strip()
+        if choice == "1":
+            new_url = ask("Nueva URL (dejar vacÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o para cancelar): ").strip()
+            if not new_url:
+                warn("Sin cambios.")
+                press_enter()
+                continue
+            if not _is_valid_url(new_url):
+                warn("La URL debe comenzar con http:// o https://")
+                press_enter()
+                continue
+            update_env_local({"SUPABASE_URL": new_url})
+            ok("SUPABASE_URL guardada en .env.local")
+            press_enter()
+        elif choice == "2":
+            new_key = ask("Nueva SUPABASE_KEY (dejar vacÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­o para cancelar): ").strip()
+            if not new_key:
+                warn("Sin cambios.")
+                press_enter()
+                continue
+            update_env_local({"SUPABASE_KEY": new_key})
+            ok("SUPABASE_KEY guardada en .env.local")
+            press_enter()
+        elif choice == "3":
+            url, key = _current_supabase()
+            if url and key:
+                print(style_text("OK: valores configurados.", color=Fore.GREEN, bold=True))
+            else:
+                warn("Falta URL o KEY para probar conexiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n.")
+            press_enter()
+        elif choice == "4":
+            break
+        else:
+            warn("OpciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lida.")
+            press_enter()
+

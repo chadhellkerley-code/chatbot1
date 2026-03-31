@@ -1,0 +1,76 @@
+{
+  "worker_id": "worker-2",
+  "network_key": "proxy:168.235.149.18",
+  "proxy_id": "168.235.149.18",
+  "accounts": [
+    {
+      "username": "florrruiz.1",
+      "active": true,
+      "connected": true,
+      "alias_id": "nuevas",
+      "alias_display_name": "nuevas",
+      "profile_edit_count": 1,
+      "profile_edit_types": [
+        "username"
+      ],
+      "first_seen": "2026-03-14T17:31:01Z",
+      "messages_per_account": 16,
+      "max_messages": 16,
+      "last_profile_edit": "2026-03-15T04:05:35Z",
+      "assigned_proxy_id": "168.235.149.18",
+      "proxy_sticky_minutes": 10,
+      "usage_state": "active",
+      "alias": "nuevas",
+      "password": "sadalien_jq225@$",
+      "proxy_url": "",
+      "proxy_user": "",
+      "proxy_pass": "",
+      "has_totp": true,
+      "recent_activity_count": 7,
+      "low_profile_auto": false,
+      "low_profile": false,
+      "low_profile_reason": "",
+      "low_profile_source": "",
+      "low_profile_manual": false,
+      "effective_network_key": "proxy:168.235.149.18",
+      "network_mode": "proxy",
+      "proxy_preflight_status": "ok",
+      "proxy_preflight_message": "",
+      "runtime_proxy_id": "168.235.149.18",
+      "sent_today": 0
+    }
+  ],
+  "all_proxy_ids": [
+    "direct",
+    "proxy:168.235.149.18"
+  ],
+  "delay_min": 100,
+  "delay_max": 170,
+  "template_variants": [
+    "holaaa",
+    "que tal todo?",
+    "tengo una preguntita",
+    "como va?"
+  ],
+  "cooldown_fail_threshold": 3,
+  "campaign_alias": "nuevas",
+  "leads_alias": "27.3",
+  "campaign_run_id": "campaign-20260329003719168036",
+  "headless": false,
+  "send_flow_timeout_seconds": 75.0,
+  "visible_browser_layout": {
+    "scope": "campaign:campaign-20260329003719168036",
+    "target_count": 2,
+    "layout_policy": "compact",
+    "stagger_min_ms": 300,
+    "stagger_max_ms": 800,
+    "stagger_step_ms": 100
+  },
+  "active_account_limit": 6,
+  "session_close_timeout_seconds": 12.0,
+  "ipc": {
+    "host": "127.0.0.1",
+    "port": 56507,
+    "authkey_b64": "eIjdA8z/6Gt0p7FQswbp5i7gEhJVZlWX"
+  }
+}

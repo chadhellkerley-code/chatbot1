@@ -1,0 +1,150 @@
+{
+  "report_name": "step11b_production_hardening_report.json",
+  "generated_on": "2026-03-06",
+  "fixes_applied": [
+    "Added runtime-scoped Playwright restart ownership with runtime_id, owner_module, active_context tracking and safe_restart_runtime(runtime_id).",
+    "Removed process-wide restart behavior from Playwright recovery paths and gated restarts when active contexts are still open.",
+    "Propagated engine-local cancellation bindings into Playwright runtime coroutine execution and validated existing engine tokenization in campaign, responder, interaction, and proxy-worker flows.",
+    "Added unified atomic persistence helpers in core/storage_atomic.py for JSON writes, JSONL append, atomic replace, and corruption-aware reads.",
+    "Replaced unsafe persistence paths in storage/account/responder/license/health/lead-status/filter/runtime-adjacent modules with atomic write or corruption-aware load helpers.",
+    "Added JSON and JSONL corruption handling that logs integrity failures, creates a backup, and rewrites a clean file instead of silently discarding corrupt data.",
+    "Moved dashboard refresh IO behind the existing background snapshot loader and removed remaining synchronous dashboard file reads from the UI thread.",
+    "Added log rotation and retention utilities for JSONL logs, daily log rollover, screenshot retention, and debug/failure artifact cleanup.",
+    "Added disk pressure monitoring for free space, log growth, and profile growth, with throttled warning emission.",
+    "Added STRICT_IMPORT_MODE fail-fast behavior for app startup, GUI dynamic imports, and license client integrity loading."
+  ],
+  "files_modified": [
+    "app.py",
+    "automation/whatsapp.py",
+    "core/accounts.py",
+    "core/disk_monitor.py",
+    "core/log_rotation.py",
+    "core/storage.py",
+    "core/storage_atomic.py",
+    "core/responder.py",
+    "gui/main_window.py",
+    "health_store.py",
+    "license_client.py",
+    "licensekit.py",
+    "src/dm_campaign/lead_status_store.py",
+    "src/dm_playwright_client.py",
+    "src/leads_filter_pipeline.py",
+    "src/playwright_service.py",
+    "src/runtime/playwright_runtime.py"
+  ],
+  "runtime_isolation_status": {
+    "status": "implemented_and_smoke_validated",
+    "details": [
+      "Playwright async runtime instances are now tracked by runtime_id and owner metadata.",
+      "safe_restart_runtime(runtime_id) denies restart when active_contexts > 0.",
+      "Playwright restart no longer uses process-wide task termination for node.exe/chrome.exe/chromium.exe.",
+      "Crash-recovery call sites now respect restart denial and surface PW-RESTART-BLOCKED instead of forcing global teardown."
+    ],
+    "validated_by": [
+      "python -m py_compile on hardened runtime/service modules",
+      "runtime ownership smoke: blocked restart with active contexts, allowed restart with zero contexts"
+    ]
+  },
+  "storage_atomic_status": {
+    "status": "implemented_and_smoke_validated",
+    "details": [
+      "Atomic JSON writes use temp file -> flush -> fsync -> os.replace.",
+      "Atomic JSONL append rotates oversized logs before append and rewrites atomically.",
+      "Corrupt JSON loads now log, back up the bad file, and create a clean replacement.",
+      "Corrupt JSONL loads now log, back up the bad file, and rewrite a clean JSONL with valid records."
+    ],
+    "validated_by": [
+      "storage corruption smoke: malformed JSON repaired with backup",
+      "storage corruption smoke: malformed JSONL backed up, cleaned, and appended safely"
+    ]
+  },
+  "engine_isolation_status": {
+    "status": "implemented_and_validated_at_token_layer",
+    "details": [
+      "EngineCancellationToken remains the preferred stop primitive while STOP_EVENT is preserved as a compatibility wrapper.",
+      "Campaign, responder, interaction, and proxy-worker entrypoints already bind engine-local tokens in the current tree.",
+      "run_coroutine_sync now rebinds the current engine token inside the Playwright runtime thread so async checks follow engine-local cancellation state."
+    ],
+    "validated_by": [
+      "engine token smoke: cancelling token A did not cancel token B or set the global stop flag",
+      "engine entrypoint import smoke: core.ig.menu_send_rotating and core.responder._activate_bot import successfully",
+      "pytest: tests_optin/test_runner_pool_limits.py"
+    ]
+  },
+  "log_rotation_enabled": true,
+  "validation_status": {
+    "application_boots_normally": {
+      "status": "passed",
+      "evidence": "python -c \"import app, license_client; print('imports-ok')\""
+    },
+    "gui_loads_and_responds": {
+      "status": "passed",
+      "evidence": "QT_QPA_PLATFORM=offscreen python -c create QApplication + MainWindow"
+    },
+    "campaign_start_works": {
+      "status": "partially_validated",
+      "evidence": [
+        "engine campaign entrypoint import smoke passed",
+        "pytest: tests_optin/test_runner_pool_limits.py passed"
+      ],
+      "note": "No live Instagram campaign was executed against external browser/network dependencies in this step."
+    },
+    "autoresponder_initializes": {
+      "status": "passed",
+      "evidence": [
+        "engine entrypoint import smoke passed",
+        "pytest: tests_optin/test_autoresponder_runtime.py passed",
+        "pytest: tests_optin/test_autoresponder_runtime_controller.py passed",
+        "pytest: tests/test_autoresponder_event_contract.py passed"
+      ]
+    },
+    "playwright_runtime_survives_crash_recovery": {
+      "status": "partially_validated",
+      "evidence": [
+        "runtime restart guard smoke passed",
+        "service/runtime compile smoke passed"
+      ],
+      "note": "Ownership-guarded recovery was validated locally, but a real browser driver crash was not induced in this step."
+    },
+    "multiple_engines_run_independently": {
+      "status": "validated_at_cancellation_layer",
+      "evidence": "engine token smoke passed without cross-token or global stop leakage",
+      "note": "No full live multi-engine browser session was executed in parallel."
+    },
+    "strict_import_mode": {
+      "status": "passed",
+      "evidence": [
+        "STRICT_IMPORT_MODE app._safe_import smoke passed",
+        "STRICT_IMPORT_MODE gui.main_window.import_module smoke passed"
+      ]
+    },
+    "storage_and_retention_utilities": {
+      "status": "passed",
+      "evidence": [
+        "storage atomic corruption smoke passed",
+        "log rotation smoke passed",
+        "disk monitor smoke passed"
+      ]
+    },
+    "python_compile": {
+      "status": "passed",
+      "evidence": "python -m py_compile on hardened modules completed successfully"
+    },
+    "pytest": {
+      "status": "passed",
+      "evidence": [
+        "python -m pytest -q tests_optin/test_autoresponder_runtime_controller.py tests_optin/test_runner_pool_limits.py tests/test_dm_playwright_client_api_timestamps.py",
+        "python -m pytest -q tests_optin/test_autoresponder_runtime.py tests/test_autoresponder_event_contract.py"
+      ],
+      "result": "30 tests passed"
+    }
+  },
+  "warnings": [
+    "Disk pressure monitoring emitted a real local warning during validation: Low disk space: 1.08 GB free."
+  ],
+  "remaining_limits": [
+    "Live browser crash recovery was not exercised against a real failing Playwright driver process.",
+    "No end-to-end Instagram or WhatsApp automation run was executed in this step.",
+    "Campaign independence was validated at the cancellation/runtime guard layer, not with concurrent live browser campaigns."
+  ]
+}

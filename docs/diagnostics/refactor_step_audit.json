@@ -1,0 +1,207 @@
+{
+  "generated_on": "2026-03-06",
+  "provenance_note": "Steps 1-9 and 11 are inferred from staged renames/live diff; Step 10 and 11B have explicit reports.",
+  "steps": [
+    {
+      "step": "Step 1",
+      "changes_applied": true,
+      "files_modified": [
+        "core/accounts.py",
+        "core/ig.py",
+        "core/leads.py",
+        "core/responder.py",
+        "core/session_store.py",
+        "core/storage.py"
+      ],
+      "architecture_effect": "business modules moved under core/",
+      "regressions_detected": [
+        "root wrappers keep duplication alive",
+        "core/responder.py still monolithic"
+      ]
+    },
+    {
+      "step": "Step 2",
+      "changes_applied": true,
+      "files_modified": [
+        "automation/whatsapp.py",
+        "automation/actions/__init__.py",
+        "automation/actions/content_publisher.py",
+        "automation/actions/interactions.py",
+        "automation/actions/interactions_adapters.py"
+      ],
+      "architecture_effect": "automation code moved under automation/",
+      "regressions_detected": [
+        "actions/ wrapper package remains",
+        "automation/whatsapp.py still broad"
+      ]
+    },
+    {
+      "step": "Step 3",
+      "changes_applied": true,
+      "files_modified": [
+        "gui/gui_app.py",
+        "gui/io_adapter.py",
+        "gui/main_window.py"
+      ],
+      "architecture_effect": "GUI shell moved under gui/",
+      "regressions_detected": [
+        "root GUI wrappers remain",
+        "gui/main_window.py still monolithic"
+      ]
+    },
+    {
+      "step": "Step 4",
+      "changes_applied": true,
+      "files_modified": [
+        "launchers/client_launcher.py",
+        "launchers/owner_gui_launcher.py"
+      ],
+      "architecture_effect": "packaged entrypoints moved under launchers/",
+      "regressions_detected": [
+        "browser-selection logic duplicated with license_client.py"
+      ]
+    },
+    {
+      "step": "Step 5",
+      "changes_applied": true,
+      "files_modified": [
+        "runtime/runtime.py",
+        "runtime/runtime_parity.py"
+      ],
+      "architecture_effect": "runtime utilities moved under runtime/",
+      "regressions_detected": [
+        "runtime_parity root wrapper remains"
+      ]
+    },
+    {
+      "step": "Step 6",
+      "changes_applied": true,
+      "files_modified": [
+        "app.py",
+        "gui/gui_app.py",
+        "launchers/client_launcher.py",
+        "launchers/owner_gui_launcher.py"
+      ],
+      "architecture_effect": "imports rewired to new packages and strict-import path",
+      "regressions_detected": [
+        "dynamic imports remain heavy",
+        "default pytest collection is not clean"
+      ]
+    },
+    {
+      "step": "Step 7",
+      "changes_applied": true,
+      "files_modified": [
+        "src/auth/onboarding.py",
+        "src/auth/persistent_login.py",
+        "src/autoresponder_runtime.py",
+        "src/opt_in/*"
+      ],
+      "architecture_effect": "auth and opt-in flows expanded under src/",
+      "regressions_detected": [
+        "optin_browser and src/opt_in overlap"
+      ]
+    },
+    {
+      "step": "Step 8",
+      "changes_applied": true,
+      "files_modified": [
+        "src/leads_filter_pipeline.py",
+        "src/leads_payload_migration.py",
+        "src/vision/*"
+      ],
+      "architecture_effect": "leads filter and vision pipeline extracted",
+      "regressions_detected": [
+        "src/leads_filter_pipeline.py still broad"
+      ]
+    },
+    {
+      "step": "Step 9",
+      "changes_applied": true,
+      "files_modified": [
+        "src/dm_campaign/*",
+        "src/transport/human_instagram_sender.py",
+        "src/proxy_assigner.py",
+        "src/proxy_pool.py",
+        "src/proxy_payload.py",
+        "src/dm_playwright_client.py"
+      ],
+      "architecture_effect": "campaign/proxy/transport path extracted",
+      "regressions_detected": [
+        "proxy_pool bypasses atomic storage",
+        "dm_playwright_client still large"
+      ]
+    },
+    {
+      "step": "Step 10",
+      "changes_applied": true,
+      "files_modified": [
+        "runtime/runtime.py",
+        "src/runtime/playwright_runtime.py",
+        "src/playwright_service.py",
+        "automation/whatsapp.py",
+        "src/dm_playwright_client.py",
+        "core/storage_atomic.py",
+        "core/accounts.py",
+        "core/storage.py",
+        "core/responder.py",
+        "licensekit.py",
+        "health_store.py",
+        "src/dm_campaign/lead_status_store.py",
+        "core/ig.py",
+        "automation/actions/interactions.py",
+        "src/dm_campaign/proxy_workers_runner.py",
+        "gui/main_window.py",
+        "step10_stability_fixes_report.json"
+      ],
+      "architecture_effect": "runtime safety, atomic writes, stop-token isolation, GUI dashboard background loading",
+      "regressions_detected": [
+        "live browser validation remained smoke-level"
+      ]
+    },
+    {
+      "step": "Step 11",
+      "changes_applied": "partially_inferred_only",
+      "files_modified": [
+        "license_client.py",
+        "launchers/client_launcher.py",
+        "tools/build_executable.py",
+        "tools/build_owner_macos_universal.py"
+      ],
+      "architecture_effect": "packaging/distribution consolidation before 11B",
+      "regressions_detected": [
+        "no explicit step artifact",
+        "duplicated browser discovery helpers remain"
+      ]
+    },
+    {
+      "step": "Step 11B",
+      "changes_applied": true,
+      "files_modified": [
+        "app.py",
+        "automation/whatsapp.py",
+        "core/accounts.py",
+        "core/disk_monitor.py",
+        "core/log_rotation.py",
+        "core/storage.py",
+        "core/storage_atomic.py",
+        "core/responder.py",
+        "gui/main_window.py",
+        "health_store.py",
+        "license_client.py",
+        "licensekit.py",
+        "src/dm_campaign/lead_status_store.py",
+        "src/dm_playwright_client.py",
+        "src/leads_filter_pipeline.py",
+        "src/playwright_service.py",
+        "src/runtime/playwright_runtime.py"
+      ],
+      "architecture_effect": "runtime hardening, corruption-aware storage, strict imports, retention/disk monitoring",
+      "regressions_detected": [
+        "resolve_playwright_executable() misses the local 1155 browser bundle",
+        "browser launch smoke failed with PW-BROWSER-LAYER-FAILED",
+        "atomic-write adoption still incomplete"
+      ]
+    }
+  ]
+}
