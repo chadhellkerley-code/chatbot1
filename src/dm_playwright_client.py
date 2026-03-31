@@ -328,7 +328,10 @@ class PlaywrightDMClient:
             profiles_root=str(BASE_PROFILES),
             normalize_username=lambda value: str(value or "").strip().lstrip("@"),
             log_event=lambda *_args, **_kwargs: None,
+<<<<<<< HEAD
             subsystem="inbox",
+=======
+>>>>>>> origin/main
         )
         self._runtime = SyncSessionRuntime(
             account=self.account,

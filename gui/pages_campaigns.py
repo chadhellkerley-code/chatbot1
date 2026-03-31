@@ -203,7 +203,11 @@ class CampaignCreatePage(CampaignsSectionPage):
         self._template_payloads: dict[str, dict[str, str]] = {}
         self._lead_counts: dict[str, int] = {}
         self._summary_values: dict[str, QLabel] = {}
+<<<<<<< HEAD
         self._capacity_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
+=======
+        self._capacity_cache: dict[str, dict[str, Any]] = {}
+>>>>>>> origin/main
         self._form_snapshot_cache: dict[str, Any] | None = None
         self._form_request_id = 0
         self._form_loading = False
@@ -383,11 +387,19 @@ class CampaignCreatePage(CampaignsSectionPage):
 
         self._alias_combo.currentIndexChanged.connect(self._on_alias_changed)
         self._alias_combo.currentIndexChanged.connect(self._update_summary)
+<<<<<<< HEAD
         self._leads_combo.currentIndexChanged.connect(self._on_leads_changed)
         self._template_combo.currentIndexChanged.connect(self._on_template_changed)
         self._delay_min.valueChanged.connect(self._update_summary)
         self._delay_max.valueChanged.connect(self._update_summary)
         self._concurrency.valueChanged.connect(self._on_concurrency_changed)
+=======
+        self._leads_combo.currentIndexChanged.connect(self._update_summary)
+        self._template_combo.currentIndexChanged.connect(self._on_template_changed)
+        self._delay_min.valueChanged.connect(self._update_summary)
+        self._delay_max.valueChanged.connect(self._update_summary)
+        self._concurrency.valueChanged.connect(self._update_summary)
+>>>>>>> origin/main
         self._headless.toggled.connect(self._update_summary)
         self._use_template_yes.toggled.connect(self._update_message_mode)
         self._manual_message.textChanged.connect(self._update_summary)
@@ -485,6 +497,7 @@ class CampaignCreatePage(CampaignsSectionPage):
 
         capacity = payload.get("capacity")
         if isinstance(capacity, dict):
+<<<<<<< HEAD
             cache_key = self._capacity_cache_key_from_payload(capacity)
             if cache_key is not None:
                 self._capacity_cache[cache_key] = dict(capacity)
@@ -519,6 +532,24 @@ class CampaignCreatePage(CampaignsSectionPage):
             self._capacity_label.clear()
             return
         cached = self._capacity_cache.get((alias, leads_alias, workers_requested))
+=======
+            capacity_alias = str(capacity.get("alias") or self._alias_combo.currentData() or "").strip()
+            if capacity_alias:
+                self._capacity_cache[capacity_alias] = dict(capacity)
+
+        self._refresh_template_preview()
+        self._update_message_mode()
+        self._request_capacity_refresh(force=not bool(self._capacity_cache.get(str(self._alias_combo.currentData() or "").strip())))
+        self._update_summary()
+        self.clear_status()
+
+    def _request_capacity_refresh(self, *, force: bool = False) -> None:
+        alias = str(self._alias_combo.currentData() or "").strip()
+        if not alias:
+            self._capacity_label.clear()
+            return
+        cached = self._capacity_cache.get(alias)
+>>>>>>> origin/main
         if cached:
             self._apply_capacity_payload(cached)
             if not force:
@@ -526,12 +557,16 @@ class CampaignCreatePage(CampaignsSectionPage):
         else:
             self._capacity_label.setText("Calculando capacidad recomendada...")
         self._capacity_request_id = self._ctx.queries.submit(
+<<<<<<< HEAD
             lambda: build_campaign_capacity_snapshot(
                 self._ctx.services,
                 alias=alias,
                 leads_alias=leads_alias,
                 workers_requested=workers_requested,
             ),
+=======
+            lambda: build_campaign_capacity_snapshot(self._ctx.services, alias=alias),
+>>>>>>> origin/main
             on_success=self._on_capacity_snapshot_loaded,
             on_error=self._on_capacity_snapshot_failed,
         )
@@ -540,11 +575,18 @@ class CampaignCreatePage(CampaignsSectionPage):
         if request_id != self._capacity_request_id:
             return
         clean_payload = dict(payload) if isinstance(payload, dict) else {}
+<<<<<<< HEAD
         cache_key = self._capacity_cache_key_from_payload(clean_payload)
         if cache_key is not None:
             self._capacity_cache[cache_key] = clean_payload
         current_key = self._capacity_cache_key()
         if cache_key == current_key:
+=======
+        alias = str(clean_payload.get("alias") or self._alias_combo.currentData() or "").strip()
+        if alias:
+            self._capacity_cache[alias] = clean_payload
+        if alias == str(self._alias_combo.currentData() or "").strip():
+>>>>>>> origin/main
             self._apply_capacity_payload(clean_payload)
 
     def _on_capacity_snapshot_failed(self, request_id: int, error: QueryError) -> None:
@@ -558,6 +600,7 @@ class CampaignCreatePage(CampaignsSectionPage):
             self._capacity_label.clear()
             return
         workers_capacity = max(0, safe_int(clean_payload.get("workers_capacity") or 0))
+<<<<<<< HEAD
         workers_effective = max(0, safe_int(clean_payload.get("workers_effective") or 0))
         proxies = len(clean_payload.get("proxies") or [])
         none_accounts = bool(clean_payload.get("has_none_accounts"))
@@ -587,11 +630,21 @@ class CampaignCreatePage(CampaignsSectionPage):
             + (f"  |  Por cuenta: {account_remaining_preview}" if account_remaining_preview else "")
         )
         self._update_summary()
+=======
+        proxies = len(clean_payload.get("proxies") or [])
+        none_accounts = bool(clean_payload.get("has_none_accounts"))
+        note = "  |  Sin proxies: se usara 1 worker local con rotacion de cuentas." if none_accounts and not proxies else ""
+        self._capacity_label.setText(
+            f"Capacidad recomendada de workers: {workers_capacity}  |  "
+            f"Proxies detectados: {proxies}{note}"
+        )
+>>>>>>> origin/main
 
     def _on_alias_changed(self) -> None:
         self._request_capacity_refresh()
         self._update_summary()
 
+<<<<<<< HEAD
     def _on_leads_changed(self) -> None:
         self._request_capacity_refresh()
         self._update_summary()
@@ -600,12 +653,15 @@ class CampaignCreatePage(CampaignsSectionPage):
         self._request_capacity_refresh()
         self._update_summary()
 
+=======
+>>>>>>> origin/main
     def _lead_count(self) -> int:
         leads_alias = str(self._leads_combo.currentData() or "").strip()
         if not leads_alias:
             return 0
         return safe_int(self._lead_counts.get(leads_alias))
 
+<<<<<<< HEAD
     def _current_capacity_payload(self) -> dict[str, Any]:
         payload = self._capacity_cache.get(self._capacity_cache_key())
         return dict(payload) if isinstance(payload, dict) else {}
@@ -616,6 +672,8 @@ class CampaignCreatePage(CampaignsSectionPage):
             return max(0, safe_int(payload.get("planned_runnable_leads") or 0))
         return self._lead_count()
 
+=======
+>>>>>>> origin/main
     def _refresh_template_preview(self) -> None:
         if not self._use_template_yes.isChecked():
             self._template_preview.setPlainText("La vista previa se muestra al usar una plantilla guardada.")
@@ -648,7 +706,11 @@ class CampaignCreatePage(CampaignsSectionPage):
         template_name = str(self._template_payloads.get(template_id, {}).get("name") or "").strip()
         self._summary_values["alias"].setText(alias or "-")
         self._summary_values["list"].setText(leads_alias or "-")
+<<<<<<< HEAD
         self._summary_values["count"].setText(str(self._planned_launch_total()) if leads_alias else "0")
+=======
+        self._summary_values["count"].setText(str(self._lead_count()) if leads_alias else "0")
+>>>>>>> origin/main
         if self._use_template_yes.isChecked():
             self._summary_values["template"].setText(template_name or "Sin plantilla seleccionada")
         else:
@@ -701,7 +763,11 @@ class CampaignCreatePage(CampaignsSectionPage):
             "delay_max": self._delay_max.value(),
             "workers_requested": self._concurrency.value(),
             "headless": self._headless.isChecked(),
+<<<<<<< HEAD
             "total_leads": self._planned_launch_total(),
+=======
+            "total_leads": self._lead_count(),
+>>>>>>> origin/main
         }
         launch_request = CampaignLaunchRequest.from_payload(launch_input)
         self._start_submit_in_progress = True

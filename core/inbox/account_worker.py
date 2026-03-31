@@ -3,10 +3,20 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+<<<<<<< HEAD
 from src.auth.persistent_login import STORAGE_FILENAME, ensure_logged_in_async
 from src.browser_profile_paths import browser_storage_state_path
 from src.inbox_diagnostics import record_inbox_diagnostic
 from src.inbox.message_sender import TaskDirectClient, send_pack_messages
+=======
+from src.auth.persistent_login import ensure_logged_in_async
+from src.inbox.message_sender import (
+    TaskDirectClient,
+    _COMPOSER_SELECTORS,
+    _wait_for_visible_locator_async,
+    send_pack_messages,
+)
+>>>>>>> origin/main
 from src.playwright_service import BASE_PROFILES
 from src.proxy_payload import proxy_from_account
 from src.transport.session_manager import SessionManager, SyncSessionRuntime
@@ -21,7 +31,10 @@ class _PreparedRuntime:
             profiles_root=str(BASE_PROFILES),
             normalize_username=lambda value: str(value or "").strip().lstrip("@"),
             log_event=lambda *_args, **_kwargs: None,
+<<<<<<< HEAD
             subsystem="inbox",
+=======
+>>>>>>> origin/main
         )
         self._runtime = SyncSessionRuntime(
             account=self._account,
@@ -31,6 +44,7 @@ class _PreparedRuntime:
             open_timeout_seconds=120.0,
         )
 
+<<<<<<< HEAD
     def set_diagnostic_context(self, *, thread_key: str = "", job_type: str = "") -> None:
         clean_thread_key = str(thread_key or "").strip()
         clean_job_type = str(job_type or "").strip().lower()
@@ -41,6 +55,8 @@ class _PreparedRuntime:
             runtime_account["_inbox_diagnostic_thread_key"] = clean_thread_key
             runtime_account["_inbox_diagnostic_job_type"] = clean_job_type
 
+=======
+>>>>>>> origin/main
     def run_async(self, coro: Any, *, timeout: float | None = None) -> Any:
         return self._runtime.run_async(coro, timeout=timeout)
 
@@ -56,12 +72,18 @@ class _PreparedRuntime:
 
 
 class AccountWorker:
+<<<<<<< HEAD
     def __init__(self, account: dict[str, Any], *, diagnostics_store: Any | None = None) -> None:
         self._account = dict(account or {})
         if diagnostics_store is not None:
             self._account["_inbox_diagnostics_store"] = diagnostics_store
         self._runtime = _PreparedRuntime(self._account)
         self._diagnostics_store = diagnostics_store
+=======
+    def __init__(self, account: dict[str, Any]) -> None:
+        self._account = dict(account or {})
+        self._runtime = _PreparedRuntime(self._account)
+>>>>>>> origin/main
         self._client: TaskDirectClient | None = None
         self._thread_key = ""
         self._thread_id = ""
@@ -84,6 +106,7 @@ class AccountWorker:
                 client.close()
         self._runtime.shutdown()
 
+<<<<<<< HEAD
     def _record_prepare_event(
         self,
         *,
@@ -297,12 +320,43 @@ class AccountWorker:
                 exception=exc,
             )
             raise
+=======
+    def prepare(self, thread_row: dict[str, Any]) -> dict[str, Any]:
+        thread_key = str(thread_row.get("thread_key") or "").strip()
+        thread_id = str(thread_row.get("thread_id") or "").strip()
+        if not thread_key or not thread_id:
+            return {"ok": False, "reason": "invalid_thread"}
+        if thread_key == self._thread_key and self._client is not None:
+            ready_ok, _ready_reason = self._client.ensure_thread_ready_strict(thread_id)
+            if ready_ok:
+                self._focus_composer()
+                return {"ok": True, "reason": "already_prepared"}
+            self.shutdown()
+        self.shutdown()
+        self._client = TaskDirectClient(
+            self._runtime,
+            self._account,
+            thread_id=thread_id,
+            thread_href=str(thread_row.get("thread_href") or "").strip(),
+            bypass_account_quota=True,
+        )
+        ready_ok, ready_reason = self._client.ensure_thread_ready_strict(thread_id)
+        if not ready_ok:
+            self.shutdown()
+            return {"ok": False, "reason": ready_reason}
+        self._focus_composer()
+>>>>>>> origin/main
         self._thread_key = thread_key
         self._thread_id = thread_id
         return {"ok": True, "reason": "prepared"}
 
+<<<<<<< HEAD
     def send_text(self, thread_row: dict[str, Any], text: str, *, job_type: str = "manual_reply") -> dict[str, Any]:
         prepared = self.prepare(thread_row, job_type=job_type)
+=======
+    def send_text(self, thread_row: dict[str, Any], text: str) -> dict[str, Any]:
+        prepared = self.prepare(thread_row)
+>>>>>>> origin/main
         if not bool(prepared.get("ok", False)):
             return {"ok": False, "reason": str(prepared.get("reason") or "prepare_failed")}
         client = self._client
@@ -318,9 +372,14 @@ class AccountWorker:
         *,
         conversation_text: str,
         flow_config: dict[str, Any],
+<<<<<<< HEAD
         job_type: str = "auto_reply",
     ) -> dict[str, Any]:
         prepared = self.prepare(thread_row, job_type=job_type)
+=======
+    ) -> dict[str, Any]:
+        prepared = self.prepare(thread_row)
+>>>>>>> origin/main
         if not bool(prepared.get("ok", False)):
             return {"ok": False, "reason": str(prepared.get("reason") or "prepare_failed")}
         result = send_pack_messages(
@@ -335,6 +394,7 @@ class AccountWorker:
         self.shutdown()
         return dict(result or {})
 
+<<<<<<< HEAD
     def _focus_composer(self, thread_id: str) -> None:
         client = self._client
         if client is None:
@@ -346,3 +406,23 @@ class AccountWorker:
             return
         if str(reason or "").strip() == "composer_not_found":
             raise RuntimeError("composer_not_found")
+=======
+    def _focus_composer(self) -> None:
+        client = self._client
+        if client is None:
+            return
+        page = client._ensure_page()  # type: ignore[attr-defined]
+
+        async def _focus() -> None:
+            composer = await _wait_for_visible_locator_async(
+                page,
+                _COMPOSER_SELECTORS,
+                timeout_ms=8_000,
+            )
+            if composer is None:
+                raise RuntimeError("composer_not_found")
+            await page.wait_for_timeout(650)
+            await composer.click()
+
+        self._runtime.run_async(_focus(), timeout=10.0)
+>>>>>>> origin/main

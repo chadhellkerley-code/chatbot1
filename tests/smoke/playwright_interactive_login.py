@@ -23,7 +23,10 @@ from src.auth.onboarding import login_and_persist, build_proxy
 from src.instagram_adapter import human_login, is_logged_in
 from playwright.sync_api import sync_playwright
 from src.playwright_service import resolve_playwright_executable
+<<<<<<< HEAD
 from src.stealth.stealth_core import patch_context
+=======
+>>>>>>> origin/main
 import json
 
 def clear_screen():
@@ -165,7 +168,10 @@ def run_send_message(account_info, profile_path):
                     '--disable-dev-shm-usage',
                 ]
             )
+<<<<<<< HEAD
             patch_context(browser, account_info["username"])
+=======
+>>>>>>> origin/main
             
             page = browser.pages[0] if browser.pages else browser.new_page()
             

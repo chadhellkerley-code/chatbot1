@@ -290,4 +290,8 @@ def record_proxy_failure(username: str, exc: Optional[Exception] = None) -> None
 
 
 def clear_proxy(username: str) -> None:
+<<<<<<< HEAD
     _BINDINGS.pop(username, None)
+=======
+    _BINDINGS.pop(username, None)
+>>>>>>> origin/main

@@ -16,7 +16,10 @@ def get_session_manager(
     *,
     keep_browser_open_per_account: bool = False,
     log_event: Optional[Callable[..., None]] = None,
+<<<<<<< HEAD
     subsystem: str = "default",
+=======
+>>>>>>> origin/main
 ) -> SessionManager:
     """
     Canonical SessionManager factory.
@@ -33,6 +36,9 @@ def get_session_manager(
         profiles_root=str(BASE_PROFILES),
         normalize_username=normalize_browser_profile_username,
         log_event=log_event or _noop_log_event,
+<<<<<<< HEAD
         subsystem=subsystem,
+=======
+>>>>>>> origin/main
     )
 

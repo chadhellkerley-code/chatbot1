@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+<<<<<<< HEAD
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+=======
+from typing import TYPE_CHECKING, Callable, Optional
+>>>>>>> origin/main
 
 from playwright.async_api import Locator, Page
 
@@ -19,7 +23,10 @@ class MessageComposer:
         thread_composers: tuple[str, ...],
         send_buttons: tuple[str, ...],
         composer_visible_timeout_ms: int,
+<<<<<<< HEAD
         usable_composer_timeout_ms: int,
+=======
+>>>>>>> origin/main
         type_delay_min_ms: int,
         type_delay_max_ms: int,
         log_event: Callable[..., None],
@@ -28,11 +35,15 @@ class MessageComposer:
         self._thread_composers = tuple(thread_composers)
         self._send_buttons = tuple(send_buttons)
         self._composer_visible_timeout_ms = int(composer_visible_timeout_ms)
+<<<<<<< HEAD
         self._usable_composer_timeout_ms = int(usable_composer_timeout_ms)
+=======
+>>>>>>> origin/main
         self._type_delay_min_ms = int(type_delay_min_ms)
         self._type_delay_max_ms = int(type_delay_max_ms)
         self._log_event = log_event
 
+<<<<<<< HEAD
     @staticmethod
     def _surface_failed_checks(
         meta: Dict[str, Any],
@@ -187,6 +198,9 @@ class MessageComposer:
             return True
 
     async def thread_composer(self, page: Page, *, require_usable: bool = False) -> Optional[Locator]:
+=======
+    async def thread_composer(self, page: Page) -> Optional[Locator]:
+>>>>>>> origin/main
         for sel in self._thread_composers:
             loc = page.locator(sel)
             try:
@@ -200,11 +214,22 @@ class MessageComposer:
                         continue
                 except Exception:
                     continue
+<<<<<<< HEAD
                 if not await self._composer_outside_overlay(candidate):
                     continue
                 if require_usable and not await self._composer_typeable(candidate):
                     continue
                 return candidate
+=======
+                try:
+                    in_overlay = await candidate.evaluate(
+                        "el => !!el && !!el.closest('[role=\"dialog\"], [aria-modal=\"true\"]')"
+                    )
+                except Exception:
+                    in_overlay = False
+                if not in_overlay:
+                    return candidate
+>>>>>>> origin/main
         return None
 
     async def wait_composer_visible(self, page: Page, *, deadline: float) -> Optional[Locator]:
@@ -223,6 +248,7 @@ class MessageComposer:
                 break
         return None
 
+<<<<<<< HEAD
     async def wait_for_usable_composer(self, page: Page, *, deadline: float) -> Optional[Locator]:
         timeout_ms = self._sender._remaining_ms(deadline, self._usable_composer_timeout_ms)
         if timeout_ms <= 0:
@@ -683,6 +709,10 @@ class MessageComposer:
 
     async def focus_and_clear_composer(self, page: Page, composer: Locator) -> None:
         await self._focus_composer_best_effort(composer)
+=======
+    async def focus_and_clear_composer(self, page: Page, composer: Locator) -> None:
+        await composer.click()
+>>>>>>> origin/main
         try:
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Delete")

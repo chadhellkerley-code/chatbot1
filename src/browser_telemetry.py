@@ -13,6 +13,7 @@ _ALLOWED_STAGES = {
     "session_open_start",
     "session_open_end",
     "browser_open",
+<<<<<<< HEAD
     "sender_job_received",
     "page_attached",
     "workspace_ready",
@@ -32,6 +33,15 @@ _ALLOWED_STAGES = {
     "send_success",
     "send_fail",
     "exact_fail_reason",
+=======
+    "workspace_ready",
+    "inbox_ready",
+    "thread_open",
+    "composer_ready",
+    "send_attempt",
+    "send_success",
+    "send_fail",
+>>>>>>> origin/main
     "session_recovery",
 }
 

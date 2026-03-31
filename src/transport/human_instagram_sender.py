@@ -17,9 +17,15 @@ from playwright.async_api import Locator, Page
 from core.account_limits import account_message_limit, can_send_message_for_account
 from paths import storage_root
 from runtime.runtime import STOP_EVENT
+<<<<<<< HEAD
 from src.auth.persistent_login import ChallengeRequired, ensure_logged_in_async
 from src.browser_telemetry import log_browser_stage
 from src.playwright_service import BASE_PROFILES, ensure_page_campaign_desktop_layout
+=======
+from src.auth.persistent_login import ensure_logged_in_async
+from src.browser_telemetry import log_browser_stage
+from src.playwright_service import BASE_PROFILES
+>>>>>>> origin/main
 from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
 from src.runtime.playwright_runtime import (
     PlaywrightRuntimeCancelledError,
@@ -29,7 +35,11 @@ from src.runtime.playwright_runtime import (
 from src.transport.delivery_verifier import DeliveryVerifier
 from src.transport.inbox_navigator import InboxNavigator
 from src.transport.message_composer import MessageComposer
+<<<<<<< HEAD
 from src.transport.session_manager import ManagedSession, NavigationLockedError, SessionManager
+=======
+from src.transport.session_manager import ManagedSession, SessionManager
+>>>>>>> origin/main
 from src.transport.thread_resolver import SidebarThreadResolver, ThreadOpenResult
 
 logger = logging.getLogger(__name__)
@@ -41,7 +51,10 @@ MAX_FLOW_SECONDS = max(20.0, float(os.getenv("HUMAN_DM_MAX_FLOW_SECONDS", "75"))
 INBOX_READY_TIMEOUT_MS = min(22_000, int(MAX_FLOW_SECONDS * 1000))
 THREAD_OPEN_TIMEOUT_MS = max(6_000, int(os.getenv("HUMAN_DM_THREAD_OPEN_TIMEOUT_MS", "12000")))
 COMPOSER_VISIBLE_TIMEOUT_MS = max(4_000, int(os.getenv("HUMAN_DM_COMPOSER_VISIBLE_TIMEOUT_MS", "8000")))
+<<<<<<< HEAD
 USABLE_COMPOSER_TIMEOUT_MS = max(1_500, int(os.getenv("HUMAN_DM_USABLE_COMPOSER_TIMEOUT_MS", "3000")))
+=======
+>>>>>>> origin/main
 SEND_NETWORK_TIMEOUT_MS = max(4_000, int(os.getenv("HUMAN_DM_SEND_NETWORK_TIMEOUT_MS", "8000")))
 TYPE_DELAY_MIN_MS = max(8, int(os.getenv("HUMAN_DM_TYPE_DELAY_MIN_MS", "18")))
 TYPE_DELAY_MAX_MS = max(TYPE_DELAY_MIN_MS, int(os.getenv("HUMAN_DM_TYPE_DELAY_MAX_MS", "45")))
@@ -55,6 +68,7 @@ INBOX_READY_SELECTORS = (
     "div[role='navigation'] input[name='searchInput']",
     "div[role='navigation'] input[placeholder*='Search']",
     "div[role='navigation'] input[placeholder*='Buscar']",
+<<<<<<< HEAD
     "div[role='navigation'] [aria-label='New message']",
     "div[role='navigation'] [aria-label='Nuevo mensaje']",
     "div[role='navigation'] [aria-label='Enviar mensaje']",
@@ -116,6 +130,22 @@ COMPOSE_CONFIRM_BUTTONS = (
     "div[role='dialog'] div[role='button']:has-text('Siguiente')",
     "div[role='dialog'] button:has-text('Next')",
     "div[role='dialog'] div[role='button']:has-text('Next')",
+=======
+    "div[role='navigation'] a[href*='/direct/t/']",
+)
+SIDEBAR_SEARCH_INPUTS = (
+    "div[role='navigation'] input[name='searchInput']",
+    "div[role='navigation'] input[placeholder*='Search']",
+    "div[role='navigation'] input[placeholder*='Buscar']",
+    "div[role='navigation'] [role='searchbox']",
+)
+SIDEBAR_RESULT_ROWS = (
+    "div[role='navigation'] ul li",
+    "div[role='navigation'] [role='listitem']",
+    "div[role='navigation'] div[role='button'][tabindex='0']",
+    "div[role='navigation'] div[role='button']",
+    "div[role='navigation'] a[href*='/direct/t/']",
+>>>>>>> origin/main
 )
 
 THREAD_COMPOSERS = (
@@ -360,6 +390,7 @@ async def _debug_dump_outer_html(locator: Optional[Locator], stage: str, *, tag:
         return None
 
 class HumanInstagramSender:
+<<<<<<< HEAD
     def __init__(
         self,
         headless: bool = True,
@@ -376,6 +407,11 @@ class HumanInstagramSender:
         self._reconcile_live_quota = bool(reconcile_live_quota)
         self._allow_header_thread_confirmation = bool(allow_header_thread_confirmation)
         self._enforce_account_quota = bool(enforce_account_quota)
+=======
+    def __init__(self, headless: bool = True, *, keep_browser_open_per_account: bool = False) -> None:
+        self.headless = headless
+        self.keep_browser_open_per_account = bool(keep_browser_open_per_account)
+>>>>>>> origin/main
         self._active_flow_hook: Optional[Callable[[str, bool], None]] = None
         self._session_manager = SessionManager(
             headless=self.headless,
@@ -383,7 +419,10 @@ class HumanInstagramSender:
             profiles_root=BASE_PROFILES,
             normalize_username=self._normalize_username,
             log_event=_dm_log,
+<<<<<<< HEAD
             subsystem="campaign",
+=======
+>>>>>>> origin/main
         )
         self._delivery_verifier = DeliveryVerifier(self)
         self._inbox_navigator = InboxNavigator(
@@ -398,17 +437,25 @@ class HumanInstagramSender:
             thread_composers=THREAD_COMPOSERS,
             send_buttons=SEND_BUTTONS,
             composer_visible_timeout_ms=COMPOSER_VISIBLE_TIMEOUT_MS,
+<<<<<<< HEAD
             usable_composer_timeout_ms=USABLE_COMPOSER_TIMEOUT_MS,
+=======
+>>>>>>> origin/main
             type_delay_min_ms=TYPE_DELAY_MIN_MS,
             type_delay_max_ms=TYPE_DELAY_MAX_MS,
             log_event=_dm_log,
         )
         self._thread_resolver = SidebarThreadResolver(
             self,
+<<<<<<< HEAD
             compose_triggers=COMPOSE_TRIGGER_SELECTORS,
             search_inputs=COMPOSE_SEARCH_INPUTS,
             result_rows=SIDEBAR_RESULT_ROWS,
             confirm_buttons=COMPOSE_CONFIRM_BUTTONS,
+=======
+            search_inputs=SIDEBAR_SEARCH_INPUTS,
+            result_rows=SIDEBAR_RESULT_ROWS,
+>>>>>>> origin/main
             thread_open_timeout_ms=THREAD_OPEN_TIMEOUT_MS,
             sidebar_row_timeout_ms=min(8_000, THREAD_OPEN_TIMEOUT_MS),
             log_event=_dm_log,
@@ -417,6 +464,7 @@ class HumanInstagramSender:
     def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
         self._session_manager.close_all_sessions_sync(timeout=timeout)
 
+<<<<<<< HEAD
     def close_account_session_sync(self, username: str, *, timeout: float = 5.0) -> None:
         clean_username = self._normalize_username(str(username or ""))
         if not clean_username:
@@ -431,11 +479,17 @@ class HumanInstagramSender:
         except Exception:
             pass
 
+=======
+>>>>>>> origin/main
     async def _sleep(self, low: float, high: float) -> None:
         await asyncio.sleep(random.uniform(low, high))
 
     def _normalize_username(self, username: str) -> str:
+<<<<<<< HEAD
         return username.strip().lstrip("@").split("?", 1)[0].lower()
+=======
+        return username.strip().lstrip("@").split("?", 1)[0]
+>>>>>>> origin/main
 
     def _message_snippet(self, text: str, limit: int = 48) -> str:
         for line in (text or "").splitlines():
@@ -444,6 +498,7 @@ class HumanInstagramSender:
                 return cleaned[:limit]
         return (text or "").strip()[:limit]
 
+<<<<<<< HEAD
     async def _ensure_campaign_desktop_layout(self, page: Optional[Page]) -> bool:
         if self.headless or page is None:
             return False
@@ -456,6 +511,8 @@ class HumanInstagramSender:
         except Exception:
             return False
 
+=======
+>>>>>>> origin/main
     def _normalize_text_match(self, value: str) -> str:
         return re.sub(r"\s+", " ", (value or "").strip()).lower()
 
@@ -483,6 +540,7 @@ class HumanInstagramSender:
                 return True, token
         return False, ""
 
+<<<<<<< HEAD
     async def _current_thread_matches_target(self, page: Page, username: str) -> tuple[bool, str]:
         current_url = page.url if page else ""
         thread_id = self._thread_resolver.extract_thread_id_from_direct_url(current_url)
@@ -566,6 +624,8 @@ class HumanInstagramSender:
             matched = False
         return bool(matched), thread_id
 
+=======
+>>>>>>> origin/main
     def _is_probable_message_noise(self, value: str) -> bool:
         text = self._normalize_text_match(value)
         if not text:
@@ -644,6 +704,7 @@ class HumanInstagramSender:
             )
         )
 
+<<<<<<< HEAD
     @staticmethod
     def _session_open_reason_code(error: BaseException) -> str:
         if isinstance(error, ChallengeRequired):
@@ -679,6 +740,8 @@ class HumanInstagramSender:
                 return code
         return "SESSION_OPEN_FAILED"
 
+=======
+>>>>>>> origin/main
     async def _recover_inbox_after_chrome_error(self, page: Page, *, deadline: float) -> bool:
         if not self._is_chrome_error_url(page):
             return False
@@ -846,15 +909,24 @@ class HumanInstagramSender:
             sent_today = max(0, int(account.get("sent_today")))
         except Exception:
             sent_today = -1
+<<<<<<< HEAD
         if sent_today >= 0 and not self._reconcile_live_quota:
             if limit is None:
                 return True, sent_today, None
             return sent_today < limit, sent_today, limit
         _live_can_send, live_sent_today, live_limit = can_send_message_for_account(
+=======
+        if sent_today >= 0:
+            if limit is None:
+                return True, sent_today, None
+            return sent_today < limit, sent_today, limit
+        return can_send_message_for_account(
+>>>>>>> origin/main
             account=account,
             username=str(username),
             default=None,
         )
+<<<<<<< HEAD
         resolved_sent_today = max(max(0, int(live_sent_today or 0)), sent_today if sent_today >= 0 else 0)
         resolved_limit = None
         try:
@@ -867,6 +939,8 @@ class HumanInstagramSender:
         if resolved_limit is None:
             return bool(_live_can_send), resolved_sent_today, None
         return resolved_sent_today < resolved_limit, resolved_sent_today, resolved_limit
+=======
+>>>>>>> origin/main
 
 
     async def _capture_success(self, page: Optional[Page], username: str, target: str) -> Optional[str]:
@@ -963,7 +1037,11 @@ class HumanInstagramSender:
             return ThreadOpenResult(False, "invalid_username")
 
         self._checkpoint(deadline=deadline, stage="opening_dm")
+<<<<<<< HEAD
         _dm_log("OPEN_DM_COMPOSE_START", target_username=target, url=page.url if page else "")
+=======
+        _dm_log("OPEN_DM_SIDEBAR_START", target_username=target, url=page.url if page else "")
+>>>>>>> origin/main
 
         inbox_ready = await self._await_with_deadline(
             self._inbox_navigator.ensure_inbox_surface(page, deadline=deadline),
@@ -980,7 +1058,11 @@ class HumanInstagramSender:
                 reason="inbox_not_ready",
                 url=page.url if page else "",
             )
+<<<<<<< HEAD
             _dm_log("OPEN_DM_COMPOSE_INBOX_FAIL", target_username=target, url=page.url if page else "")
+=======
+            _dm_log("OPEN_DM_SIDEBAR_INBOX_FAIL", target_username=target, url=page.url if page else "")
+>>>>>>> origin/main
             return ThreadOpenResult(False, "inbox_not_ready")
         log_browser_stage(
             component="campaign_dm_sender",
@@ -992,6 +1074,7 @@ class HumanInstagramSender:
         )
 
         self._checkpoint(deadline=deadline, stage="opening_dm")
+<<<<<<< HEAD
         cleaned_modal_state = await self._thread_resolver.cleanup_stale_compose_state(page, deadline=deadline)
         if not cleaned_modal_state:
             _dm_log("OPEN_DM_STALE_DIALOG_CLEANUP_FAIL", target_username=target, url=page.url if page else "")
@@ -1018,6 +1101,19 @@ class HumanInstagramSender:
                 await self._thread_resolver.cleanup_stale_compose_state(page, deadline=deadline)
         _dm_log(
             "OPEN_DM_COMPOSE_RESULT",
+=======
+        open_result = await self._await_with_deadline(
+            self._thread_resolver.open_thread_from_sidebar(
+                page,
+                target,
+                deadline=deadline,
+            ),
+            deadline=deadline,
+            stage="opening_dm",
+        )
+        _dm_log(
+            "OPEN_DM_SIDEBAR_RESULT",
+>>>>>>> origin/main
             target_username=target,
             opened=open_result.opened,
             reason=open_result.reason,
@@ -1136,6 +1232,7 @@ class HumanInstagramSender:
             stage_callback=stage_callback,
         )
         flow_timeout = max(10.0, float(flow_timeout_seconds or MAX_FLOW_SECONDS))
+<<<<<<< HEAD
         cancel_hook = None if self.keep_browser_open_per_account else (lambda: self.close_all_sessions_sync(timeout=10.0))
         heartbeat_account = str(account.get("username") or "").strip()
         heartbeat_lead = self._normalize_username(target_username)
@@ -1156,13 +1253,19 @@ class HumanInstagramSender:
                 reason="sync_wait",
             )
 
+=======
+>>>>>>> origin/main
         try:
             return run_coroutine_sync(
                 coro,
                 timeout=flow_timeout + 5.0,
                 cancel_reason="campaign_send_cancelled",
+<<<<<<< HEAD
                 on_cancel=cancel_hook,
                 on_poll=_poll_heartbeat,
+=======
+                on_cancel=lambda: self.close_all_sessions_sync(timeout=2.0),
+>>>>>>> origin/main
             )
         except PlaywrightRuntimeCancelledError:
             return self._result(
@@ -1212,6 +1315,7 @@ class HumanInstagramSender:
         if not normalized_target:
             return self._result(False, "send_not_confirmed", payload, return_detail=return_detail, return_payload=return_payload)
 
+<<<<<<< HEAD
         if self._enforce_account_quota:
             can_send, sent_today, limit = self._resolve_account_quota(account, str(username))
             if not can_send:
@@ -1227,6 +1331,22 @@ class HumanInstagramSender:
                     return_detail=return_detail,
                     return_payload=return_payload,
                 )
+=======
+        can_send, sent_today, limit = self._resolve_account_quota(account, str(username))
+        if not can_send:
+            payload["reason_code"] = "ACCOUNT_QUOTA_REACHED"
+            payload["quota"] = {
+                "sent_today": int(sent_today),
+                "limit": int(limit or 0),
+            }
+            return self._result(
+                False,
+                "account_quota_reached",
+                payload,
+                return_detail=return_detail,
+                return_payload=return_payload,
+            )
+>>>>>>> origin/main
 
         debug_token = None
         debug_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
@@ -1247,8 +1367,11 @@ class HumanInstagramSender:
 
         session: Optional[ManagedSession] = None
         page: Optional[Page] = None
+<<<<<<< HEAD
         navigation_owner = f"campaign:send_message:{normalized_target}"
         navigation_acquired = False
+=======
+>>>>>>> origin/main
         proxy_payload = normalize_playwright_proxy(proxy) if proxy else proxy_from_account(account)
         flow_started_at = time.time()
         flow_timeout = max(10.0, float(flow_timeout_seconds or MAX_FLOW_SECONDS))
@@ -1275,6 +1398,7 @@ class HumanInstagramSender:
                 flow_state["current"] = text_value
             _flow_log(f"[FLOW] {text_value}")
 
+<<<<<<< HEAD
         async def _emit_flow_stage(
             stage_name: str,
             *,
@@ -1308,6 +1432,8 @@ class HumanInstagramSender:
                 outcome=str(outcome or "").strip(),
             )
 
+=======
+>>>>>>> origin/main
         async def _fail(
             detail: str,
             *,
@@ -1378,7 +1504,10 @@ class HumanInstagramSender:
                     await self._cooperative_sleep(delay_total, deadline=deadline, stage="delay")
 
             self._notify_stage(stage_callback, "opening_session", account=username, lead=normalized_target)
+<<<<<<< HEAD
             session_open_started = time.perf_counter()
+=======
+>>>>>>> origin/main
             session = await self._await_with_deadline(
                 self._session_manager.open_session(
                     account=account,
@@ -1390,6 +1519,7 @@ class HumanInstagramSender:
                 stage="opening_session",
             )
             page = session.page
+<<<<<<< HEAD
             await _emit_flow_stage(
                 "session_open",
                 started_at=session_open_started,
@@ -1413,6 +1543,8 @@ class HumanInstagramSender:
                     started_at=navigation_started,
                     outcome="ok",
                 )
+=======
+>>>>>>> origin/main
             _dm_log("LOGIN_OK", url=page.url if page else "")
 
             payload["normalized_username"] = normalized_target
@@ -1422,8 +1554,11 @@ class HumanInstagramSender:
                 account=username,
                 lead=normalized_target,
             )
+<<<<<<< HEAD
             _flow_event("opening thread", True)
             open_thread_started = time.perf_counter()
+=======
+>>>>>>> origin/main
             open_result = await self._await_with_deadline(
                 self._open_thread_via_sidebar_flow(
                     page,
@@ -1434,6 +1569,7 @@ class HumanInstagramSender:
                 stage="opening_dm",
             )
             payload["thread_open_method"] = open_result.method
+<<<<<<< HEAD
             if not open_result.opened and open_result.reason == "chrome_error" and page is not None:
                 recovered = await self._await_with_deadline(
                     self._recover_inbox_after_chrome_error(page, deadline=deadline),
@@ -1461,6 +1597,8 @@ class HumanInstagramSender:
                     else (open_result.reason or "failed")
                 ),
             )
+=======
+>>>>>>> origin/main
             if not open_result.opened:
                 if open_result.reason == "username_not_found":
                     detail = "SKIPPED_USERNAME_NOT_FOUND"
@@ -1468,7 +1606,11 @@ class HumanInstagramSender:
                 elif open_result.reason == "inbox_not_ready":
                     detail = "INBOX_NOT_READY"
                     skip_reason = None
+<<<<<<< HEAD
                 elif open_result.reason in {"ui_not_found", "sidebar_unavailable"}:
+=======
+                elif open_result.reason == "ui_not_found":
+>>>>>>> origin/main
                     detail = "UI_NOT_FOUND"
                     skip_reason = None
                 elif open_result.reason == "chrome_error":
@@ -1485,6 +1627,7 @@ class HumanInstagramSender:
                 )
             payload["thread_id"] = open_result.thread_id
 
+<<<<<<< HEAD
             _flow_event("auditing chat surface", True)
             composer_started = time.perf_counter()
             composer, surface_meta = await self._await_with_deadline(
@@ -1510,10 +1653,25 @@ class HumanInstagramSender:
                     selector=" | ".join(THREAD_COMPOSERS),
                     outcome=surface_reason.lower(),
                 )
+=======
+            _flow_event("waiting chat load", True)
+            try:
+                composer = await self._message_composer.thread_composer(page)
+            except Exception:
+                composer = None
+            if composer is None:
+                composer = await self._await_with_deadline(
+                    self._message_composer.wait_composer_visible(page, deadline=deadline),
+                    deadline=deadline,
+                    stage="opening_dm",
+                )
+            if composer is None:
+>>>>>>> origin/main
                 _stage(
                     "composer_ready",
                     "failed",
                     thread_id=str(open_result.thread_id or ""),
+<<<<<<< HEAD
                     reason=surface_reason.lower(),
                 )
                 payload["composer_reason_code"] = surface_reason
@@ -1528,14 +1686,28 @@ class HumanInstagramSender:
                 selector=" | ".join(THREAD_COMPOSERS),
                 outcome="ok_normalized" if bool(surface_meta.get("normalized")) else "ok",
             )
+=======
+                    reason="composer_not_found",
+                )
+                return await _fail(
+                    "THREAD_OPEN_FAILED",
+                    stage="THREAD_OPEN_FAILED",
+                    reason_code="THREAD_OPEN_FAILED",
+                )
+>>>>>>> origin/main
             _stage(
                 "composer_ready",
                 "ok",
                 thread_id=str(open_result.thread_id or ""),
                 url=page.url if page else "",
+<<<<<<< HEAD
                 normalized=bool(surface_meta.get("normalized")),
             )
             _flow_event("composer ready")
+=======
+            )
+            _flow_event("chat loaded")
+>>>>>>> origin/main
 
             self._notify_stage(
                 stage_callback,
@@ -1552,6 +1724,7 @@ class HumanInstagramSender:
                 thread_id=str(open_result.thread_id or ""),
                 message_length=len(text),
             )
+<<<<<<< HEAD
             _flow_event("typing message", True)
             type_started = time.perf_counter()
             await _emit_flow_stage(
@@ -1580,23 +1753,36 @@ class HumanInstagramSender:
 
             _flow_event("capturing delivery snapshot", True)
             snapshot_started = time.perf_counter()
+=======
+>>>>>>> origin/main
             delivery_snapshot = await self._await_with_deadline(
                 self._delivery_verifier.build_snapshot(page, text, limit=30),
                 deadline=deadline,
                 stage="sending",
             )
+<<<<<<< HEAD
             await _emit_flow_stage(
                 "delivery_snapshot",
                 started_at=snapshot_started,
                 outcome="ok",
+=======
+
+            await self._await_with_deadline(
+                self._message_composer.type_message(page, composer, text),
+                deadline=deadline,
+                stage="sending",
+>>>>>>> origin/main
             )
 
             network_timeout = self._remaining_ms(deadline, SEND_NETWORK_TIMEOUT_MS)
             if network_timeout <= 0:
                 return await _fail("send_not_confirmed", stage="SEND_NETWORK_TIMEOUT")
 
+<<<<<<< HEAD
             _flow_event("triggering send", True)
             send_trigger_started = time.perf_counter()
+=======
+>>>>>>> origin/main
             network_waiter = asyncio.create_task(
                 self._delivery_verifier.wait_send_network_ok(
                     page,
@@ -1630,12 +1816,15 @@ class HumanInstagramSender:
                 if current_text:
                     fallback_clicked = await self._message_composer.click_send_button(page)
             _dm_log("SEND_TRIGGER", enter_ok=enter_ok, fallback_clicked=fallback_clicked, url=page.url if page else "")
+<<<<<<< HEAD
             await _emit_flow_stage(
                 "send_trigger",
                 started_at=send_trigger_started,
                 selector="Enter | " + " | ".join(SEND_BUTTONS),
                 outcome="enter" if enter_ok else ("button_click" if fallback_clicked else "no_trigger_confirmation"),
             )
+=======
+>>>>>>> origin/main
             self._notify_stage(
                 stage_callback,
                 "sending",
@@ -1643,8 +1832,11 @@ class HumanInstagramSender:
                 lead=normalized_target,
                 reason="verify_send",
             )
+<<<<<<< HEAD
             _flow_event("waiting dom confirmation", True)
             dom_verify_started = time.perf_counter()
+=======
+>>>>>>> origin/main
             dom_ok, dom_meta = await self._await_with_deadline(
                 self._delivery_verifier.wait_dom_send_confirmation(
                     page,
@@ -1657,11 +1849,14 @@ class HumanInstagramSender:
                 stage="sending",
             )
             payload["dom_verify"] = dom_meta
+<<<<<<< HEAD
             await _emit_flow_stage(
                 "dom_verify",
                 started_at=dom_verify_started,
                 outcome=dom_meta.get("mode") if dom_ok else f"failed:{dom_meta.get('mode')}",
             )
+=======
+>>>>>>> origin/main
             _dm_log(
                 "SEND_DOM_VERIFY",
                 ok=dom_ok,
@@ -1673,8 +1868,11 @@ class HumanInstagramSender:
 
             net_ok = False
             net_meta: Dict[str, Any] = {}
+<<<<<<< HEAD
             network_verify_started = time.perf_counter()
             _flow_event("waiting network confirmation", True)
+=======
+>>>>>>> origin/main
             if network_waiter.done():
                 net_ok, net_meta = await network_waiter
             elif not dom_ok:
@@ -1693,6 +1891,7 @@ class HumanInstagramSender:
                     pass
 
             payload["network"] = net_meta
+<<<<<<< HEAD
             await _emit_flow_stage(
                 "network_verify",
                 started_at=network_verify_started,
@@ -1702,6 +1901,8 @@ class HumanInstagramSender:
                     or ("ok" if net_ok else "no_response")
                 ),
             )
+=======
+>>>>>>> origin/main
             _dm_log(
                 "SEND_NETWORK_RESULT",
                 ok=net_ok,
@@ -1711,8 +1912,11 @@ class HumanInstagramSender:
                 last_url=net_meta.get("last_url"),
             )
 
+<<<<<<< HEAD
             _flow_event("waiting bubble confirmation", True)
             bubble_verify_started = time.perf_counter()
+=======
+>>>>>>> origin/main
             bubble_ok, bubble_meta = await self._await_with_deadline(
                 self._delivery_verifier.verify_message_visible_after_send(
                     page,
@@ -1725,11 +1929,14 @@ class HumanInstagramSender:
                 stage="sending",
             )
             payload["bubble_verify"] = bubble_meta
+<<<<<<< HEAD
             await _emit_flow_stage(
                 "bubble_verify",
                 started_at=bubble_verify_started,
                 outcome=bubble_meta.get("mode") if bubble_ok else f"failed:{bubble_meta.get('mode')}",
             )
+=======
+>>>>>>> origin/main
             composer_after = (await self._message_composer.composer_text(composer)).strip()
             composer_cleared = composer_after == ""
             payload["composer_cleared"] = composer_cleared
@@ -1754,8 +1961,11 @@ class HumanInstagramSender:
                 return await _success(decision.detail, verify_source=decision.verify_source)
 
             if composer_cleared:
+<<<<<<< HEAD
                 _flow_event("refreshing thread confirmation", True)
                 refresh_started = time.perf_counter()
+=======
+>>>>>>> origin/main
                 refresh_ok, refresh_source, refresh_meta = await self._reconcile_unverified_via_thread_refresh(
                     page,
                     thread_id=str(open_result.thread_id or ""),
@@ -1765,11 +1975,14 @@ class HumanInstagramSender:
                     deadline=deadline,
                 )
                 payload["thread_refresh_verify"] = refresh_meta
+<<<<<<< HEAD
                 await _emit_flow_stage(
                     "thread_refresh_verify",
                     started_at=refresh_started,
                     outcome=refresh_meta.get("mode") if refresh_ok else f"failed:{refresh_meta.get('mode')}",
                 )
+=======
+>>>>>>> origin/main
                 _dm_log(
                     "SEND_THREAD_REFRESH_VERIFY",
                     ok=refresh_ok,
@@ -1799,6 +2012,7 @@ class HumanInstagramSender:
 
         except CampaignSendCancelled:
             raise
+<<<<<<< HEAD
         except NavigationLockedError as exc:
             payload["verified"] = False
             payload["reason_code"] = "NAVIGATION_LOCKED"
@@ -1811,6 +2025,8 @@ class HumanInstagramSender:
                 return_detail=return_detail,
                 return_payload=return_payload,
             )
+=======
+>>>>>>> origin/main
         except CampaignSendDeadlineExceeded as exc:
             payload["flow_stage"] = exc.stage
             payload["flow_stage_detail"] = flow_state.get("current") or ""
@@ -1836,7 +2052,11 @@ class HumanInstagramSender:
             payload["method"] = "outbound_compose"
             payload["error"] = repr(exc)
             if session is None:
+<<<<<<< HEAD
                 payload["reason_code"] = self._session_open_reason_code(exc)
+=======
+                payload["reason_code"] = "SESSION_OPEN_FAILED"
+>>>>>>> origin/main
                 payload["flow_stage"] = "opening_session"
             elif page is not None and not payload.get("thread_id"):
                 payload["reason_code"] = "THREAD_OPEN_FAILED"
@@ -1867,11 +2087,19 @@ class HumanInstagramSender:
                 payload["diagnostic_ref"] = artifacts.get("meta") or artifacts.get("screenshot")
             _dm_log("EXCEPTION", url=page.url if page else "", error=repr(exc), screenshot=snap, main_html=html)
             detail = "send_not_confirmed"
+<<<<<<< HEAD
             if payload.get("flow_stage") == "opening_session":
                 detail = "session_open_failed"
             elif payload.get("flow_stage") == "opening_dm":
                 detail = "thread_open_failed"
             elif payload.get("flow_stage") == "sending":
+=======
+            if payload.get("reason_code") == "SESSION_OPEN_FAILED":
+                detail = "session_open_failed"
+            elif payload.get("reason_code") == "THREAD_OPEN_FAILED":
+                detail = "thread_open_failed"
+            elif payload.get("reason_code") == "SEND_FAILED":
+>>>>>>> origin/main
                 detail = "send_failed"
                 _stage(
                     "send_fail",
@@ -1897,8 +2125,11 @@ class HumanInstagramSender:
             except Exception:
                 current_url = ""
 
+<<<<<<< HEAD
             if navigation_acquired and isinstance(session, ManagedSession):
                 await session.release_navigation_async(navigation_owner)
+=======
+>>>>>>> origin/main
             await self._session_manager.finalize_session(session, current_url=current_url)
             self._active_flow_hook = None
 

@@ -1,7 +1,10 @@
 ﻿from __future__ import annotations
 
 import asyncio
+<<<<<<< HEAD
 import contextlib
+=======
+>>>>>>> origin/main
 import logging
 import os
 import re
@@ -11,8 +14,11 @@ from typing import Optional, Tuple, Union
 
 from playwright.async_api import BrowserContext, Page
 from paths import logs_root
+<<<<<<< HEAD
 from src.browser_telemetry import log_browser_stage
 from src.inbox_diagnostics import record_inbox_diagnostic
+=======
+>>>>>>> origin/main
 from src.instagram_adapter import (
     BASE_URL,
     check_logged_in,
@@ -21,21 +27,31 @@ from src.instagram_adapter import (
     is_logged_in,
     _ensure_login_view,
 )
+<<<<<<< HEAD
 from src.campaign_timezone_policy import (
     CampaignBrowserTimezoneResolution,
     CampaignTimezoneResolutionError,
     resolve_campaign_browser_timezone,
 )
+=======
+>>>>>>> origin/main
 from src.playwright_service import BASE_PROFILES, PlaywrightService, get_page
 from src.proxy_payload import normalize_playwright_proxy, proxy_from_account
 from src.runtime.playwright_runtime import (
     PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
     PLAYWRIGHT_BROWSER_MODE_MANAGED,
+<<<<<<< HEAD
     PersistentProfileOwnershipError,
     is_driver_crash_error,
     run_coroutine_sync,
 )
 from src.browser_profile_paths import browser_profile_dir, browser_storage_state_path
+=======
+    is_driver_crash_error,
+    run_coroutine_sync,
+)
+from src.browser_profile_paths import browser_storage_state_path
+>>>>>>> origin/main
 
 logger = logging.getLogger(__name__)
 
@@ -190,14 +206,20 @@ def _login_playwright_service(
     headless: bool,
     profile_root: Path,
     browser_mode: str = PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
+<<<<<<< HEAD
     subsystem: str = "auth",
+=======
+>>>>>>> origin/main
 ) -> PlaywrightService:
     return PlaywrightService(
         headless=headless,
         base_profiles=profile_root,
         prefer_persistent=True,
         browser_mode=browser_mode,
+<<<<<<< HEAD
         subsystem=subsystem,
+=======
+>>>>>>> origin/main
     )
 
 
@@ -210,6 +232,7 @@ def _has_persistent_profile_state(profile_dir: Path) -> bool:
 
     storage_state = profile_dir / STORAGE_FILENAME
     try:
+<<<<<<< HEAD
         has_storage_state = bool(storage_state.exists())
     except Exception:
         return False
@@ -269,6 +292,20 @@ async def _is_chrome_profile_picker(page: Page, ctx: Optional[BrowserContext] = 
         except Exception:
             continue
     return False
+=======
+        if storage_state.exists():
+            return True
+    except Exception:
+        return False
+
+    try:
+        next(profile_dir.iterdir())
+    except StopIteration:
+        return False
+    except Exception:
+        return False
+    return True
+>>>>>>> origin/main
 
 
 def _is_challenge_url(url: str) -> bool:
@@ -376,8 +413,13 @@ async def ensure_logged_in_async(
         derived_profile_root = None
 
     profile_root_path = Path(derived_profile_root or BASE_PROFILES)
+<<<<<<< HEAD
     account_profile = browser_profile_dir(username, profiles_root=profile_root_path)
     storage_state = _storage_state_path(username, profile_root_path)
+=======
+    storage_state = _storage_state_path(username, profile_root_path)
+    account_profile = storage_state.parent
+>>>>>>> origin/main
     if derived_proxy is not None:
         proxy_payload = normalize_playwright_proxy(
             derived_proxy,
@@ -405,12 +447,15 @@ async def ensure_logged_in_async(
         account.get("manual_visible_browser")
         or account.get("disable_safe_browser_recovery")
     )
+<<<<<<< HEAD
     require_persistent_profile = bool(
         account.get("require_persistent_profile")
         or str(account.get("_playwright_subsystem") or "").strip().lower() == "campaign"
     )
     if require_persistent_profile:
         strict_visible_browser = True
+=======
+>>>>>>> origin/main
     strict_login = bool(account.get("strict_login"))
     browser_mode = str(account.get("playwright_browser_mode") or "").strip().lower()
     if browser_mode not in {
@@ -437,11 +482,15 @@ async def ensure_logged_in_async(
     _session_log(profile_root_path, f"login_start username={username} headless={headless}")
 
     _trace_msg(f"Launch browser ({'headful' if not headless else 'headless'})")
+<<<<<<< HEAD
     service_subsystem = str(account.get("_playwright_subsystem") or account.get("playwright_subsystem") or "auth").strip()
+=======
+>>>>>>> origin/main
     svc = _login_playwright_service(
         headless=headless,
         profile_root=profile_root_path,
         browser_mode=browser_mode,
+<<<<<<< HEAD
         subsystem=service_subsystem,
     )
     campaign_timezone_resolution: CampaignBrowserTimezoneResolution | None = None
@@ -509,6 +558,9 @@ async def ensure_logged_in_async(
             },
             callsite_skip=2,
         )
+=======
+    )
+>>>>>>> origin/main
 
     async def _new_context(use_storage: bool, *, safe_mode: bool = False) -> tuple[BrowserContext, Page]:
         context_kwargs = {
@@ -517,11 +569,14 @@ async def ensure_logged_in_async(
             "proxy": None if safe_mode else proxy_payload,
             "safe_mode": safe_mode,
         }
+<<<<<<< HEAD
         if campaign_timezone_resolution is not None:
             context_kwargs["timezone_id"] = campaign_timezone_resolution.timezone_id
         campaign_desktop_layout = account.get("campaign_desktop_layout")
         if campaign_desktop_layout is not None:
             context_kwargs["campaign_desktop_layout"] = campaign_desktop_layout
+=======
+>>>>>>> origin/main
         visible_browser_layout = account.get("visible_browser_layout")
         if visible_browser_layout is not None:
             context_kwargs["visible_browser_layout"] = visible_browser_layout
@@ -534,6 +589,7 @@ async def ensure_logged_in_async(
             except Exception:
                 pass
             raise
+<<<<<<< HEAD
         if await _is_chrome_profile_picker(page, ctx):
             _record_login_diagnostic(
                 event_type="persistent_login_failed",
@@ -548,6 +604,8 @@ async def ensure_logged_in_async(
             except Exception:
                 pass
             raise RuntimeError(f"chrome_profile_picker:{username}")
+=======
+>>>>>>> origin/main
         nav_timeout = _bootstrap_nav_timeout_ms()
         try:
             page.set_default_timeout(nav_timeout)
@@ -558,6 +616,7 @@ async def ensure_logged_in_async(
 
     async def _new_context_with_recovery(use_storage: bool) -> tuple[BrowserContext, Page]:
         nonlocal svc
+<<<<<<< HEAD
         _record_login_diagnostic(
             event_type="browser_launch_started",
             stage="browser_launch",
@@ -566,12 +625,15 @@ async def ensure_logged_in_async(
             reason_code="browser_launch_started",
             payload={"use_storage": bool(use_storage), "safe_mode": False},
         )
+=======
+>>>>>>> origin/main
         try:
             context_timeout = _remaining_timeout()
             return await asyncio.wait_for(
                 _new_context(use_storage, safe_mode=False),
                 timeout=context_timeout,
             )
+<<<<<<< HEAD
         except PersistentProfileOwnershipError as exc:
             _record_login_diagnostic(
                 event_type="browser_launch_failed",
@@ -592,6 +654,10 @@ async def ensure_logged_in_async(
                 payload={"use_storage": bool(use_storage), "safe_mode": False},
             )
             if (strict_visible_browser or require_persistent_profile) and is_driver_crash_error(exc):
+=======
+        except Exception as exc:
+            if strict_visible_browser and is_driver_crash_error(exc):
+>>>>>>> origin/main
                 try:
                     await svc.record_diagnostic_failure(
                         code="driver_crash_no_safe_recovery",
@@ -601,8 +667,11 @@ async def ensure_logged_in_async(
                 except Exception:
                     pass
                 raise
+<<<<<<< HEAD
             if require_persistent_profile and not is_driver_crash_error(exc):
                 raise
+=======
+>>>>>>> origin/main
             if not is_driver_crash_error(exc):
                 raise
             try:
@@ -621,6 +690,7 @@ async def ensure_logged_in_async(
                 headless=True,
                 profile_root=profile_root_path,
                 browser_mode=browser_mode,
+<<<<<<< HEAD
                 subsystem=service_subsystem,
             )
             _record_login_diagnostic(
@@ -630,6 +700,8 @@ async def ensure_logged_in_async(
                 reason="browser_launch_retry_safe_mode",
                 reason_code="browser_launch_retry_safe_mode",
                 payload={"use_storage": bool(use_storage), "safe_mode": True},
+=======
+>>>>>>> origin/main
             )
             try:
                 safe_context_timeout = _remaining_timeout()
@@ -638,6 +710,7 @@ async def ensure_logged_in_async(
                     timeout=safe_context_timeout,
                 )
             except Exception as safe_exc:
+<<<<<<< HEAD
                 _record_login_diagnostic(
                     event_type="browser_launch_failed",
                     stage="browser_launch",
@@ -645,6 +718,8 @@ async def ensure_logged_in_async(
                     exception=safe_exc,
                     payload={"use_storage": bool(use_storage), "safe_mode": True},
                 )
+=======
+>>>>>>> origin/main
                 if is_driver_crash_error(safe_exc):
                     try:
                         await svc.record_diagnostic_failure(
@@ -678,6 +753,7 @@ async def ensure_logged_in_async(
 
     try:
         if reuse_session_only:
+<<<<<<< HEAD
             profile_exists = False
             try:
                 profile_exists = account_profile.exists() and account_profile.is_dir()
@@ -694,6 +770,10 @@ async def ensure_logged_in_async(
                     reason_code=diagnostic_code,
                 )
                 raise RuntimeError(f"{reason_code}:{username}")
+=======
+            if not _has_persistent_profile_state(account_profile):
+                raise RuntimeError(f"persistent_profile_missing:{username}")
+>>>>>>> origin/main
             ctx, page = await _new_context_with_recovery(use_storage=storage_state.exists())
             _session_log(
                 profile_root_path,
@@ -708,6 +788,7 @@ async def ensure_logged_in_async(
                 )
                 await _load_home(page, timeout_ms=remaining_timeout_ms)
                 if _has_chrome_error_url(page):
+<<<<<<< HEAD
                     _record_login_diagnostic(
                         event_type="persistent_login_failed",
                         stage="session_validation",
@@ -715,6 +796,8 @@ async def ensure_logged_in_async(
                         reason="session_invalid:chrome_error_page",
                         reason_code="storage_state_invalid",
                     )
+=======
+>>>>>>> origin/main
                     await _update_account_health_best_effort()
                     try:
                         await ctx.close()
@@ -730,6 +813,7 @@ async def ensure_logged_in_async(
                 session_check_timeout = _remaining_timeout()
                 ok, reason = await asyncio.wait_for(check_logged_in(page), timeout=session_check_timeout)
                 if not ok:
+<<<<<<< HEAD
                     _record_login_diagnostic(
                         event_type="persistent_login_failed",
                         stage="session_validation",
@@ -738,6 +822,8 @@ async def ensure_logged_in_async(
                         reason_code="storage_state_invalid",
                         payload={"page_url": str(page.url or "")},
                     )
+=======
+>>>>>>> origin/main
                     _session_log(
                         profile_root_path,
                         f"session_reuse_validation_fail username={username} reason={reason} url={page.url}",
@@ -773,6 +859,7 @@ async def ensure_logged_in_async(
             remaining_timeout_ms = int(max(1_000, min(_bootstrap_nav_timeout_ms(), _remaining_timeout() * 1000.0)))
             await _load_home(page, timeout_ms=remaining_timeout_ms)
             if _has_chrome_error_url(page):
+<<<<<<< HEAD
                 _record_login_diagnostic(
                     event_type="persistent_login_failed",
                     stage="session_validation",
@@ -780,6 +867,8 @@ async def ensure_logged_in_async(
                     reason="instagram_navigation_failed:chrome_error_page",
                     reason_code="browser_launch_failed",
                 )
+=======
+>>>>>>> origin/main
                 raise RuntimeError("instagram_navigation_failed:chrome_error_page")
             session_check_timeout = _remaining_timeout()
             ok, reason = await asyncio.wait_for(check_logged_in(page), timeout=session_check_timeout)
@@ -792,6 +881,7 @@ async def ensure_logged_in_async(
                 profile_root_path,
                 f"session_check_fail stage=load reason={reason} url={page.url}",
             )
+<<<<<<< HEAD
             _record_login_diagnostic(
                 event_type="persistent_login_failed",
                 stage="session_validation",
@@ -800,6 +890,8 @@ async def ensure_logged_in_async(
                 reason_code="storage_state_invalid",
                 payload={"page_url": str(page.url or "")},
             )
+=======
+>>>>>>> origin/main
             await _update_account_health_best_effort()
             logger.info("storage_state inv?lido para @%s. Se intentar? nuevo login.", username)
             try:
@@ -810,6 +902,7 @@ async def ensure_logged_in_async(
             page = None
     
         if not password:
+<<<<<<< HEAD
             _record_login_diagnostic(
                 event_type="persistent_login_failed",
                 stage="login",
@@ -817,6 +910,8 @@ async def ensure_logged_in_async(
                 reason="password_missing",
                 reason_code="password_missing",
             )
+=======
+>>>>>>> origin/main
             await svc.close()
             raise RuntimeError("Se requiere password para iniciar sesión por primera vez")
     
@@ -830,6 +925,7 @@ async def ensure_logged_in_async(
             timeout_ms=remaining_timeout_ms,
         )
         if not nav_ok:
+<<<<<<< HEAD
             _record_login_diagnostic(
                 event_type="persistent_login_failed",
                 stage="login",
@@ -846,6 +942,10 @@ async def ensure_logged_in_async(
                 reason="instagram_navigation_failed:chrome_error_page",
                 reason_code="browser_launch_failed",
             )
+=======
+            raise RuntimeError(f"instagram_navigation_failed:{nav_err}")
+        if _has_chrome_error_url(page):
+>>>>>>> origin/main
             raise RuntimeError("instagram_navigation_failed:chrome_error_page")
         # En algunos perfiles Instagram redirige directo al home/feed aunque se pida
         # /accounts/login. Si ya estamos autenticados, tratamos como exito.
@@ -886,12 +986,15 @@ async def ensure_logged_in_async(
                 timeout=login_timeout,
             )
         except Exception as exc:
+<<<<<<< HEAD
             _record_login_diagnostic(
                 event_type="persistent_login_failed",
                 stage="login",
                 outcome="fail",
                 exception=exc,
             )
+=======
+>>>>>>> origin/main
             # Si el intento de login lanza error pero ya estamos autenticados,
             # evitamos falso negativo y persistimos storage_state.
             try:
@@ -951,6 +1054,7 @@ async def ensure_logged_in_async(
                 username,
             )
             await _update_account_health_best_effort()
+<<<<<<< HEAD
             _record_login_diagnostic(
                 event_type="persistent_login_failed",
                 stage="login",
@@ -959,6 +1063,8 @@ async def ensure_logged_in_async(
                 reason_code="challenge_required",
                 payload={"page_url": str(page.url or "")},
             )
+=======
+>>>>>>> origin/main
             raise ChallengeRequired("challenge_required")
 
         # Si quedó en captcha/suspensión o en two_factor, dejar el navegador abierto
@@ -976,6 +1082,7 @@ async def ensure_logged_in_async(
         await _update_account_health_best_effort()
 
         raise await _raise_login_failure(page, username, profile_root_path)
+<<<<<<< HEAD
     except Exception as exc:
         _record_login_diagnostic(
             event_type="persistent_login_failed",
@@ -993,6 +1100,8 @@ async def ensure_logged_in_async(
         except Exception:
             pass
         raise
+=======
+>>>>>>> origin/main
     except BaseException:
         if ctx is not None:
             try:
@@ -1059,7 +1168,11 @@ async def check_session_async(
 
     _session_log(profile_root_path, f"session_check_start username={username} headless={headless}")
 
+<<<<<<< HEAD
     svc = _login_playwright_service(headless=headless, profile_root=profile_root_path, subsystem="auth")
+=======
+    svc = _login_playwright_service(headless=headless, profile_root=profile_root_path)
+>>>>>>> origin/main
     svc_proxy = normalize_playwright_proxy(proxy)
     ctx: Optional[BrowserContext] = None
     page: Optional[Page] = None

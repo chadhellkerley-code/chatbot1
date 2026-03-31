@@ -46,9 +46,12 @@ CONVERSATIONS = STO / "conversation_events.jsonl"
 EXPORTS = exports_root(BASE)
 logger = logging.getLogger(__name__)
 
+<<<<<<< HEAD
 # App/business timezone for daily counters, sent-log day bucketing, dashboard
 # "today" metrics, and quota calculations. This is intentionally separate from
 # the live browser/session timezone used by campaign Playwright contexts.
+=======
+>>>>>>> origin/main
 TZ_LABEL = "America/Argentina/Cordoba"
 
 
@@ -95,6 +98,7 @@ _CAMPAIGN_SNAPSHOT_CACHE: OrderedDict[
 _CAMPAIGN_SNAPSHOT_LIMIT = 64
 
 
+<<<<<<< HEAD
 def refresh_runtime_paths(base: Path | None = None) -> dict[str, Path]:
     global BASE, STO, SENT, AUTO, STATE, CONVERSATIONS, EXPORTS
 
@@ -119,6 +123,8 @@ def refresh_runtime_paths(base: Path | None = None) -> dict[str, Path]:
     }
 
 
+=======
+>>>>>>> origin/main
 def _now_local() -> datetime:
     return datetime.now(TZ)
 

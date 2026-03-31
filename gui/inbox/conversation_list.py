@@ -272,7 +272,11 @@ class ConversationList(QWidget):
         title.setObjectName("InboxSectionTitle")
         title_row.addWidget(title, 1)
 
+<<<<<<< HEAD
         self._summary = QLabel("Esperando proyeccion")
+=======
+        self._summary = QLabel("Esperando sincronizacion")
+>>>>>>> origin/main
         self._summary.setObjectName("InboxSummaryText")
         title_row.addWidget(self._summary, 0, Qt.AlignRight)
         panel_layout.addLayout(title_row)
@@ -283,7 +287,11 @@ class ConversationList(QWidget):
         self._filter_buttons = QButtonGroup(self)
         self._filter_buttons.setExclusive(True)
         for index, (label, value) in enumerate(
+<<<<<<< HEAD
             (("Todas", "all"), ("Calificadas", "qualified"), ("Descalificadas", "disqualified"))
+=======
+            (("Todas", "all"), ("Agendar", "qualified"), ("Descalificadas", "disqualified"))
+>>>>>>> origin/main
         ):
             button = QPushButton(label)
             button.setCheckable(True)
@@ -317,7 +325,11 @@ class ConversationList(QWidget):
         if checked is None:
             return "all"
         text = str(checked.text() or "").strip().lower()
+<<<<<<< HEAD
         if "calificadas" in text:
+=======
+        if "agendar" in text or "calificadas" in text:
+>>>>>>> origin/main
             return "qualified"
         if "descalificadas" in text:
             return "disqualified"
@@ -335,9 +347,15 @@ class ConversationList(QWidget):
         if visible_count == 0:
             self._summary.setText("Sin resultados")
         elif overall == visible_count:
+<<<<<<< HEAD
             self._summary.setText(f"{visible_count} resultados")
         else:
             self._summary.setText(f"{visible_count}/{overall} resultados")
+=======
+            self._summary.setText(f"{visible_count} activas")
+        else:
+            self._summary.setText(f"{visible_count}/{overall}")
+>>>>>>> origin/main
 
         scrollbar = self._view.verticalScrollBar()
         previous_value = scrollbar.value()

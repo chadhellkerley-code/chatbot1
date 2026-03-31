@@ -117,8 +117,12 @@ def test_launch_persistent_context_chrome_only_tries_local_bundled_and_chromium_
             str(bundled_chrome),
             str(chromium),
         ]
+<<<<<<< HEAD
         sandbox_flag = "--" + "no-sandbox"
         assert all(sandbox_flag not in list(call.get("args") or []) for call in fake_playwright.chromium.persistent_calls)
+=======
+        assert all("--no-sandbox" not in list(call.get("args") or []) for call in fake_playwright.chromium.persistent_calls)
+>>>>>>> origin/main
 
     asyncio.run(_run())
 

@@ -18,13 +18,17 @@ class _PageStub:
     def __init__(self) -> None:
         self.url = "https://www.instagram.com/direct/inbox/"
         self.wait_calls: list[int] = []
+<<<<<<< HEAD
         self.evaluate_calls: list[str] = []
         self.keyboard = type("_KeyboardStub", (), {"press": self._press})()
         self.key_presses: list[str] = []
+=======
+>>>>>>> origin/main
 
     async def wait_for_timeout(self, timeout_ms: int) -> None:
         self.wait_calls.append(timeout_ms)
 
+<<<<<<< HEAD
     async def evaluate(self, script: str, *_args, **_kwargs):
         self.evaluate_calls.append(str(script))
         return False
@@ -32,10 +36,13 @@ class _PageStub:
     async def _press(self, key: str) -> None:
         self.key_presses.append(str(key))
 
+=======
+>>>>>>> origin/main
 
 class _SenderStub:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+<<<<<<< HEAD
         self._message_composer = type(
             "_ComposerStub",
             (),
@@ -46,6 +53,8 @@ class _SenderStub:
             (),
             {"ensure_inbox_surface": staticmethod(lambda _page, *, deadline: asyncio.sleep(0, result=True))},
         )()
+=======
+>>>>>>> origin/main
 
     async def _focus_input_best_effort(self, _search_input) -> None:
         self.calls.append(("focus", ""))
@@ -82,10 +91,15 @@ class _SenderStub:
 def _build_resolver(sender: _SenderStub) -> SidebarThreadResolver:
     return SidebarThreadResolver(
         sender,
+<<<<<<< HEAD
         compose_triggers=("button",),
         search_inputs=("input",),
         result_rows=("li",),
         confirm_buttons=("button",),
+=======
+        search_inputs=("input",),
+        result_rows=("li",),
+>>>>>>> origin/main
         thread_open_timeout_ms=2000,
         sidebar_row_timeout_ms=1200,
         log_event=lambda *args, **kwargs: None,
@@ -131,6 +145,40 @@ def test_clear_and_type_search_repairs_corrupted_value_with_exact_set() -> None:
     assert search_input.value == "lead_01"
 
 
+<<<<<<< HEAD
+=======
+def test_open_thread_from_sidebar_does_not_use_fixed_sleep_after_typing(monkeypatch) -> None:
+    sender = _SenderStub()
+    resolver = _build_resolver(sender)
+    page = _PageStub()
+
+    async def _clear_and_type_search(_page, _search_input, _username: str) -> None:
+        return None
+
+    async def _find_exact_sidebar_row(_page, _username: str, *, timeout_ms: int):
+        return None
+
+    async def _sidebar_js_click_exact_match(_page, _username: str):
+        return False, {}
+
+    monkeypatch.setattr(resolver, "clear_and_type_search", _clear_and_type_search)
+    monkeypatch.setattr(resolver, "find_exact_sidebar_row", _find_exact_sidebar_row)
+    monkeypatch.setattr(resolver, "sidebar_js_click_exact_match", _sidebar_js_click_exact_match)
+
+    result = asyncio.run(
+        resolver.open_thread_from_sidebar(
+            page,
+            "lead_01",
+            deadline=time.time() + 3,
+        )
+    )
+
+    assert result.opened is False
+    assert result.reason == "username_not_found"
+    assert 1000 not in page.wait_calls
+
+
+>>>>>>> origin/main
 def test_wait_sidebar_results_ready_waits_for_surface_change(monkeypatch) -> None:
     sender = _SenderStub()
     resolver = _build_resolver(sender)
@@ -163,6 +211,7 @@ def test_wait_sidebar_results_ready_waits_for_surface_change(monkeypatch) -> Non
     assert len(page.wait_calls) == 2
 
 
+<<<<<<< HEAD
 def test_try_open_existing_sidebar_thread_uses_locator_row_not_js_exact_match(monkeypatch) -> None:
     sender = _SenderStub()
     resolver = _build_resolver(sender)
@@ -173,10 +222,18 @@ def test_try_open_existing_sidebar_thread_uses_locator_row_not_js_exact_match(mo
     async def _wait_sidebar_search_input(_page, *, timeout_ms: int):
         assert timeout_ms > 0
         return search_input
+=======
+def test_open_thread_from_sidebar_uses_js_match_when_probe_detects_exact_result(monkeypatch) -> None:
+    sender = _SenderStub()
+    resolver = _build_resolver(sender)
+    page = _PageStub()
+    sentinel = ThreadOpenResult(True, "ok", thread_id="thread-123")
+>>>>>>> origin/main
 
     async def _clear_and_type_search(_page, _search_input, _username: str) -> None:
         return None
 
+<<<<<<< HEAD
     async def _find_exact_sidebar_row(_page, _username: str, *, timeout_ms: int):
         assert timeout_ms > 0
         return row
@@ -227,10 +284,15 @@ def test_try_open_existing_sidebar_thread_waits_for_sidebar_results_before_looku
 
     async def _clear_and_type_search(_page, _search_input, _username: str) -> None:
         call_order.append("type")
+=======
+    async def _probe_sidebar_results(_page, _username="", *, click_match: bool = False):
+        return {"signature": "baseline"} if not _username else {"exact_match": True, "row_count": 1, "query_value": "lead_01"}
+>>>>>>> origin/main
 
     async def _wait_sidebar_results_ready(_page, _username: str, *, timeout_ms: int, baseline_signature: str):
         assert timeout_ms > 0
         assert baseline_signature == "baseline"
+<<<<<<< HEAD
         call_order.append("results_ready")
         return {"query_value": "lead_01", "signature": "changed", "surface_changed": True}
 
@@ -299,10 +361,16 @@ def test_open_thread_from_sidebar_uses_sidebar_resolution_only(monkeypatch) -> N
         return True
 
     async def _sidebar_only(_page, _username: str, *, deadline: float, flow_hook=None):
+=======
+        return {"exact_match": True, "row_count": 1, "query_value": "lead_01", "surface_changed": True}
+
+    async def _open_exact_match_via_js(_page, _username: str, *, deadline: float, flow_hook=None):
+>>>>>>> origin/main
         assert deadline > time.time()
         assert flow_hook is None
         return sentinel
 
+<<<<<<< HEAD
     async def _unexpected_compose(*_args, **_kwargs):
         raise AssertionError("compose/new-message flow should not be reachable")
 
@@ -310,6 +378,16 @@ def test_open_thread_from_sidebar_uses_sidebar_resolution_only(monkeypatch) -> N
     monkeypatch.setattr(resolver, "_try_open_existing_sidebar_thread", _sidebar_only)
     monkeypatch.setattr(resolver, "_open_compose_surface", _unexpected_compose)
     monkeypatch.setattr(resolver, "_open_exact_match_via_js", _unexpected_compose)
+=======
+    async def _find_exact_sidebar_row(_page, _username: str, *, timeout_ms: int):
+        raise AssertionError("locator search should be skipped when the exact result is already visible")
+
+    monkeypatch.setattr(resolver, "clear_and_type_search", _clear_and_type_search)
+    monkeypatch.setattr(resolver, "_probe_sidebar_results", _probe_sidebar_results)
+    monkeypatch.setattr(resolver, "wait_sidebar_results_ready", _wait_sidebar_results_ready)
+    monkeypatch.setattr(resolver, "_open_exact_match_via_js", _open_exact_match_via_js)
+    monkeypatch.setattr(resolver, "find_exact_sidebar_row", _find_exact_sidebar_row)
+>>>>>>> origin/main
 
     result = asyncio.run(
         resolver.open_thread_from_sidebar(
@@ -320,6 +398,7 @@ def test_open_thread_from_sidebar_uses_sidebar_resolution_only(monkeypatch) -> N
     )
 
     assert result == sentinel
+<<<<<<< HEAD
 
 
 def test_wait_thread_navigation_accepts_thread_url_during_partial_header_hydration(monkeypatch) -> None:
@@ -452,3 +531,5 @@ def test_open_thread_from_sidebar_cleans_stale_modal_before_sidebar_search(monke
     assert result.opened is False
     assert result.reason == "username_not_found"
     assert call_order == ["cleanup", "sidebar"]
+=======
+>>>>>>> origin/main

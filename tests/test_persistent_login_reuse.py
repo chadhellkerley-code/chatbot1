@@ -12,7 +12,10 @@ from src.runtime.playwright_runtime import (
     PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
     PLAYWRIGHT_BROWSER_MODE_MANAGED,
 )
+<<<<<<< HEAD
 from src.campaign_timezone_policy import CampaignBrowserTimezoneResolution
+=======
+>>>>>>> origin/main
 
 
 class _FakePage:
@@ -46,9 +49,13 @@ class _FakeService:
         base_profiles: Path,
         prefer_persistent: bool,
         browser_mode: str,
+<<<<<<< HEAD
         subsystem: str = "auth",
     ) -> None:
         del subsystem
+=======
+    ) -> None:
+>>>>>>> origin/main
         self.headless = headless
         self.base_profiles = Path(base_profiles)
         self.prefer_persistent = prefer_persistent
@@ -63,6 +70,7 @@ class _FakeService:
         storage_state=None,
         proxy=None,
         *,
+<<<<<<< HEAD
         timezone_id=None,
         campaign_desktop_layout=None,
         visible_browser_layout=None,
@@ -82,6 +90,18 @@ class _FakeService:
         if visible_browser_layout is not None:
             payload["visible_browser_layout"] = visible_browser_layout
         self.calls.append(payload)
+=======
+        safe_mode: bool = False,
+    ):
+        self.calls.append(
+            {
+                "profile_dir": Path(profile_dir),
+                "storage_state": storage_state,
+                "proxy": proxy,
+                "safe_mode": safe_mode,
+            }
+        )
+>>>>>>> origin/main
         return _FakeContext()
 
     async def close(self) -> None:
@@ -101,10 +121,14 @@ def _profile_root(tmp_path: Path) -> Path:
 def _seed_profile(profile_root: Path, username: str) -> Path:
     profile_dir = profile_root / username
     profile_dir.mkdir(parents=True, exist_ok=True)
+<<<<<<< HEAD
     (profile_dir / "Local State").write_text("{}", encoding="utf-8")
     default_dir = profile_dir / "Default"
     default_dir.mkdir(parents=True, exist_ok=True)
     (default_dir / "Preferences").write_text("{}", encoding="utf-8")
+=======
+    (profile_dir / "Preferences").write_text("{}", encoding="utf-8")
+>>>>>>> origin/main
     return profile_dir
 
 
@@ -249,6 +273,7 @@ def test_campaign_visible_reuse_session_uses_managed_browser_mode(monkeypatch, t
     assert calls == {"load_home": 0, "check_logged_in": 0, "human_login": 0}
 
 
+<<<<<<< HEAD
 def test_campaign_reuse_session_logs_and_applies_resolved_timezone(monkeypatch, tmp_path: Path) -> None:
     import src.auth.persistent_login as persistent_login
 
@@ -309,6 +334,8 @@ def test_campaign_reuse_session_logs_and_applies_resolved_timezone(monkeypatch, 
     assert calls == {"load_home": 0, "check_logged_in": 0, "human_login": 0}
 
 
+=======
+>>>>>>> origin/main
 def test_reuse_session_only_requires_existing_profile(monkeypatch, tmp_path: Path) -> None:
     import src.auth.persistent_login as persistent_login
 
@@ -336,6 +363,7 @@ def test_reuse_session_only_requires_existing_profile(monkeypatch, tmp_path: Pat
     assert calls == {"load_home": 0, "check_logged_in": 0, "human_login": 0}
 
 
+<<<<<<< HEAD
 def test_reuse_session_only_rejects_profile_without_chrome_state(monkeypatch, tmp_path: Path) -> None:
     import src.auth.persistent_login as persistent_login
 
@@ -360,6 +388,8 @@ def test_reuse_session_only_rejects_profile_without_chrome_state(monkeypatch, tm
     assert calls == {"load_home": 0, "check_logged_in": 0, "human_login": 0}
 
 
+=======
+>>>>>>> origin/main
 class _DriverCrashService(_FakeService):
     async def new_context_for_account(
         self,
@@ -367,6 +397,7 @@ class _DriverCrashService(_FakeService):
         storage_state=None,
         proxy=None,
         *,
+<<<<<<< HEAD
         timezone_id=None,
         safe_mode: bool = False,
         **_kwargs,
@@ -380,6 +411,18 @@ class _DriverCrashService(_FakeService):
         if timezone_id is not None:
             payload["timezone_id"] = timezone_id
         self.calls.append(payload)
+=======
+        safe_mode: bool = False,
+    ):
+        self.calls.append(
+            {
+                "profile_dir": Path(profile_dir),
+                "storage_state": storage_state,
+                "proxy": proxy,
+                "safe_mode": safe_mode,
+            }
+        )
+>>>>>>> origin/main
         raise RuntimeError("target page, context or browser has been closed")
 
 
@@ -392,6 +435,7 @@ class _TrackingService(_FakeService):
         storage_state=None,
         proxy=None,
         *,
+<<<<<<< HEAD
         timezone_id=None,
         safe_mode: bool = False,
         **_kwargs,
@@ -405,11 +449,24 @@ class _TrackingService(_FakeService):
         if timezone_id is not None:
             payload["timezone_id"] = timezone_id
         self.calls.append(payload)
+=======
+        safe_mode: bool = False,
+    ):
+        self.calls.append(
+            {
+                "profile_dir": Path(profile_dir),
+                "storage_state": storage_state,
+                "proxy": proxy,
+                "safe_mode": safe_mode,
+            }
+        )
+>>>>>>> origin/main
         ctx = _FakeContext()
         self.created_contexts.append(ctx)
         return ctx
 
 
+<<<<<<< HEAD
 def test_reuse_session_rejects_chrome_profile_picker(monkeypatch, tmp_path: Path) -> None:
     import src.auth.persistent_login as persistent_login
 
@@ -447,6 +504,8 @@ def test_reuse_session_rejects_chrome_profile_picker(monkeypatch, tmp_path: Path
     assert _TrackingService.created_contexts[0].closed is True
 
 
+=======
+>>>>>>> origin/main
 def test_validate_reused_session_rejects_invalid_profile_without_login(monkeypatch, tmp_path: Path) -> None:
     import src.auth.persistent_login as persistent_login
 

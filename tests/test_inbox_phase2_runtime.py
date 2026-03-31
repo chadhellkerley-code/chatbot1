@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+<<<<<<< HEAD
 from datetime import datetime
+=======
+>>>>>>> origin/main
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -222,6 +225,7 @@ def test_inbox_runtime_status_invalidates_stale_alias_without_active_accounts(tm
         store.shutdown()
 
 
+<<<<<<< HEAD
 def test_inbox_runtime_list_alias_accounts_excludes_usage_deactivated_accounts(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.runtime.inbox_automation_runtime.accounts_module.list_all",
@@ -243,6 +247,8 @@ def test_inbox_runtime_list_alias_accounts_excludes_usage_deactivated_accounts(m
     assert [str(row.get("username") or "") for row in rows] == ["acc1"]
 
 
+=======
+>>>>>>> origin/main
 def test_manual_takeover_cancels_queued_auto_jobs(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -444,6 +450,7 @@ def test_manual_takeover_cancels_processing_auto_job_before_send(tmp_path: Path,
         store.shutdown()
 
 
+<<<<<<< HEAD
 def test_sender_persists_last_send_attempt_into_runtime_alias_state(tmp_path: Path) -> None:
     class _FakeBrowserPool:
         def shutdown(self) -> None:
@@ -666,6 +673,8 @@ def test_sender_persists_last_send_cancelled_outcome_into_runtime_alias_state(tm
         store.shutdown()
 
 
+=======
+>>>>>>> origin/main
 def test_manual_takeover_keeps_manual_thread_and_cancels_auto_jobs(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -1578,6 +1587,7 @@ def test_thread_events_record_queued_then_sent_auto_reply_without_legacy_duplica
         store.shutdown()
 
 
+<<<<<<< HEAD
 def test_runtime_persists_evaluation_and_enqueue_trace_per_thread(tmp_path: Path, monkeypatch) -> None:
     class _FakeQueueSender:
         def __init__(self) -> None:
@@ -1767,6 +1777,8 @@ def test_runtime_defers_pack_enqueue_when_remaining_quota_cannot_cover_pack(tmp_
         store.shutdown()
 
 
+=======
+>>>>>>> origin/main
 def test_thread_events_record_queued_then_failed_auto_reply_without_legacy_duplicates(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("core.responder._record_message_sent", lambda *_args, **_kwargs: None)
     store = ConversationStore(tmp_path)
@@ -1869,6 +1881,7 @@ def test_runtime_does_not_enqueue_followup_for_qualified_manual_or_closed_thread
         store.shutdown()
 
 
+<<<<<<< HEAD
 def test_runtime_records_enqueue_trace_when_send_action_is_not_attempted(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path)
     try:
@@ -1905,6 +1918,8 @@ def test_runtime_records_enqueue_trace_when_send_action_is_not_attempted(tmp_pat
         store.shutdown()
 
 
+=======
+>>>>>>> origin/main
 def test_sender_cancels_followup_when_thread_becomes_qualified_before_send(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("core.responder._record_message_sent", lambda *_args, **_kwargs: None)
     store = ConversationStore(tmp_path)
@@ -1938,6 +1953,7 @@ def test_sender_cancels_followup_when_thread_becomes_qualified_before_send(tmp_p
         store.shutdown()
 
 
+<<<<<<< HEAD
 def test_sender_recovery_requeues_followup_pack_with_full_durable_payload(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path)
     try:
@@ -2013,6 +2029,8 @@ def test_cancel_send_queue_jobs_clears_stale_pack_queue_state_when_last_job_is_c
         store.shutdown()
 
 
+=======
+>>>>>>> origin/main
 def test_thread_events_record_pack_with_explicit_queue_and_send_names(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("core.responder._list_packs", lambda: [{"id": "pack-1", "name": "Pack Uno"}])
     monkeypatch.setattr("core.responder._flow_config_for_account", lambda _account_id: {})

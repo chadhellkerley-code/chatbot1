@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
+<<<<<<< HEAD
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover - zoneinfo is stdlib on supported runtimes
     ZoneInfo = None  # type: ignore[assignment]
 
+=======
+>>>>>>> origin/main
 from cryptography.fernet import Fernet, InvalidToken
 
 from core.storage_atomic import (
@@ -31,7 +34,11 @@ from paths import accounts_root, logs_root, runtime_base
 logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 2
+<<<<<<< HEAD
 _DB_SCHEMA_VERSION = 2
+=======
+_DB_SCHEMA_VERSION = 1
+>>>>>>> origin/main
 _DEFAULT_PAYLOAD = {"schema_version": _SCHEMA_VERSION, "proxies": []}
 _STORE_CACHE_GUARD = threading.RLock()
 _STORE_CACHE: dict[str, "ProxyRegistryStore"] = {}
@@ -111,6 +118,7 @@ def _normalize_bool(value: Any, *, default: bool = True) -> bool:
     return bool(default)
 
 
+<<<<<<< HEAD
 def _normalize_timezone_id(value: Any) -> str:
     text = _clean(value)
     if not text:
@@ -124,6 +132,8 @@ def _normalize_timezone_id(value: Any) -> str:
     return text
 
 
+=======
+>>>>>>> origin/main
 def _sanitize_meta(value: Any) -> Any:
     if isinstance(value, dict):
         payload: dict[str, Any] = {}
@@ -301,12 +311,15 @@ def normalize_proxy_record(
         "server": server,
         "user": user,
         "pass": password,
+<<<<<<< HEAD
         "timezone_id": _normalize_timezone_id(
             raw.get("timezone_id")
             or raw.get("proxy_timezone_id")
             or raw.get("timezone")
             or raw.get("tz")
         ),
+=======
+>>>>>>> origin/main
         "active": active,
         "disabled_reason": disabled_reason,
         "last_test_at": _normalize_timestamp(raw.get("last_test_at")),
@@ -348,7 +361,10 @@ def _serialize_proxy_record(
         "server": normalized["server"],
         "user_enc": user_enc,
         "pass_enc": pass_enc,
+<<<<<<< HEAD
         "timezone_id": normalized["timezone_id"],
+=======
+>>>>>>> origin/main
         "active": normalized["active"],
         "disabled_reason": normalized["disabled_reason"],
         "last_test_at": normalized["last_test_at"],
@@ -467,7 +483,10 @@ class ProxyRegistryStore:
                     server text not null,
                     user_enc text not null default '',
                     pass_enc text not null default '',
+<<<<<<< HEAD
                     timezone_id text not null default '',
+=======
+>>>>>>> origin/main
                     active integer not null default 1,
                     disabled_reason text not null default '',
                     last_test_at text not null default '',
@@ -515,6 +534,7 @@ class ProxyRegistryStore:
                     on account_proxy_links(assigned_proxy_id);
                 """
             )
+<<<<<<< HEAD
             proxy_columns = {
                 _clean(row["name"]).lower()
                 for row in connection.execute("pragma table_info(proxies)").fetchall()
@@ -523,6 +543,8 @@ class ProxyRegistryStore:
                 connection.execute(
                     "alter table proxies add column timezone_id text not null default ''"
                 )
+=======
+>>>>>>> origin/main
             self._set_meta_locked(
                 connection,
                 "db_schema_version",
@@ -612,7 +634,10 @@ class ProxyRegistryStore:
             "server": _clean(row["server"]),
             "user_enc": _clean(row["user_enc"]),
             "pass_enc": _clean(row["pass_enc"]),
+<<<<<<< HEAD
             "timezone_id": _clean(row["timezone_id"]),
+=======
+>>>>>>> origin/main
             "active": bool(int(row["active"])) if row["active"] not in (None, "") else True,
             "disabled_reason": _clean(row["disabled_reason"]),
             "last_test_at": _clean(row["last_test_at"]),
@@ -679,7 +704,10 @@ class ProxyRegistryStore:
                 server,
                 user_enc,
                 pass_enc,
+<<<<<<< HEAD
                 timezone_id,
+=======
+>>>>>>> origin/main
                 active,
                 disabled_reason,
                 last_test_at,
@@ -697,12 +725,19 @@ class ProxyRegistryStore:
                 created_at,
                 updated_at
             )
+<<<<<<< HEAD
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+=======
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+>>>>>>> origin/main
             on conflict(id) do update set
                 server = excluded.server,
                 user_enc = excluded.user_enc,
                 pass_enc = excluded.pass_enc,
+<<<<<<< HEAD
                 timezone_id = excluded.timezone_id,
+=======
+>>>>>>> origin/main
                 active = excluded.active,
                 disabled_reason = excluded.disabled_reason,
                 last_test_at = excluded.last_test_at,
@@ -724,7 +759,10 @@ class ProxyRegistryStore:
                 serialized["server"],
                 serialized["user_enc"],
                 serialized["pass_enc"],
+<<<<<<< HEAD
                 serialized["timezone_id"],
+=======
+>>>>>>> origin/main
                 1 if serialized["active"] else 0,
                 serialized["disabled_reason"],
                 serialized["last_test_at"],

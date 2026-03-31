@@ -100,7 +100,10 @@ def test_new_context_for_account_applies_storage_state_in_persistent_mode(
     profile_dir.mkdir(parents=True, exist_ok=True)
     storage_state = profile_dir / "storage_state.json"
     storage_state.write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+<<<<<<< HEAD
     fingerprint = playwright_service.get_account_fingerprint("tester")
+=======
+>>>>>>> origin/main
 
     ctx = _FakeContext()
     runtime = _FakeRuntime(ctx)
@@ -131,6 +134,7 @@ def test_new_context_for_account_applies_storage_state_in_persistent_mode(
             "storage_state": str(storage_state),
             "proxy": proxy_payload,
             "mode": "persistent",
+<<<<<<< HEAD
                 "executable_path": playwright_service.resolve_google_chrome_executable(),
             "launch_args": playwright_service.build_launch_args(
                 headless=False,
@@ -139,13 +143,27 @@ def test_new_context_for_account_applies_storage_state_in_persistent_mode(
             "user_agent": str(fingerprint["user_agent"]),
             "locale": str(fingerprint["locale"]),
             "timezone_id": str(fingerprint["timezone_id"]),
+=======
+            "executable_path": playwright_service.resolve_playwright_executable(headless=False),
+            "launch_args": playwright_service.build_launch_args(
+                headless=False,
+                locale=playwright_service.DEFAULT_LOCALE,
+            ),
+            "user_agent": playwright_service.DEFAULT_USER_AGENT,
+            "locale": playwright_service.DEFAULT_LOCALE,
+            "timezone_id": playwright_service.DEFAULT_TIMEZONE,
+>>>>>>> origin/main
             "viewport_kwargs": playwright_service.context_viewport_kwargs(headless=False),
             "permissions": [],
             "launch_proxy": None,
             "force_headless": False,
             "safe_mode": False,
+<<<<<<< HEAD
             "browser_mode": playwright_service.PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
             "subsystem": "default",
+=======
+            "browser_mode": playwright_service.PLAYWRIGHT_BROWSER_MODE_DEFAULT,
+>>>>>>> origin/main
         }
     ]
     assert applied_storage == [str(storage_state)]
@@ -199,6 +217,7 @@ def test_new_context_for_account_migrates_legacy_profile_before_launch(monkeypat
     assert migrated == [profile_dir]
 
 
+<<<<<<< HEAD
 def test_new_context_for_account_keeps_fingerprint_locale_but_uses_explicit_timezone_override(
     monkeypatch,
     tmp_path: Path,
@@ -237,6 +256,8 @@ def test_new_context_for_account_keeps_fingerprint_locale_but_uses_explicit_time
     )
 
 
+=======
+>>>>>>> origin/main
 def test_compute_visible_window_rects_tiles_two_windows_side_by_side() -> None:
     area = playwright_service._WorkAreaRect(left=0, top=0, width=1440, height=900)
 
@@ -255,10 +276,15 @@ def test_compute_visible_window_rects_keeps_single_window_compact() -> None:
     rects = playwright_service._compute_visible_window_rects(1, work_area=area)
 
     assert len(rects) == 1
+<<<<<<< HEAD
     assert rects[0].width <= 960
     assert rects[0].height <= 820
     assert rects[0].width >= 800
     assert rects[0].height >= 700
+=======
+    assert rects[0].width <= 860
+    assert rects[0].height <= 760
+>>>>>>> origin/main
     assert rects[0].left > 0
     assert rects[0].top > 0
 
@@ -281,6 +307,7 @@ def test_visible_campaign_layout_manager_returns_initial_rect_for_single_window(
     assert config is not None
     assert config["layout_policy"] == "compact"
     assert isinstance(config["initial_rect"], playwright_service._WindowRect)
+<<<<<<< HEAD
     assert config["initial_rect"].width <= 960
     assert config["initial_rect"].height <= 820
 
@@ -305,6 +332,10 @@ def test_visible_campaign_layout_manager_preserves_explicit_desktop_size() -> No
     assert config is not None
     assert config["initial_rect"].width == 1366
     assert config["initial_rect"].height == 900
+=======
+    assert config["initial_rect"].width <= 860
+    assert config["initial_rect"].height <= 760
+>>>>>>> origin/main
 
 
 def test_compute_visible_window_rects_uses_compact_cascade_for_dense_layouts() -> None:
@@ -381,7 +412,10 @@ def test_new_context_for_account_uses_visible_campaign_layout_manager(monkeypatc
 def test_new_context_for_account_launches_campaign_visible_windows_compact(monkeypatch, tmp_path: Path) -> None:
     profile_dir = tmp_path / "tester"
     profile_dir.mkdir(parents=True, exist_ok=True)
+<<<<<<< HEAD
     fingerprint = playwright_service.get_account_fingerprint("tester")
+=======
+>>>>>>> origin/main
 
     ctx = _FakeContext()
     runtime = _FakeRuntime(ctx)
@@ -428,13 +462,18 @@ def test_new_context_for_account_launches_campaign_visible_windows_compact(monke
 
     assert runtime.calls[0]["launch_args"] == playwright_service.build_launch_args(
         headless=False,
+<<<<<<< HEAD
         locale=str(fingerprint["locale"]),
+=======
+        locale=playwright_service.DEFAULT_LOCALE,
+>>>>>>> origin/main
         initial_window_rect=playwright_service._WindowRect(left=40, top=60, width=640, height=480),
     )
     assert "--start-maximized" not in runtime.calls[0]["launch_args"]
     assert runtime.calls[0]["viewport_kwargs"] == {"no_viewport": True}
 
 
+<<<<<<< HEAD
 def test_visible_campaign_layout_manager_preserves_explicit_window_size_when_attaching(monkeypatch) -> None:
     manager = playwright_service._VisibleCampaignLayoutManager()
     captured_rects: list[playwright_service._WindowRect] = []
@@ -489,6 +528,8 @@ def test_context_viewport_kwargs_uses_campaign_desktop_override() -> None:
     }
 
 
+=======
+>>>>>>> origin/main
 def test_apply_window_rect_logs_when_cdp_is_unavailable(caplog: pytest.LogCaptureFixture) -> None:
     class _NoCdpPage:
         context = object()

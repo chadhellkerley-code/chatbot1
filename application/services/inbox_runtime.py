@@ -161,8 +161,11 @@ class InboxProjectionBuilder:
                 continue
             if not bool(raw.get("active", True)):
                 continue
+<<<<<<< HEAD
             if str(raw.get("usage_state") or "active").strip().lower() == "deactivated":
                 continue
+=======
+>>>>>>> origin/main
             username = self._clean_account_id(raw.get("username"))
             if username:
                 active_accounts.add(username.lower())

@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import asyncio
+=======
+>>>>>>> origin/main
 from pathlib import Path
 
 from automation.actions import interactions
@@ -85,6 +88,7 @@ def test_select_accounts_playwright_returns_empty_when_preflight_blocks_everythi
     assert pressed["count"] == 1
     assert any("proxy inactive" in message for message in warnings)
     assert any("No hay cuentas utilizables tras el preflight de proxy." in message for message in warnings)
+<<<<<<< HEAD
 
 
 def test_build_like_progress_targets_returns_sorted_spread_marks(monkeypatch) -> None:
@@ -173,3 +177,5 @@ def test_run_reels_for_account_spreads_likes_follows_and_respects_session_time(m
     assert all((right - left) > 1 for left, right in zip(followed_views, followed_views[1:]))
     assert advanced_views
     assert clock.now <= 160.0
+=======
+>>>>>>> origin/main

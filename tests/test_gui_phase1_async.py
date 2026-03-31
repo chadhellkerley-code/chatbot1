@@ -186,7 +186,10 @@ class _FakeCampaignLeads:
         self.list_calls: list[int] = []
         self.summary_calls: list[int] = []
         self.load_calls: list[tuple[int, str]] = []
+<<<<<<< HEAD
         self.summary_count = 5
+=======
+>>>>>>> origin/main
 
     def list_lists(self) -> list[str]:
         self.list_calls.append(threading.get_ident())
@@ -196,12 +199,20 @@ class _FakeCampaignLeads:
     def list_list_summaries(self) -> list[dict[str, Any]]:
         self.summary_calls.append(threading.get_ident())
         time.sleep(0.1)
+<<<<<<< HEAD
         return [{"name": "lead-list", "count": self.summary_count}]
+=======
+        return [{"name": "lead-list", "count": 5}]
+>>>>>>> origin/main
 
     def load_list(self, alias: str) -> list[dict[str, Any]]:
         self.load_calls.append((threading.get_ident(), str(alias or "")))
         time.sleep(0.1)
+<<<<<<< HEAD
         return [{"username": "lead-1"} for _ in range(self.summary_count)]
+=======
+        return [{"username": "lead-1"} for _ in range(5)]
+>>>>>>> origin/main
 
 
 class _FakeCampaignService:
@@ -214,10 +225,13 @@ class _FakeCampaignService:
         self.hold_task_open = False
         self.task_started = threading.Event()
         self.task_release = threading.Event()
+<<<<<<< HEAD
         self.workers_capacity = 3
         self.remaining_slots_total = 5
         self.planned_eligible_leads = 5
         self.planned_runnable_leads = 5
+=======
+>>>>>>> origin/main
         self._current_run = {
             "run_id": "run-1",
             "alias": "default",
@@ -256,6 +270,7 @@ class _FakeCampaignService:
         time.sleep(0.1)
         return [{"name": "Hola", "text": "Hola {{username}}", "id": "tpl-1"}]
 
+<<<<<<< HEAD
     def get_capacity(
         self,
         alias: str,
@@ -263,10 +278,14 @@ class _FakeCampaignService:
         leads_alias: str = "",
         workers_requested: int = 0,
     ) -> dict[str, Any]:
+=======
+    def get_capacity(self, alias: str) -> dict[str, Any]:
+>>>>>>> origin/main
         self.capacity_thread_ids.append(threading.get_ident())
         time.sleep(0.1)
         return {
             "alias": str(alias or ""),
+<<<<<<< HEAD
             "leads_alias": str(leads_alias or ""),
             "workers_capacity": self.workers_capacity,
             "workers_requested": max(0, int(workers_requested or 0)),
@@ -288,6 +307,11 @@ class _FakeCampaignService:
                     "limit": self.remaining_slots_total,
                 },
             ],
+=======
+            "workers_capacity": 3,
+            "proxies": [],
+            "has_none_accounts": True,
+>>>>>>> origin/main
         }
 
     def build_template_entries(
@@ -311,6 +335,7 @@ class _FakeCampaignService:
         self.launch_calls.append(dict(config))
         if self.launch_error is not None:
             raise self.launch_error
+<<<<<<< HEAD
         workers_requested = int(config.get("workers_requested") or 1)
         workers_capacity = int(
             self.get_capacity(
@@ -320,6 +345,10 @@ class _FakeCampaignService:
             ).get("workers_capacity")
             or 0
         )
+=======
+        workers_capacity = int(self.get_capacity(str(config.get("alias") or "")).get("workers_capacity") or 0)
+        workers_requested = int(config.get("workers_requested") or 1)
+>>>>>>> origin/main
         workers_effective = min(workers_requested, workers_capacity) if workers_capacity > 0 else 0
         started_at = str(config.get("started_at") or "2026-03-08T10:00:01")
         run_id = str(config.get("run_id") or f"run-{len(self.launch_calls)}")
@@ -623,8 +652,11 @@ def test_campaign_create_page_loads_form_async_and_starts_without_sync_reads() -
         assert all(thread_id != threading.get_ident() for thread_id in services.campaigns.template_thread_ids)
         assert all(thread_id != threading.get_ident() for thread_id in services.campaigns.capacity_thread_ids)
         assert services.leads.load_calls == []
+<<<<<<< HEAD
         assert _wait_until(lambda: "Cupo restante hoy: 5" in page._capacity_label.text())
         assert "Leads ejecutables: 5" in page._capacity_label.text()
+=======
+>>>>>>> origin/main
 
         load_calls_before = len(services.leads.load_calls)
         page._template_combo.setCurrentIndex(1)
@@ -646,6 +678,7 @@ def test_campaign_create_page_loads_form_async_and_starts_without_sync_reads() -
         tasks.shutdown("test cleanup")
 
 
+<<<<<<< HEAD
 def test_campaign_create_page_uses_planned_queue_total_in_summary_and_launch() -> None:
     _app()
     services = _FakeCampaignServices()
@@ -681,6 +714,8 @@ def test_campaign_create_page_uses_planned_queue_total_in_summary_and_launch() -
         tasks.shutdown("test cleanup")
 
 
+=======
+>>>>>>> origin/main
 def test_campaign_create_page_does_not_open_monitor_when_launch_fails() -> None:
     _app()
     services = _FakeCampaignServices()

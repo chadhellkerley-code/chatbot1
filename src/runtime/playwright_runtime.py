@@ -18,7 +18,11 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+<<<<<<< HEAD
 from typing import Any, Callable, Mapping, Optional, Union
+=======
+from typing import Any, Callable, Optional, Union
+>>>>>>> origin/main
 
 from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 from playwright.sync_api import sync_playwright
@@ -26,6 +30,7 @@ from playwright.sync_api import sync_playwright
 from core.log_rotation import rotate_daily_file
 from core.storage_atomic import atomic_write_json
 from paths import runtime_root, storage_root
+<<<<<<< HEAD
 from src.browser_profile_lifecycle import (
     mark_profile_closed_cleanly,
     mark_profile_closing,
@@ -33,17 +38,23 @@ from src.browser_profile_lifecycle import (
     mark_profile_unclean_shutdown,
 )
 from src.browser_profile_paths import browser_profile_owner_key, canonical_browser_profile_path
+=======
+>>>>>>> origin/main
 from src.runtime.playwright_resolver import (
     resolve_bundled_google_chrome_executable,
     resolve_google_chrome_executable,
     resolve_playwright_chromium_executable,
 )
+<<<<<<< HEAD
 from src.stealth.stealth_core import patch_context
+=======
+>>>>>>> origin/main
 
 PLAYWRIGHT_BASE_FLAGS = [
     "--disable-gpu",
     "--disable-software-rasterizer",
     "--disable-dev-shm-usage",
+<<<<<<< HEAD
     "--disable-non-proxied-udp",
     "--force-webrtc-ip-handling-policy=default_public_interface_only",
     "--disable-blink-features=AutomationControlled",
@@ -52,17 +63,24 @@ PLAYWRIGHT_BASE_FLAGS = [
     "--no-first-run",
     "--no-default-browser-check",
     "--test-type",
+=======
+    "--no-first-run",
+    "--no-default-browser-check",
+>>>>>>> origin/main
     "--disable-background-networking",
     "--disable-background-timer-throttling",
     "--disable-renderer-backgrounding",
     "--disable-features=RendererCodeIntegrity",
 ]
 
+<<<<<<< HEAD
 PLAYWRIGHT_IGNORE_DEFAULT_ARGS = [
     "--enable-automation",
     "--no-sandbox",
 ]
 
+=======
+>>>>>>> origin/main
 PLAYWRIGHT_SAFE_MODE_ARGS = PLAYWRIGHT_BASE_FLAGS + [
     "--enable-logging=stderr",
     "--v=1",
@@ -72,6 +90,7 @@ PLAYWRIGHT_BROWSER_MODE_DEFAULT = "default"
 PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY = "chrome_only"
 PLAYWRIGHT_BROWSER_MODE_MANAGED = "managed"
 
+<<<<<<< HEAD
 
 def normalize_browser_mode(browser_mode: str | None) -> str:
     normalized = str(browser_mode or "").strip().lower()
@@ -84,6 +103,8 @@ def normalize_browser_mode(browser_mode: str | None) -> str:
         return normalized
     return PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY
 
+=======
+>>>>>>> origin/main
 _DRIVER_CRASH_TOKENS = (
     "connection closed while reading from the driver",
     "target page, context or browser has been closed",
@@ -115,7 +136,10 @@ _SYNC_PLAYWRIGHT_LOCK = threading.RLock()
 _SYNC_PLAYWRIGHT = None
 _RUNTIME_OWNER_LOCK = threading.RLock()
 _ASYNC_RUNTIME_INSTANCES: dict[str, weakref.ReferenceType["PlaywrightRuntime"]] = {}
+<<<<<<< HEAD
 _PERSISTENT_PROFILE_OWNERSHIP_LOCK = threading.RLock()
+=======
+>>>>>>> origin/main
 
 
 @dataclass
@@ -129,6 +153,7 @@ _ASYNC_RUNTIME_OWNERS: dict[str, RuntimeOwnerState] = {}
 _SYNC_RUNTIME_OWNERS: dict[str, RuntimeOwnerState] = {}
 
 
+<<<<<<< HEAD
 @dataclass
 class PersistentProfileOwnerState:
     profile_key: str
@@ -142,6 +167,8 @@ class PersistentProfileOwnerState:
 _PERSISTENT_PROFILE_OWNERS: dict[str, PersistentProfileOwnerState] = {}
 
 
+=======
+>>>>>>> origin/main
 class PlaywrightRuntimeCancelledError(RuntimeError):
     pass
 
@@ -150,6 +177,7 @@ class PlaywrightRuntimeTimeoutError(TimeoutError):
     pass
 
 
+<<<<<<< HEAD
 class PersistentProfileOwnershipError(RuntimeError):
     conflict_code = "profile_mode_conflict"
     handoff_code = "profile_handoff_required"
@@ -251,6 +279,8 @@ def _persistent_profile_hold_count(profile_dir: Union[str, Path]) -> int:
         return int(current.hold_count if current is not None else 0)
 
 
+=======
+>>>>>>> origin/main
 def _env_enabled(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "y", "on", "si"}
 
@@ -308,7 +338,10 @@ def run_coroutine_sync(
     poll_interval: float = 0.10,
     cancel_reason: str = "",
     on_cancel: Callable[[], None] | None = None,
+<<<<<<< HEAD
     on_poll: Callable[[], None] | None = None,
+=======
+>>>>>>> origin/main
     ignore_stop: bool = False,
 ) -> Any:
     try:
@@ -352,6 +385,7 @@ def run_coroutine_sync(
         except Exception:
             pass
 
+<<<<<<< HEAD
     def _invoke_on_poll() -> None:
         if not callable(on_poll):
             return
@@ -362,6 +396,9 @@ def run_coroutine_sync(
 
     while True:
         _invoke_on_poll()
+=======
+    while True:
+>>>>>>> origin/main
         if not ignore_stop:
             try:
                 from runtime.runtime import STOP_EVENT
@@ -587,6 +624,7 @@ def _merge_launch_args(*arg_sets: list[str]) -> list[str]:
     return merged
 
 
+<<<<<<< HEAD
 def _context_extra_http_headers(
     locale: Optional[str],
     headers: Optional[Mapping[str, Any]] = None,
@@ -606,6 +644,8 @@ def _context_extra_http_headers(
     return merged or None
 
 
+=======
+>>>>>>> origin/main
 def _should_fallback_to_embedded(exc: BaseException) -> bool:
     message = str(exc or "").strip().lower()
     if not message:
@@ -724,15 +764,25 @@ async def _launch_browser(
 ) -> Browser:
     normalized_args = _merge_launch_args(list(args or []), PLAYWRIGHT_BASE_FLAGS)
     common_kwargs: dict[str, Any] = {
+<<<<<<< HEAD
         "headless": False,
         "slow_mo": int(max(0, slow_mo)),
         "args": normalized_args,
         "ignore_default_args": list(PLAYWRIGHT_IGNORE_DEFAULT_ARGS),
+=======
+        "headless": bool(headless),
+        "slow_mo": int(max(0, slow_mo)),
+        "args": normalized_args,
+>>>>>>> origin/main
     }
     if proxy:
         common_kwargs["proxy"] = dict(proxy)
 
+<<<<<<< HEAD
     normalized_mode = normalize_browser_mode(browser_mode)
+=======
+    normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+>>>>>>> origin/main
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
         managed_kwargs = dict(common_kwargs)
         managed_executable = _managed_launch_executable(executable_path, headless=headless)
@@ -810,7 +860,11 @@ async def _launch_browser(
             return browser
         except Exception as embedded_exc:
             compat_kwargs = dict(embedded_kwargs)
+<<<<<<< HEAD
             compat_kwargs["args"] = _merge_launch_args(normalized_args, [])
+=======
+            compat_kwargs["args"] = _merge_launch_args(normalized_args, ["--no-sandbox"])
+>>>>>>> origin/main
             _emit_browser_layer_log(
                 "Bundled Playwright Chromium retry with compat flags",
                 log_fn=log_fn,
@@ -864,7 +918,10 @@ async def _launch_persistent_context(
     playwright: Playwright,
     *,
     user_data_dir: Union[str, Path],
+<<<<<<< HEAD
     username: str,
+=======
+>>>>>>> origin/main
     headless: bool,
     args: Optional[list[str]] = None,
     proxy: Optional[dict[str, str]] = None,
@@ -882,14 +939,20 @@ async def _launch_persistent_context(
     normalized_args = _merge_launch_args(list(args or []), PLAYWRIGHT_BASE_FLAGS)
     common_kwargs: dict[str, Any] = {
         "user_data_dir": persistent_dir,
+<<<<<<< HEAD
         "headless": False,
         "args": normalized_args,
         "ignore_default_args": list(PLAYWRIGHT_IGNORE_DEFAULT_ARGS),
+=======
+        "headless": bool(headless),
+        "args": normalized_args,
+>>>>>>> origin/main
     }
     if proxy:
         common_kwargs["proxy"] = dict(proxy)
     if kwargs:
         common_kwargs.update(kwargs)
+<<<<<<< HEAD
     persistent_headers = _context_extra_http_headers(
         kwargs.get("locale"),
         kwargs.get("extra_http_headers"),
@@ -898,13 +961,20 @@ async def _launch_persistent_context(
         common_kwargs["extra_http_headers"] = persistent_headers
 
     normalized_mode = normalize_browser_mode(browser_mode)
+=======
+
+    normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+>>>>>>> origin/main
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
         managed_kwargs = dict(common_kwargs)
         managed_executable = _managed_launch_executable(executable_path, headless=headless)
         if managed_executable:
             managed_kwargs["executable_path"] = managed_executable
         context = await playwright.chromium.launch_persistent_context(**managed_kwargs)
+<<<<<<< HEAD
         await patch_context(context, username)
+=======
+>>>>>>> origin/main
         _emit_browser_layer_log(
             f"Managed Playwright persistent launch ok -> {managed_executable or 'default'}",
             log_fn=log_fn,
@@ -921,7 +991,10 @@ async def _launch_persistent_context(
             chrome_kwargs["executable_path"] = candidate
             try:
                 context = await playwright.chromium.launch_persistent_context(**chrome_kwargs)
+<<<<<<< HEAD
                 await patch_context(context, username)
+=======
+>>>>>>> origin/main
                 _emit_browser_layer_log(
                     f"{label} persistent launch ok -> {candidate}",
                     log_fn=log_fn,
@@ -955,7 +1028,10 @@ async def _launch_persistent_context(
             channel="chrome",
             **common_kwargs,
         )
+<<<<<<< HEAD
         await patch_context(context, username)
+=======
+>>>>>>> origin/main
         _emit_browser_layer_log("Chrome channel launch ok", log_fn=log_fn)
         return context
     except Exception as chrome_exc:
@@ -983,19 +1059,29 @@ async def _launch_persistent_context(
         embedded_kwargs["executable_path"] = embedded_executable
         try:
             context = await playwright.chromium.launch_persistent_context(**embedded_kwargs)
+<<<<<<< HEAD
             await patch_context(context, username)
+=======
+>>>>>>> origin/main
             _emit_browser_layer_log("Bundled Playwright Chromium launch ok", log_fn=log_fn)
             return context
         except Exception as embedded_exc:
             compat_kwargs = dict(embedded_kwargs)
+<<<<<<< HEAD
             compat_kwargs["args"] = _merge_launch_args(normalized_args, [])
+=======
+            compat_kwargs["args"] = _merge_launch_args(normalized_args, ["--no-sandbox"])
+>>>>>>> origin/main
             _emit_browser_layer_log(
                 "Bundled Playwright Chromium retry with compat flags",
                 log_fn=log_fn,
             )
             try:
                 context = await playwright.chromium.launch_persistent_context(**compat_kwargs)
+<<<<<<< HEAD
                 await patch_context(context, username)
+=======
+>>>>>>> origin/main
                 _emit_browser_layer_log(
                     "Bundled Playwright Chromium launch ok (compat)",
                     log_fn=log_fn,
@@ -1025,15 +1111,25 @@ def launch_sync_browser(
 ) -> Any:
     """Public sync launcher aligned with the browser-layer fallback strategy."""
     launch_kwargs: dict[str, Any] = {
+<<<<<<< HEAD
         "headless": False,
         "slow_mo": int(max(0, slow_mo)),
         "args": _merge_launch_args(list(args or []), PLAYWRIGHT_BASE_FLAGS),
         "ignore_default_args": list(PLAYWRIGHT_IGNORE_DEFAULT_ARGS),
+=======
+        "headless": bool(headless),
+        "slow_mo": int(max(0, slow_mo)),
+        "args": _merge_launch_args(list(args or []), PLAYWRIGHT_BASE_FLAGS),
+>>>>>>> origin/main
     }
     if proxy:
         launch_kwargs["proxy"] = dict(proxy)
     playwright = start_sync_playwright()
+<<<<<<< HEAD
     normalized_mode = normalize_browser_mode(browser_mode)
+=======
+    normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+>>>>>>> origin/main
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
         managed_kwargs = dict(launch_kwargs)
         managed_executable = _managed_launch_executable(executable_path, headless=headless)
@@ -1106,7 +1202,11 @@ def launch_sync_browser(
             compat_kwargs = dict(embedded_kwargs)
             compat_kwargs["args"] = _merge_launch_args(
                 list(launch_kwargs.get("args") or []),
+<<<<<<< HEAD
                 [],
+=======
+                ["--no-sandbox"],
+>>>>>>> origin/main
             )
             _emit_browser_layer_log("Bundled Playwright Chromium retry with compat flags")
             try:
@@ -1128,7 +1228,10 @@ def launch_sync_browser(
 def launch_sync_persistent_context(
     *,
     user_data_dir: Union[str, Path],
+<<<<<<< HEAD
     username: str | None = None,
+=======
+>>>>>>> origin/main
     headless: bool,
     executable_path: Optional[Union[str, Path]] = None,
     proxy: Optional[dict[str, str]] = None,
@@ -1137,6 +1240,7 @@ def launch_sync_persistent_context(
     **kwargs: Any,
 ) -> Any:
     persistent_dir = str(user_data_dir)
+<<<<<<< HEAD
     username_value = str(username or Path(persistent_dir).name or "default")
     _emit_browser_layer_log(f"Persistent user-data-dir -> {persistent_dir}")
     launch_kwargs: dict[str, Any] = {
@@ -1144,11 +1248,19 @@ def launch_sync_persistent_context(
         "headless": False,
         "args": _merge_launch_args(list(args or []), PLAYWRIGHT_BASE_FLAGS),
         "ignore_default_args": list(PLAYWRIGHT_IGNORE_DEFAULT_ARGS),
+=======
+    _emit_browser_layer_log(f"Persistent user-data-dir -> {persistent_dir}")
+    launch_kwargs: dict[str, Any] = {
+        "user_data_dir": persistent_dir,
+        "headless": bool(headless),
+        "args": _merge_launch_args(list(args or []), PLAYWRIGHT_BASE_FLAGS),
+>>>>>>> origin/main
     }
     if proxy:
         launch_kwargs["proxy"] = dict(proxy)
     if kwargs:
         launch_kwargs.update(kwargs)
+<<<<<<< HEAD
     persistent_headers = _context_extra_http_headers(
         kwargs.get("locale"),
         kwargs.get("extra_http_headers"),
@@ -1157,13 +1269,20 @@ def launch_sync_persistent_context(
         launch_kwargs["extra_http_headers"] = persistent_headers
     playwright = start_sync_playwright()
     normalized_mode = normalize_browser_mode(browser_mode)
+=======
+    playwright = start_sync_playwright()
+    normalized_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
+>>>>>>> origin/main
     if normalized_mode == PLAYWRIGHT_BROWSER_MODE_MANAGED:
         managed_kwargs = dict(launch_kwargs)
         managed_executable = _managed_launch_executable(executable_path, headless=headless)
         if managed_executable:
             managed_kwargs["executable_path"] = managed_executable
         context = playwright.chromium.launch_persistent_context(**managed_kwargs)
+<<<<<<< HEAD
         patch_context(context, username_value)
+=======
+>>>>>>> origin/main
         _emit_browser_layer_log(
             f"Managed Playwright persistent launch ok -> {managed_executable or 'default'}"
         )
@@ -1179,7 +1298,10 @@ def launch_sync_persistent_context(
             chrome_kwargs["executable_path"] = candidate
             try:
                 context = playwright.chromium.launch_persistent_context(**chrome_kwargs)
+<<<<<<< HEAD
                 patch_context(context, username_value)
+=======
+>>>>>>> origin/main
                 _emit_browser_layer_log(f"{label} persistent launch ok -> {candidate}")
                 return context
             except Exception as chrome_exc:
@@ -1203,7 +1325,10 @@ def launch_sync_persistent_context(
         ) from last_error
     try:
         context = playwright.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+<<<<<<< HEAD
         patch_context(context, username_value)
+=======
+>>>>>>> origin/main
         _emit_browser_layer_log("Chrome channel launch ok")
         return context
     except Exception as chrome_exc:
@@ -1227,19 +1352,29 @@ def launch_sync_persistent_context(
         embedded_kwargs["executable_path"] = embedded_executable
         try:
             context = playwright.chromium.launch_persistent_context(**embedded_kwargs)
+<<<<<<< HEAD
             patch_context(context, username_value)
+=======
+>>>>>>> origin/main
             _emit_browser_layer_log("Bundled Playwright Chromium launch ok")
             return context
         except Exception as embedded_exc:
             compat_kwargs = dict(embedded_kwargs)
             compat_kwargs["args"] = _merge_launch_args(
                 list(launch_kwargs.get("args") or []),
+<<<<<<< HEAD
                 [],
+=======
+                ["--no-sandbox"],
+>>>>>>> origin/main
             )
             _emit_browser_layer_log("Bundled Playwright Chromium retry with compat flags")
             try:
                 context = playwright.chromium.launch_persistent_context(**compat_kwargs)
+<<<<<<< HEAD
                 patch_context(context, username_value)
+=======
+>>>>>>> origin/main
                 _emit_browser_layer_log("Bundled Playwright Chromium launch ok (compat)")
                 return context
             except Exception as compat_exc:
@@ -1366,6 +1501,7 @@ class PlaywrightRuntime:
         )
         return state
 
+<<<<<<< HEAD
     def _track_context(
         self,
         context: BrowserContext,
@@ -1424,6 +1560,35 @@ class PlaywrightRuntime:
             context.on("close", _release_context)
         except Exception:
             if not callable(original_close):
+=======
+    def _track_context(self, context: BrowserContext) -> BrowserContext:
+        self._mark_context_open()
+        runtime = self
+        release_state = {"done": False}
+
+        try:
+            def _release_context(*_args: Any, **_kwargs: Any) -> None:
+                if release_state["done"]:
+                    return
+                release_state["done"] = True
+                runtime._mark_context_closed()
+
+            context.on("close", _release_context)
+        except Exception:
+            original_close = context.close
+
+            async def _tracked_close(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return await original_close(*args, **kwargs)
+                finally:
+                    if not release_state["done"]:
+                        release_state["done"] = True
+                        runtime._mark_context_closed()
+
+            try:
+                setattr(context, "close", _tracked_close)
+            except Exception:
+>>>>>>> origin/main
                 self._append_debug("[ownership] context release hook not installed")
         return context
 
@@ -1576,16 +1741,24 @@ class PlaywrightRuntime:
         try:
             browser = await launch_async_browser(
                 self._playwright,
+<<<<<<< HEAD
                 headless=False,
+=======
+                headless=True,
+>>>>>>> origin/main
                 args=list(PLAYWRIGHT_SAFE_MODE_ARGS),
                 executable_path=executable_path,
                 visible_reason="diagnostic_smoke",
                 log_fn=self._append_debug,
             )
+<<<<<<< HEAD
             context = await browser.new_context(
                 extra_http_headers=_context_extra_http_headers("en-US"),
             )
             await patch_context(context, "diagnostic_smoke")
+=======
+            context = await browser.new_context()
+>>>>>>> origin/main
             page = await context.new_page()
             await page.goto("about:blank", wait_until="domcontentloaded", timeout=10_000)
             await context.close()
@@ -1813,7 +1986,10 @@ class PlaywrightRuntime:
         force_headless: Optional[bool] = None,
         safe_mode: bool = False,
         browser_mode: str = PLAYWRIGHT_BROWSER_MODE_DEFAULT,
+<<<<<<< HEAD
         subsystem: str = "default",
+=======
+>>>>>>> origin/main
         _retried: bool = False,
     ) -> BrowserContext:
         profile_path = Path(profile_dir)
@@ -1825,6 +2001,7 @@ class PlaywrightRuntime:
         locale_value = str(locale or "").strip() or None
         timezone_value = str(timezone_id or "").strip() or None
         user_agent_value = str(user_agent or "").strip() or None
+<<<<<<< HEAD
         persistent_release: Callable[[], None] | None = None
 
         try:
@@ -1886,6 +2063,11 @@ class PlaywrightRuntime:
                         },
                     )
 
+=======
+
+        try:
+            if normalized_mode == "persistent":
+>>>>>>> origin/main
                 await self.start(
                     launch_proxy=launch_proxy,
                     executable_path=executable_path,
@@ -1902,6 +2084,16 @@ class PlaywrightRuntime:
                     PLAYWRIGHT_SAFE_MODE_ARGS if active_safe_mode else PLAYWRIGHT_BASE_FLAGS,
                 )
                 persistent_proxy = None if active_safe_mode else (proxy or launch_proxy or None)
+<<<<<<< HEAD
+=======
+                persistent_headless = (
+                    True
+                    if active_safe_mode
+                    else bool(force_headless)
+                    if force_headless is not None
+                    else self.headless
+                )
+>>>>>>> origin/main
                 persistent_kwargs: dict[str, Any] = {
                     **viewport_payload,
                     "permissions": perms,
@@ -1910,15 +2102,21 @@ class PlaywrightRuntime:
                     persistent_kwargs["user_agent"] = user_agent_value
                 if locale_value:
                     persistent_kwargs["locale"] = locale_value
+<<<<<<< HEAD
                     persistent_headers = _context_extra_http_headers(locale_value)
                     if persistent_headers:
                         persistent_kwargs["extra_http_headers"] = persistent_headers
+=======
+>>>>>>> origin/main
                 if timezone_value:
                     persistent_kwargs["timezone_id"] = timezone_value
                 context = await _launch_persistent_context(
                     self._playwright,
                     user_data_dir=str(profile_path),
+<<<<<<< HEAD
                     username=account,
+=======
+>>>>>>> origin/main
                     headless=persistent_headless,
                     executable_path=executable_path,
                     proxy=persistent_proxy,
@@ -1929,6 +2127,7 @@ class PlaywrightRuntime:
                     **persistent_kwargs,
                 )
                 context.set_default_timeout(30_000)
+<<<<<<< HEAD
                 tracked_context = self._track_context(
                     context,
                     before_close=_mark_persistent_profile_closing,
@@ -1954,6 +2153,9 @@ class PlaywrightRuntime:
                     setattr(tracked_context, "_profile_lifecycle_mode", lifecycle_mode)
                 persistent_release = None
                 return tracked_context
+=======
+                return self._track_context(context)
+>>>>>>> origin/main
 
             await self.start(
                 launch_proxy=launch_proxy,
@@ -1978,6 +2180,7 @@ class PlaywrightRuntime:
                 context_kwargs["user_agent"] = user_agent_value
             if locale_value:
                 context_kwargs["locale"] = locale_value
+<<<<<<< HEAD
                 context_headers = _context_extra_http_headers(locale_value)
                 if context_headers:
                     context_kwargs["extra_http_headers"] = context_headers
@@ -1995,6 +2198,16 @@ class PlaywrightRuntime:
                 persistent_release = None
             if is_driver_crash_error(exc) and not _retried:
                 if normalize_browser_mode(browser_mode) in {
+=======
+            if timezone_value:
+                context_kwargs["timezone_id"] = timezone_value
+            context = await self._browser.new_context(**context_kwargs)
+            context.set_default_timeout(30_000)
+            return self._track_context(context)
+        except Exception as exc:
+            if is_driver_crash_error(exc) and not _retried:
+                if str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower() in {
+>>>>>>> origin/main
                     PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY,
                     PLAYWRIGHT_BROWSER_MODE_MANAGED,
                 }:
@@ -2059,7 +2272,10 @@ class PlaywrightRuntime:
                     force_headless=fallback_force_headless,
                     safe_mode=active_safe_mode,
                     browser_mode=browser_mode,
+<<<<<<< HEAD
                     subsystem=subsystem,
+=======
+>>>>>>> origin/main
                     _retried=True,
                 )
             await self._write_diagnostic_bundle(

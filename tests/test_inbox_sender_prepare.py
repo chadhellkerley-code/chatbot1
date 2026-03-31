@@ -87,7 +87,11 @@ def test_account_worker_rebuilds_same_thread_client_when_cached_prepare_is_stale
     monkeypatch.setattr("core.inbox.account_worker.TaskDirectClient", _FakeClient)
     monkeypatch.setattr(
         "core.inbox.account_worker.AccountWorker._focus_composer",
+<<<<<<< HEAD
         lambda self, _thread_id: focus_calls.append(str(self.thread_key or "")),
+=======
+        lambda self: focus_calls.append(str(self.thread_key or "")),
+>>>>>>> origin/main
     )
 
     worker = AccountWorker({"username": "acc1"})
@@ -106,6 +110,7 @@ def test_account_worker_rebuilds_same_thread_client_when_cached_prepare_is_stale
     assert created_clients[0].closed is True
     assert created_clients[1].closed is False
     assert len(focus_calls) == 2
+<<<<<<< HEAD
 
 
 def test_account_worker_prepare_keeps_thread_ready_when_focus_is_degraded(monkeypatch) -> None:
@@ -148,3 +153,5 @@ def test_account_worker_prepare_keeps_thread_ready_when_focus_is_degraded(monkey
     )
 
     assert result == {"ok": True, "reason": "prepared"}
+=======
+>>>>>>> origin/main

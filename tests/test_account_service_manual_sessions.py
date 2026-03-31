@@ -132,6 +132,7 @@ def test_open_profile_sessions_routes_other_changes_to_edit_profile(
     assert calls[0]["restore_page_if_closed"] is False
 
 
+<<<<<<< HEAD
 def test_open_account_profiles_routes_to_each_account_profile(
     monkeypatch,
     tmp_path: Path,
@@ -226,6 +227,8 @@ def test_open_manual_sessions_allows_deactivated_usage_state_when_connected(
     assert len(calls) == 1
 
 
+=======
+>>>>>>> origin/main
 def test_open_manual_sessions_rejects_accounts_requiring_relogin(
     monkeypatch,
     tmp_path: Path,
@@ -243,7 +246,11 @@ def test_open_manual_sessions_rejects_accounts_requiring_relogin(
     _install_accounts(monkeypatch, rows)
     _capture_manual_opens(monkeypatch)
 
+<<<<<<< HEAD
     with pytest.raises(Exception, match="deben estar conectadas"):
+=======
+    with pytest.raises(Exception, match="requieren re-login"):
+>>>>>>> origin/main
         service.open_manual_sessions(
             "alias-a",
             ["tester"],

@@ -1,7 +1,14 @@
+<<<<<<< HEAD
 # runtime.py
 # -*- coding: utf-8 -*-
 """Coordinación de ejecución compartida (eventos de stop y logging)."""
 
+=======
+# runtime.py
+# -*- coding: utf-8 -*-
+"""Coordinación de ejecución compartida (eventos de stop y logging)."""
+
+>>>>>>> origin/main
 from __future__ import annotations
 
 import functools
@@ -9,11 +16,19 @@ import logging
 import os
 import random
 import select
+<<<<<<< HEAD
 import sys
 import threading
 import time
 from pathlib import Path
 
+=======
+import sys
+import threading
+import time
+from pathlib import Path
+
+>>>>>>> origin/main
 _GLOBAL_STOP_EVENT = threading.Event()
 
 
@@ -132,6 +147,7 @@ def request_stop(reason: str, token: EngineCancellationToken | None = None) -> N
     if not STOP_EVENT.global_is_set():
         logging.getLogger("runtime").info("Deteniendo ejecución: %s", reason)
         STOP_EVENT.set()
+<<<<<<< HEAD
 
 
 def ensure_logging(
@@ -170,6 +186,46 @@ def ensure_logging(
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
+=======
+
+
+def ensure_logging(
+    level: int = logging.INFO,
+    *,
+    quiet: bool = False,
+    log_dir: Path | None = None,
+    log_file: str = "app.log",
+) -> None:
+    root = logging.getLogger()
+    if root.handlers:
+        return
+
+    root.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    handlers: list[logging.Handler] = []
+    if log_dir:
+        try:
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(Path(log_dir) / log_file, encoding="utf-8")
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            handlers.append(file_handler)
+        except Exception:
+            pass
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(level if not quiet else logging.WARNING)
+    stream_handler.setFormatter(formatter)
+    handlers.append(stream_handler)
+
+    for handler in handlers:
+        root.addHandler(handler)
+
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+
+>>>>>>> origin/main
 def start_q_listener(
     message: str,
     logger: logging.Logger,
@@ -185,7 +241,11 @@ def start_q_listener(
                 try:
                     if os.name == "nt":
                         import msvcrt  # type: ignore
+<<<<<<< HEAD
 
+=======
+
+>>>>>>> origin/main
                         if msvcrt.kbhit():
                             ch = msvcrt.getwch()
                             if ch.lower() == "q":
@@ -205,6 +265,7 @@ def start_q_listener(
             restore_stop_token(previous)
 
     listener = threading.Thread(target=_watch, daemon=True)
+<<<<<<< HEAD
     listener.start()
     return listener
 
@@ -221,3 +282,21 @@ def sleep_with_stop(total_seconds: int, *, step: float = 1.0) -> None:
         interval = min(step, total_seconds - slept)
         time.sleep(interval)
         slept += interval
+=======
+    listener.start()
+    return listener
+
+
+def jitter_delay(min_seconds: int, max_seconds: int) -> int:
+    if max_seconds <= min_seconds:
+        return max(min_seconds, 0)
+    return random.randint(min_seconds, max_seconds)
+
+
+def sleep_with_stop(total_seconds: int, *, step: float = 1.0) -> None:
+    slept = 0.0
+    while slept < total_seconds and not STOP_EVENT.is_set():
+        interval = min(step, total_seconds - slept)
+        time.sleep(interval)
+        slept += interval
+>>>>>>> origin/main

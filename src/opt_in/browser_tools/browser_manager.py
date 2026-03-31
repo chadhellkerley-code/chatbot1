@@ -10,9 +10,14 @@ from . import audit
 from .config import OptInSettings, get_settings
 from .session_store import SessionStore
 from .utils import random_human_delay
+<<<<<<< HEAD
 from src.playwright_service import get_account_fingerprint, resolve_playwright_executable
 from src.runtime.playwright_runtime import launch_sync_browser, start_sync_playwright
 from src.stealth.stealth_core import patch_context
+=======
+from src.playwright_service import resolve_playwright_executable
+from src.runtime.playwright_runtime import launch_sync_browser, start_sync_playwright
+>>>>>>> origin/main
 
 
 class BrowserManager:
@@ -63,11 +68,16 @@ class BrowserManager:
         context_kwargs = {}
         if storage_state:
             context_kwargs["storage_state"] = storage_state
+<<<<<<< HEAD
         locale = str(get_account_fingerprint(self.account_alias or "default")["locale"])
         context_kwargs["extra_http_headers"] = {"Accept-Language": locale}
 
         self.context = self.browser.new_context(**context_kwargs)
         patch_context(self.context, self.account_alias or "default")
+=======
+
+        self.context = self.browser.new_context(**context_kwargs)
+>>>>>>> origin/main
         self.context.set_default_navigation_timeout(self.settings.navigation_timeout * 1000)
         self.context.set_default_timeout(self.settings.wait_timeout * 1000)
 

@@ -31,7 +31,11 @@ class WarmupWorker:
         if handler is None:
             raise RuntimeError(f"Accion warm up no soportada: {clean_type}")
         try:
+<<<<<<< HEAD
             result = await handler(WarmupActionContext(account=account, payload=dict(payload or {}), action_type=clean_type))
+=======
+            result = await handler(WarmupActionContext(account=account, payload=dict(payload or {})))
+>>>>>>> origin/main
         except Exception as exc:
             return {
                 "action_type": clean_type,

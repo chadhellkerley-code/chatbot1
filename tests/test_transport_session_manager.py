@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+<<<<<<< HEAD
 import threading
 import time
+=======
+>>>>>>> origin/main
 from pathlib import Path
 
 import pytest
 
 from core.proxy_registry import ProxyResolutionError
+<<<<<<< HEAD
 from src.runtime.playwright_runtime import PersistentProfileOwnershipError
 from src.transport.session_manager import (
     ManagedSession,
@@ -16,6 +20,9 @@ from src.transport.session_manager import (
     SessionManager,
     SyncSessionRuntime,
 )
+=======
+from src.transport.session_manager import ManagedSession, SessionManager, SyncSessionRuntime
+>>>>>>> origin/main
 
 
 class _PageStub:
@@ -57,6 +64,7 @@ def _account(username: str = "tester") -> dict:
     return {"username": username}
 
 
+<<<<<<< HEAD
 def _manager(
     *,
     persistent: bool,
@@ -66,11 +74,19 @@ def _manager(
 ) -> SessionManager:
     return SessionManager(
         headless=headless,
+=======
+def _manager(*, persistent: bool, events: list[tuple[str, dict]] | None = None) -> SessionManager:
+    return SessionManager(
+        headless=True,
+>>>>>>> origin/main
         keep_browser_open_per_account=persistent,
         profiles_root="runtime/browser_profiles",
         normalize_username=lambda value: str(value or "").strip().lstrip("@"),
         log_event=(lambda event, **kwargs: events.append((event, kwargs))) if events is not None else (lambda *_args, **_kwargs: None),
+<<<<<<< HEAD
         subsystem=subsystem,
+=======
+>>>>>>> origin/main
     )
 
 
@@ -102,6 +118,7 @@ def test_open_session_reuses_cached_persistent_session() -> None:
     assert first.reused is False
     assert second.reused is True
     assert login_calls["count"] == 1
+<<<<<<< HEAD
     assert received_accounts == [
         {
             "username": "tester",
@@ -138,6 +155,12 @@ def test_campaign_open_session_skips_reused_session_visual_validation() -> None:
     ]
 
 
+=======
+    assert received_accounts == [{"username": "tester", "reuse_session_only": True, "validate_reused_session": True}]
+    assert [item[0] for item in events] == ["SESSION_OPEN", "SESSION_REUSE"]
+
+
+>>>>>>> origin/main
 def test_non_persistent_manager_reuses_shared_active_session() -> None:
     login_calls = {"count": 0}
 
@@ -145,8 +168,13 @@ def test_non_persistent_manager_reuses_shared_active_session() -> None:
         login_calls["count"] += 1
         return _ServiceStub(), _ContextStub(), _PageStub("https://www.instagram.com/direct/inbox/")
 
+<<<<<<< HEAD
     persistent_manager = _manager(persistent=True, subsystem="inbox")
     ephemeral_manager = _manager(persistent=False, subsystem="inbox")
+=======
+    persistent_manager = _manager(persistent=True)
+    ephemeral_manager = _manager(persistent=False)
+>>>>>>> origin/main
 
     sticky = asyncio.run(persistent_manager.open_session(account=_account(), proxy=None, login_func=login_func))
     borrowed = asyncio.run(ephemeral_manager.open_session(account=_account(), proxy=None, login_func=login_func))
@@ -157,6 +185,7 @@ def test_non_persistent_manager_reuses_shared_active_session() -> None:
     assert login_calls["count"] == 1
 
 
+<<<<<<< HEAD
 def test_open_session_does_not_reuse_across_subsystems_for_same_account() -> None:
     login_calls = {"count": 0}
 
@@ -200,6 +229,8 @@ def test_headful_manual_session_uses_distinct_live_bucket() -> None:
     assert login_calls["count"] == 2
 
 
+=======
+>>>>>>> origin/main
 def test_finalize_session_closes_ephemeral_session_after_release() -> None:
     manager = _manager(persistent=False)
     captured: dict[str, object] = {}
@@ -293,7 +324,11 @@ def test_save_storage_state_uses_profiles_root() -> None:
         persistent=False,
         reused=False,
         lease_id="lease-1",
+<<<<<<< HEAD
         pool_key="headless:default:tester",
+=======
+        pool_key="headless:tester",
+>>>>>>> origin/main
     )
 
     asyncio.run(manager.save_storage_state(session, "tester"))
@@ -326,6 +361,7 @@ def test_sync_session_runtime_reuses_same_shared_session() -> None:
     runtime.shutdown(timeout=1.0)
 
 
+<<<<<<< HEAD
 def test_sync_session_runtime_navigation_scope_reuses_outer_owner() -> None:
     async def login_func(account, *, headless, proxy):
         del account, headless, proxy
@@ -353,6 +389,8 @@ def test_sync_session_runtime_navigation_scope_reuses_outer_owner() -> None:
     runtime.shutdown(timeout=1.0)
 
 
+=======
+>>>>>>> origin/main
 def test_sync_session_runtime_blocks_proxy_preflight_before_login(monkeypatch) -> None:
     login_calls = {"count": 0}
 
@@ -431,6 +469,7 @@ def test_finalize_session_persists_storage_state_for_persistent_session() -> Non
     assert isinstance(ctx, _ContextStub)
     assert svc.saved_paths == [Path("runtime/browser_profiles") / "tester" / "storage_state.json"]
     assert ctx.closed is False
+<<<<<<< HEAD
 
 
 def test_open_session_propagates_profile_mode_conflict_reason() -> None:
@@ -606,3 +645,5 @@ def test_navigation_waiter_is_released_when_session_is_dropped() -> None:
     worker.join(timeout=2.0)
 
     assert result.get("status") in {"session_dropped", "navigation_session_retired", "navigation_session_missing"}
+=======
+>>>>>>> origin/main

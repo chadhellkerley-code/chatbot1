@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+<<<<<<< HEAD
 import base64
+=======
+>>>>>>> origin/main
 import json
 import logging
 import os
@@ -454,6 +457,7 @@ def generate_license_key() -> str:
 
 
 def _get_embedded_supabase_config() -> tuple[str, str]:
+<<<<<<< HEAD
     url = "https://sizacwrksmozgtjtonuu.supabase.co"
 
     PART1 = "c2Jfc2VjcmV0X3dnRWJP"
@@ -463,6 +467,12 @@ def _get_embedded_supabase_config() -> tuple[str, str]:
     encoded = PART1 + PART2 + PART3
     key = base64.b64decode(encoded).decode().strip()
     clean_url = url.rstrip("/")
+=======
+    from ._embedded_supabase import SUPABASE_KEY, SUPABASE_URL
+
+    clean_url = str(SUPABASE_URL or "").strip().rstrip("/")
+    key = str(SUPABASE_KEY or "").strip()
+>>>>>>> origin/main
 
     if not clean_url or not key:
         raise LicenseStartupError(

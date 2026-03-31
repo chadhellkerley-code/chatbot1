@@ -94,9 +94,12 @@ class _LazyPageRegistry(Mapping[str, QWidget]):
 
 
 class MainWindow(QMainWindow):
+<<<<<<< HEAD
     DEFAULT_LAUNCH_WIDTH = 1560
     DEFAULT_LAUNCH_HEIGHT = 980
     DEFAULT_LAUNCH_MARGIN = 32
+=======
+>>>>>>> origin/main
     SIDEBAR_ROUTES = (
         ("dashboard", "Dashboard"),
         ("accounts_home", "Cuentas"),
@@ -154,7 +157,11 @@ class MainWindow(QMainWindow):
         self._sidebar_default_width = 280
 
         self.setWindowTitle("InstaCRM")
+<<<<<<< HEAD
         self.setMinimumSize(1240, 800)
+=======
+        self.setMinimumSize(1180, 760)
+>>>>>>> origin/main
         self.setWindowIcon(_build_brand_icon())
 
         self._build_shell()
@@ -458,6 +465,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         screen = app.primaryScreen() if app is not None else None
         if screen is None:
+<<<<<<< HEAD
             self.resize(self.DEFAULT_LAUNCH_WIDTH, self.DEFAULT_LAUNCH_HEIGHT)
             return
         available = screen.availableGeometry()
@@ -468,6 +476,13 @@ class MainWindow(QMainWindow):
         preferred_height = max(self.minimumHeight(), self.DEFAULT_LAUNCH_HEIGHT, int(available.height() * 0.94))
         width = min(max_width, preferred_width)
         height = min(max_height, preferred_height)
+=======
+            self.resize(1400, 900)
+            return
+        available = screen.availableGeometry()
+        width = max(1180, min(available.width() - 60, int(available.width() * 0.9)))
+        height = max(760, min(available.height() - 60, int(available.height() * 0.9)))
+>>>>>>> origin/main
         self.resize(width, height)
 
     def _refresh_status_card(self) -> None:

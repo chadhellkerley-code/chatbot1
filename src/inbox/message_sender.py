@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import time
+<<<<<<< HEAD
 from contextlib import contextmanager
+=======
+>>>>>>> origin/main
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,7 +30,10 @@ from src.inbox.conversation_sync import (
     fetch_thread_payload_async,
     read_conversation_async,
 )
+<<<<<<< HEAD
 from src.transport.session_manager import NavigationLockedError
+=======
+>>>>>>> origin/main
 
 
 class TaskDirectClient:
@@ -55,7 +61,10 @@ class TaskDirectClient:
         self._telemetry_component = str(telemetry_component or "inbox_message_sender").strip()
         self._emit_session_telemetry = bool(emit_session_telemetry)
         self._bypass_account_quota = bool(bypass_account_quota)
+<<<<<<< HEAD
         self._navigation_timeout_seconds = 20.0
+=======
+>>>>>>> origin/main
         if emit_spawn:
             self._telemetry("spawn", "started", thread_id=self._thread_id)
 
@@ -103,6 +112,7 @@ class TaskDirectClient:
                     thread_id=self._thread_id,
                     url=str(getattr(self._page, "url", "") or ""),
                 )
+<<<<<<< HEAD
             self._telemetry(
                 "page_attached",
                 "ok",
@@ -122,6 +132,8 @@ class TaskDirectClient:
                 reused=True,
                 url=str(getattr(self._page, "url", "") or ""),
             )
+=======
+>>>>>>> origin/main
         return self._page
 
     def _find_composer(self, page) -> object | None:
@@ -130,6 +142,7 @@ class TaskDirectClient:
 
         return object() if self._runtime.run_async(_probe()) else None
 
+<<<<<<< HEAD
     def _navigation_owner(self, action: str) -> str:
         thread_key = str(self._thread_id or "session").strip() or "session"
         clean_action = str(action or "operation").strip().lower().replace(" ", "_")
@@ -182,6 +195,20 @@ class TaskDirectClient:
                 **payload,
             )
             return False
+=======
+    def _open_inbox(self, force_reload: bool = False) -> bool:
+        page = self._ensure_page()
+
+        async def _open() -> bool:
+            current_url = str(getattr(page, "url", "") or "")
+            if force_reload or "/direct/" not in current_url:
+                await page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=45_000)
+            await ensure_inbox_page(page)
+            return True
+
+        try:
+            ok = bool(self._runtime.run_async(_open()))
+>>>>>>> origin/main
         except Exception as exc:
             self._telemetry(
                 "inbox_ready",
@@ -223,10 +250,15 @@ class TaskDirectClient:
         return self.open_thread_by_href(href)
 
     def open_thread_by_href(self, href: str, **_kwargs: Any) -> bool:
+<<<<<<< HEAD
+=======
+        page = self._ensure_page()
+>>>>>>> origin/main
         target_href = str(href or "").strip()
         target_thread_id = _extract_thread_id(target_href) or self._thread_id
         if not target_href and target_thread_id:
             target_href = THREAD_URL_TEMPLATE.format(thread_id=target_thread_id)
+<<<<<<< HEAD
         page = self._ensure_page()
         self._telemetry(
             "thread_open_start",
@@ -236,6 +268,8 @@ class TaskDirectClient:
             page_id=id(page),
             url=str(getattr(page, "url", "") or ""),
         )
+=======
+>>>>>>> origin/main
         if not target_href or not target_thread_id:
             self._last_open_thread_diag = {
                 "failed_condition": "invalid_thread_target",
@@ -250,6 +284,7 @@ class TaskDirectClient:
             )
             return False
 
+<<<<<<< HEAD
         try:
             with self._navigation_scope("open_thread"):
                 page = self._ensure_page()
@@ -274,6 +309,18 @@ class TaskDirectClient:
                 **payload,
             )
             return False
+=======
+        async def _open() -> bool:
+            return await ensure_thread_page(
+                page,
+                thread_id=target_thread_id,
+                thread_href=target_href,
+                timeout_ms=12_000,
+            )
+
+        try:
+            ok = bool(self._runtime.run_async(_open()))
+>>>>>>> origin/main
         except Exception as exc:
             self._last_open_thread_diag = {
                 "failed_condition": f"open_thread_error:{exc}",
@@ -295,6 +342,7 @@ class TaskDirectClient:
             "failed_condition": "" if ok else "open_thread_failed",
             "post_url": str(getattr(page, "url", "") or ""),
         }
+<<<<<<< HEAD
         if ok:
             self._telemetry(
                 "thread_open_ok",
@@ -304,6 +352,8 @@ class TaskDirectClient:
                 page_id=id(page),
                 url=str(getattr(page, "url", "") or ""),
             )
+=======
+>>>>>>> origin/main
         self._telemetry(
             "thread_open",
             "ok" if ok else "failed",
@@ -322,6 +372,7 @@ class TaskDirectClient:
         if not target_thread_id:
             self._telemetry("composer_ready", "failed", thread_id=target_thread_id, reason="invalid_thread_id")
             return False, "invalid_thread_id"
+<<<<<<< HEAD
         try:
             with self._navigation_scope("ensure_thread_ready"):
                 thread_href = self._thread_href or THREAD_URL_TEMPLATE.format(thread_id=target_thread_id)
@@ -352,10 +403,24 @@ class TaskDirectClient:
                 return True, "ok"
         except NavigationLockedError as exc:
             payload = self._navigation_payload(exc)
+=======
+        thread_href = self._thread_href or THREAD_URL_TEMPLATE.format(thread_id=target_thread_id)
+        ok = self.open_thread_by_href(thread_href)
+        if not ok:
+            self._telemetry("composer_ready", "failed", thread_id=target_thread_id, reason="open_thread_failed")
+            return False, "open_thread_failed"
+        page = self._ensure_page()
+        if self._find_composer(page) is None:
+            self._last_open_thread_diag = {
+                "failed_condition": "composer_not_found",
+                "post_url": str(getattr(page, "url", "") or ""),
+            }
+>>>>>>> origin/main
             self._telemetry(
                 "composer_ready",
                 "failed",
                 thread_id=target_thread_id,
+<<<<<<< HEAD
                 reason="navigation_locked",
                 **payload,
             )
@@ -479,6 +544,73 @@ class TaskDirectClient:
         except NavigationLockedError as exc:
             payload = self._navigation_payload(exc)
             return {"ok": False, "item_id": "", "timestamp": None, "reason": "navigation_locked", **payload}
+=======
+                reason="composer_not_found",
+                url=str(getattr(page, "url", "") or ""),
+            )
+            return False, "composer_not_found"
+        self._telemetry(
+            "composer_ready",
+            "ok",
+            thread_id=target_thread_id,
+            url=str(getattr(page, "url", "") or ""),
+        )
+        return True, "ok"
+
+    def get_messages(self, thread: object, amount: int = 20, *, log: bool = True) -> list[MessageLike]:
+        del log
+        page = self._ensure_page()
+        thread_id = str(getattr(thread, "id", "") or "").strip() or self._thread_id
+        thread_href = str(getattr(thread, "link", "") or "").strip() or self._thread_href
+
+        async def _read() -> list[MessageLike]:
+            payload = await read_conversation_async(
+                page,
+                account=self.account,
+                thread_id=thread_id,
+                thread_href=thread_href,
+                message_limit=max(20, min(80, int(amount or 20))),
+            )
+            rows: list[MessageLike] = []
+            for raw in payload.get("messages", []):
+                if not isinstance(raw, dict):
+                    continue
+                rows.append(
+                    MessageLike(
+                        id=str(raw.get("message_id") or "").strip(),
+                        user_id=str(raw.get("user_id") or "").strip(),
+                        text=str(raw.get("text") or "").strip(),
+                        timestamp=raw.get("timestamp"),
+                        direction=str(raw.get("direction") or "unknown"),
+                    )
+                )
+            return rows
+
+        return list(self._runtime.run_async(_read()))
+
+    def get_outbound_baseline(self, thread_id: str, *, expected_text: str = "") -> dict[str, Any]:
+        page = self._ensure_page()
+        target_thread_id = str(thread_id or "").strip() or self._thread_id
+
+        async def _baseline() -> dict[str, Any]:
+            payload = await fetch_thread_payload_async(page, thread_id=target_thread_id, limit=30)
+            latest = _latest_outbound_from_payload(
+                payload,
+                self_user_id=self.user_id,
+                thread_id=target_thread_id,
+                expected_text=expected_text,
+            )
+            if latest is None:
+                return {"ok": True, "item_id": "", "timestamp": None, "reason": "baseline_empty"}
+            return {
+                "ok": True,
+                "item_id": str(latest.get("item_id") or "").strip(),
+                "timestamp": latest.get("timestamp"),
+                "reason": "baseline_ok",
+            }
+
+        return dict(self._runtime.run_async(_baseline()))
+>>>>>>> origin/main
 
     def refresh_thread_for_confirmation(self, thread_id: str) -> bool:
         ready_ok, _reason = self.ensure_thread_ready_strict(thread_id)
@@ -513,6 +645,7 @@ class TaskDirectClient:
                     "item_id": None,
                     "reason": f"account_quota_reached:{sent_today}/{limit}",
                 }
+<<<<<<< HEAD
         try:
             with self._navigation_scope("send_text", timeout=max(self._navigation_timeout_seconds, float(timeout or 0.0) + 10.0)):
                 ready_ok, ready_reason = self.ensure_thread_ready_strict(target_thread_id)
@@ -718,15 +851,68 @@ class TaskDirectClient:
                 }
         except NavigationLockedError as exc:
             payload = self._navigation_payload(exc)
+=======
+        ready_ok, ready_reason = self.ensure_thread_ready_strict(target_thread_id)
+        if not ready_ok:
+>>>>>>> origin/main
             self._telemetry(
                 "send_fail",
                 "failed",
                 thread_id=target_thread_id,
+<<<<<<< HEAD
                 reason="navigation_locked",
                 **payload,
             )
             self._log_exact_fail_reason(thread_id=target_thread_id, reason="navigation_locked", **payload)
             return {"ok": False, "item_id": None, "reason": "navigation_locked", **payload}
+=======
+                reason=f"thread_not_ready:{ready_reason}",
+            )
+            return {"ok": False, "item_id": None, "reason": f"thread_not_ready:{ready_reason}"}
+
+        baseline = self.get_outbound_baseline(target_thread_id, expected_text=content)
+        baseline_item_id = str(baseline.get("item_id") or "").strip()
+        baseline_timestamp = baseline.get("timestamp")
+        page = self._ensure_page()
+        send_timeout_ms = max(2_500, int(max(1.0, float(timeout or 4.0)) * 1000.0))
+        sent_after_ts = time.time()
+        confirm_attempts = max(3, int(max(1.0, float(timeout or 4.0)) * 2.5))
+
+        async def _send() -> bool:
+            composer = await _wait_for_visible_locator_async(
+                page,
+                _COMPOSER_SELECTORS,
+                timeout_ms=send_timeout_ms,
+            )
+            if composer is None:
+                return False
+            await composer.click()
+            try:
+                await composer.fill(content)
+            except Exception:
+                await composer.click()
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Backspace")
+                await composer.fill(content)
+            try:
+                await composer.press("Enter")
+                return True
+            except Exception:
+                button = await _find_visible_locator_async(page, _SEND_BUTTON_SELECTORS)
+                if button is None:
+                    return False
+                await button.click()
+                return True
+
+        self._telemetry(
+            "send_attempt",
+            "started",
+            thread_id=target_thread_id,
+            message_length=len(content),
+        )
+        try:
+            sent_ok = bool(self._runtime.run_async(_send()))
+>>>>>>> origin/main
         except Exception as exc:
             self._telemetry(
                 "send_fail",
@@ -736,6 +922,7 @@ class TaskDirectClient:
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
+<<<<<<< HEAD
             self._log_exact_fail_reason(
                 thread_id=target_thread_id,
                 reason=f"send_error:{exc}",
@@ -743,6 +930,85 @@ class TaskDirectClient:
                 error=str(exc),
             )
             return {"ok": False, "item_id": None, "reason": f"send_error:{exc}"}
+=======
+            return {"ok": False, "item_id": None, "reason": f"send_error:{exc}"}
+        if not sent_ok:
+            self._telemetry(
+                "send_fail",
+                "failed",
+                thread_id=target_thread_id,
+                reason="composer_send_failed",
+            )
+            return {"ok": False, "item_id": None, "reason": "composer_send_failed"}
+
+        confirm = self.confirm_new_outbound_after_baseline(
+            target_thread_id,
+            baseline_item_id=baseline_item_id,
+            baseline_timestamp=baseline_timestamp,
+            sent_after_ts=sent_after_ts,
+            expected_text=content,
+            attempts=confirm_attempts,
+            poll_interval_seconds=0.7,
+            allow_dom=True,
+        )
+        if bool(confirm.get("ok", False)):
+            self._telemetry(
+                "send_success",
+                "ok",
+                thread_id=target_thread_id,
+                item_id=str(confirm.get("item_id") or ""),
+                reason=str(confirm.get("reason") or ""),
+            )
+            return confirm
+        if self.refresh_thread_for_confirmation(target_thread_id):
+            confirm = self.confirm_new_outbound_after_baseline(
+                target_thread_id,
+                baseline_item_id=baseline_item_id,
+                baseline_timestamp=baseline_timestamp,
+                sent_after_ts=sent_after_ts,
+                expected_text=content,
+                attempts=max(2, confirm_attempts // 2),
+                poll_interval_seconds=0.6,
+                allow_dom=True,
+            )
+            if bool(confirm.get("ok", False)):
+                self._telemetry(
+                    "send_success",
+                    "ok",
+                    thread_id=target_thread_id,
+                    item_id=str(confirm.get("item_id") or ""),
+                    reason=str(confirm.get("reason") or ""),
+                )
+                return confirm
+        reconciled = self.confirm_outbound_via_thread_read(
+            target_thread_id,
+            baseline_item_id=baseline_item_id,
+            baseline_timestamp=baseline_timestamp,
+            sent_after_ts=sent_after_ts,
+            expected_text=content,
+        )
+        if bool(reconciled.get("ok", False)):
+            self._telemetry(
+                "send_success",
+                "ok",
+                thread_id=target_thread_id,
+                item_id=str(reconciled.get("item_id") or ""),
+                reason=str(reconciled.get("reason") or ""),
+            )
+            return reconciled
+        final_reason = str(reconciled.get("reason") or confirm.get("reason") or "send_unconfirmed")
+        self._telemetry(
+            "send_fail",
+            "failed",
+            thread_id=target_thread_id,
+            reason=final_reason,
+        )
+        return {
+            "ok": False,
+            "item_id": None,
+            "reason": final_reason,
+        }
+>>>>>>> origin/main
 
     def confirm_new_outbound_after_baseline(
         self,
@@ -756,12 +1022,17 @@ class TaskDirectClient:
         poll_interval_seconds: float = 0.8,
         allow_dom: bool = True,
     ) -> dict[str, Any]:
+<<<<<<< HEAD
+=======
+        page = self._ensure_page()
+>>>>>>> origin/main
         target_thread_id = str(thread_id or "").strip() or self._thread_id
         normalized_expected = _normalize_message_text(expected_text)
         baseline_item = str(baseline_item_id or "").strip()
         baseline_ts = float(baseline_timestamp) if baseline_timestamp else None
         sent_anchor = float(sent_after_ts) if sent_after_ts else None
 
+<<<<<<< HEAD
         try:
             with self._navigation_scope("confirm_outbound"):
                 page = self._ensure_page()
@@ -802,6 +1073,40 @@ class TaskDirectClient:
         except NavigationLockedError as exc:
             payload = self._navigation_payload(exc)
             return {"ok": False, "item_id": None, "timestamp": None, "reason": "navigation_locked", **payload}
+=======
+        async def _confirm() -> dict[str, Any]:
+            for _ in range(max(1, int(attempts or 1))):
+                payload = await fetch_thread_payload_async(page, thread_id=target_thread_id, limit=30)
+                latest = _latest_outbound_from_payload(
+                    payload,
+                    self_user_id=self.user_id,
+                    thread_id=target_thread_id,
+                    expected_text=expected_text,
+                )
+                if latest and _is_new_outbound_record(
+                    latest,
+                    baseline_item_id=baseline_item,
+                    baseline_timestamp=baseline_ts,
+                    sent_after_ts=sent_anchor,
+                ):
+                    return {
+                        "ok": True,
+                        "item_id": str(latest.get("item_id") or "").strip() or f"confirmed-{int(time.time() * 1000)}",
+                        "timestamp": latest.get("timestamp"),
+                        "reason": "endpoint_confirmed",
+                    }
+                if allow_dom and normalized_expected and await _dom_has_recent_outbound_text(page, normalized_expected):
+                    return {
+                        "ok": True,
+                        "item_id": f"dom-confirmed-{int(time.time() * 1000)}",
+                        "timestamp": None,
+                        "reason": "dom_confirmed",
+                    }
+                await page.wait_for_timeout(max(150, int(float(poll_interval_seconds or 0.8) * 1000.0)))
+            return {"ok": False, "item_id": None, "timestamp": None, "reason": "not_confirmed"}
+
+        return dict(self._runtime.run_async(_confirm()))
+>>>>>>> origin/main
 
     def confirm_outbound_via_thread_read(
         self,
@@ -812,12 +1117,17 @@ class TaskDirectClient:
         sent_after_ts: float | None = None,
         expected_text: str = "",
     ) -> dict[str, Any]:
+<<<<<<< HEAD
+=======
+        page = self._ensure_page()
+>>>>>>> origin/main
         target_thread_id = str(thread_id or "").strip() or self._thread_id
         baseline_item = str(baseline_item_id or "").strip()
         baseline_ts = float(baseline_timestamp) if baseline_timestamp else None
         sent_anchor = float(sent_after_ts) if sent_after_ts else None
         normalized_expected = _normalize_message_text(expected_text)
 
+<<<<<<< HEAD
         try:
             with self._navigation_scope("confirm_thread_read"):
                 page = self._ensure_page()
@@ -857,6 +1167,40 @@ class TaskDirectClient:
         except NavigationLockedError as exc:
             payload = self._navigation_payload(exc)
             return {"ok": False, "item_id": None, "timestamp": None, "reason": "navigation_locked", **payload}
+=======
+        async def _confirm_from_thread() -> dict[str, Any]:
+            payload = await read_conversation_async(
+                page,
+                account=self.account,
+                thread_id=target_thread_id,
+                thread_href=self._thread_href,
+                message_limit=40,
+            )
+            latest = _latest_outbound_from_messages(payload.get("messages") or [], expected_text=expected_text)
+            if latest and _is_new_outbound_record(
+                latest,
+                baseline_item_id=baseline_item,
+                baseline_timestamp=baseline_ts,
+                sent_after_ts=sent_anchor,
+            ):
+                return {
+                    "ok": True,
+                    "item_id": str(latest.get("item_id") or "").strip()
+                    or f"thread-read-confirmed-{int(time.time() * 1000)}",
+                    "timestamp": latest.get("timestamp"),
+                    "reason": "thread_read_confirmed",
+                }
+            if normalized_expected and await _dom_has_recent_outbound_text(page, normalized_expected):
+                return {
+                    "ok": True,
+                    "item_id": f"dom-confirmed-{int(time.time() * 1000)}",
+                    "timestamp": None,
+                    "reason": "dom_confirmed",
+                }
+            return {"ok": False, "item_id": None, "timestamp": None, "reason": "thread_read_unconfirmed"}
+
+        return dict(self._runtime.run_async(_confirm_from_thread()))
+>>>>>>> origin/main
 
 
 def send_manual_message(
@@ -998,7 +1342,11 @@ def send_pack_messages(
             flow_config=dict(flow_config or {}),
         )
         response = dict(result or {})
+<<<<<<< HEAD
         response["ok"] = bool(response.get("completed", False))
+=======
+        response["ok"] = bool(response.get("completed", False)) and int(response.get("sent_count", 0)) > 0
+>>>>>>> origin/main
         response.setdefault("reason", str(response.get("error") or "ok"))
         return response
     finally:
@@ -1167,6 +1515,7 @@ async def _wait_for_visible_locator_async(
     return await _find_visible_locator_async(page, selectors)
 
 
+<<<<<<< HEAD
 def _page_context(page) -> Any:
     context_attr = getattr(page, "context", None)
     if callable(context_attr):
@@ -1334,6 +1683,8 @@ async def _trigger_send_async(
         return False, "send_button_click_failed"
 
 
+=======
+>>>>>>> origin/main
 async def _dom_has_recent_outbound_text(page, normalized_expected: str) -> bool:
     try:
         values = await page.evaluate(

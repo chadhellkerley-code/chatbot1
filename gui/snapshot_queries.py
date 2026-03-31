@@ -105,6 +105,7 @@ def build_campaign_create_snapshot(services: Any, *, active_alias: str) -> dict[
     }
 
 
+<<<<<<< HEAD
 def build_campaign_capacity_snapshot(
     services: Any,
     *,
@@ -121,6 +122,13 @@ def build_campaign_capacity_snapshot(
         leads_alias=clean_leads_alias,
         workers_requested=max(0, safe_int(workers_requested)),
     )
+=======
+def build_campaign_capacity_snapshot(services: Any, *, alias: str) -> dict[str, Any]:
+    clean_alias = str(alias or "").strip()
+    if not clean_alias:
+        return CampaignCapacity(alias="", workers_capacity=0).to_payload()
+    payload = services.campaigns.get_capacity(clean_alias)
+>>>>>>> origin/main
     if isinstance(payload, dict):
         return CampaignCapacity.from_payload(payload).to_payload()
     return CampaignCapacity(alias=clean_alias, workers_capacity=0).to_payload()
@@ -152,6 +160,7 @@ def _build_account_row(services: Any, record: dict[str, Any]) -> dict[str, Any]:
         if callable(login_progress_resolver)
         else {"active": False, "state": "", "message": "", "label": "", "updated_at": ""}
     )
+<<<<<<< HEAD
     usage_state_resolver = getattr(services.accounts, "usage_state_for_account", None)
     usage_state_label_resolver = getattr(services.accounts, "usage_state_label", None)
     usage_state = (
@@ -164,14 +173,19 @@ def _build_account_row(services: Any, record: dict[str, Any]) -> dict[str, Any]:
         if callable(usage_state_label_resolver)
         else ("Desactivada" if usage_state == "deactivated" else "Activa")
     )
+=======
+>>>>>>> origin/main
     row["proxy_label"] = str(proxy_display.get("label") or "-")
     row["proxy_status"] = str(proxy_display.get("status") or "unknown")
     row["login_progress_active"] = bool(login_progress.get("active"))
     row["login_progress_state"] = str(login_progress.get("state") or "").strip()
     row["login_progress_label"] = str(login_progress.get("label") or "").strip()
     row["login_progress_message"] = str(login_progress.get("message") or "").strip()
+<<<<<<< HEAD
     row["usage_state"] = usage_state
     row["usage_state_label"] = usage_state_label
+=======
+>>>>>>> origin/main
     row["message_limit_label"] = message_limit(row)
     row["manual_action_allowed"] = bool(manual_action.get("allowed", True))
     row["manual_action_message"] = str(manual_action.get("message") or "").strip()
@@ -271,6 +285,7 @@ def build_campaign_monitor_snapshot(services: Any, tasks: Any, *, monitor_state:
     skipped_preblocked = snapshot.skipped_preblocked
     retried = snapshot.retried
     total_leads = snapshot.total_leads or max(0, safe_int(state.get("total_leads")))
+<<<<<<< HEAD
     selected_leads_total = snapshot.selected_leads_total or max(0, safe_int(state.get("selected_leads_total")))
     planned_eligible_leads = snapshot.planned_eligible_leads or max(0, safe_int(state.get("planned_eligible_leads")))
     planned_queue_snapshot = ("selected_leads_total" in raw_payload) or ("planned_eligible_leads" in raw_payload) or ("selected_leads_total" in state) or ("planned_eligible_leads" in state)
@@ -283,6 +298,14 @@ def build_campaign_monitor_snapshot(services: Any, tasks: Any, *, monitor_state:
         total_leads,
         terminal_processed_count,
     ) if total_leads else max(0, terminal_processed_count)
+=======
+    has_explicit_remaining = "remaining" in raw_payload or "remaining" in state
+    raw_remaining = snapshot.remaining if has_explicit_remaining else max(0, safe_int(state.get("remaining")))
+    terminal_processed = min(
+        total_leads,
+        sent + failed + skipped + skipped_preblocked,
+    ) if total_leads else max(0, sent + failed + skipped + skipped_preblocked)
+>>>>>>> origin/main
     remaining = raw_remaining if has_explicit_remaining else (
         max(0, total_leads - terminal_processed) if total_leads else raw_remaining
     )
@@ -322,8 +345,11 @@ def build_campaign_monitor_snapshot(services: Any, tasks: Any, *, monitor_state:
         "retried": retried,
         "remaining": remaining,
         "total_leads": total_leads,
+<<<<<<< HEAD
         "selected_leads_total": selected_leads_total,
         "planned_eligible_leads": planned_eligible_leads,
+=======
+>>>>>>> origin/main
         "active_accounts": safe_int(active_accounts),
         "workers_active": workers_active,
         "workers_requested": snapshot.workers_requested,
@@ -658,17 +684,25 @@ def build_automation_flow_snapshot(
     for item in packs:
         if not isinstance(item, dict):
             continue
+<<<<<<< HEAD
         pack_type = str(item.get("type") or "").strip()
         if not pack_type:
             continue
         pack_key = pack_type
+=======
+        pack_key = str(item.get("type") or item.get("id") or item.get("name") or "").strip()
+>>>>>>> origin/main
         if not pack_key or pack_key in seen_pack_keys:
             continue
         seen_pack_keys.add(pack_key)
         pack_rows.append(
             {
                 "id": pack_key,
+<<<<<<< HEAD
                 "name": str(item.get("name") or pack_type).strip() or pack_type,
+=======
+                "name": str(item.get("type") or item.get("name") or pack_key).strip() or pack_key,
+>>>>>>> origin/main
             }
         )
     return {

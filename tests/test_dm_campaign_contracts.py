@@ -109,6 +109,7 @@ def test_campaign_capacity_normalizes_to_canonical_payload() -> None:
     assert payload == {
         "alias": "demo",
         "workers_capacity": 3,
+<<<<<<< HEAD
         "leads_alias": "",
         "proxies": ["p1", "p2"],
         "has_none_accounts": True,
@@ -119,6 +120,10 @@ def test_campaign_capacity_normalizes_to_canonical_payload() -> None:
         "planned_runnable_leads": 0,
         "remaining_slots_total": 0,
         "account_remaining": [],
+=======
+        "proxies": ["p1", "p2"],
+        "has_none_accounts": True,
+>>>>>>> origin/main
     }
 
 
