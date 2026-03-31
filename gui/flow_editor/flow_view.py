@@ -257,15 +257,12 @@ class FlowBuilderCanvas(QFrame):
             "QMenu::item:selected { background: #1f3250; }"
         )
         items = [
-            ("crear_etapa", "Crear etapa"),
-            ("condicion", "Crear condicion"),
-            ("followup", "Agregar follow-up"),
-            ("transicion", "Agregar transicion"),
-            ("accion_ia", "Agregar accion IA"),
-            ("final", "Agregar bloque final"),
+            ("auto_reply", "Agregar respuesta IA"),
+            ("followup_text", "Agregar texto de follow-up"),
+            ("no_send", "Agregar etapa sin envio"),
         ]
         if self._pack_options:
-            items.insert(5, ("pack", "Agregar pack"))
+            items.insert(0, ("pack", "Agregar pack"))
         scene_point = self._view.mapToScene(self._view.viewport().rect().center())
         target_x = float(scene_point.x())
         target_y = float(scene_point.y())

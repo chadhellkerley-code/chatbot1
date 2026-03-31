@@ -398,7 +398,9 @@ def test_inbox_controller_activates_from_cache_without_polling_loop() -> None:
     service.events.cache_updated.emit({"updated_at": time.time()})
     _pump_events()
     assert len(snapshots) >= 2
-    assert str(snapshots[-1]["sync_label"]).startswith("Actualizado ")
+    assert str(snapshots[-1]["sync_label"]).startswith("Proyeccion local ")
+    assert str(snapshots[-1]["projection_status"]["label"]).startswith("Proyeccion local ")
+    assert snapshots[-1]["projection_status"]["updated_at"] is not None
 
     controller.deactivate()
     assert service.ui_active_calls == [True, False]
@@ -581,6 +583,51 @@ def test_inbox_controller_uses_thread_alias_runtime_for_permissions() -> None:
     assert snapshots[-1]["thread_runtime_status"]["is_running"] is False
     assert snapshots[-1]["thread_permissions"]["runtime_active"] is False
     assert snapshots[-1]["thread_permissions"]["can_manual_send"] is True
+    assert snapshots[-1]["thread_permissions"]["thread_alias_id"] == "soporte"
+    assert snapshots[-1]["thread_permissions"]["selected_runtime_alias"] == "ventas"
+    assert snapshots[-1]["thread_permissions"]["selected_runtime_matches_thread"] is False
+    assert "Runtime seleccionado @ventas" in snapshots[-1]["thread_truth"]["alias_note"]
+    assert "alias del thread @soporte" in snapshots[-1]["thread_truth"]["alias_note"]
+
+    controller.deactivate()
+
+
+def test_inbox_controller_separates_projection_remote_sync_and_thread_truth() -> None:
+    _app()
+    service = _FakeInboxService()
+    service.rows[1]["account_last_sync_at"] = 200.0
+    service.rows[1]["last_synced_at"] = 150.0
+    service.threads["acc-2:thread-2"].update(
+        {
+            "account_last_sync_at": 200.0,
+            "last_synced_at": 150.0,
+            "sender_status": "queued",
+            "messages": [
+                {
+                    "message_id": "local-queued-1",
+                    "direction": "outbound",
+                    "text": "Hola en cola",
+                    "created_at": 199.0,
+                    "delivery_status": "pending",
+                    "local_echo": True,
+                }
+            ],
+        }
+    )
+    controller = InboxController(service)
+    snapshots: list[dict[str, Any]] = []
+    controller.snapshot_changed.connect(lambda payload: snapshots.append(dict(payload)))
+
+    controller.activate(initial_thread_key="acc-2:thread-2")
+    _pump_events()
+
+    assert snapshots[-1]["projection_status"]["label"] == "Proyeccion local lista"
+    assert snapshots[-1]["remote_sync_status"]["label"].startswith("Sync remota @acc-2 ")
+    assert snapshots[-1]["remote_sync_status"]["account_last_sync_at"] == 200.0
+    assert snapshots[-1]["remote_sync_status"]["thread_last_synced_at"] == 150.0
+    assert snapshots[-1]["thread_truth"]["code"] == "queued"
+    assert snapshots[-1]["thread_truth"]["label"] == "Mensaje en cola"
+    assert snapshots[-1]["thread_truth"]["detail"] == "Hay un mensaje local encolado."
 
     controller.deactivate()
 
@@ -779,17 +826,45 @@ def test_inbox_view_runtime_buttons_reflect_selected_alias_state() -> None:
     view = InboxView(_page_context(), _ViewController())
     payload = {
         "metrics": {"threads": 0, "unread": 0, "pending": 0},
-        "sync_label": "Cache local",
+        "sync_label": "Proyeccion local lista",
+        "projection_status": {"label": "Proyeccion local 12:00:00", "updated_at": 100.0, "ready": True},
+        "remote_sync_status": {"label": "Sync remota sin dato"},
         "runtime_aliases": ["ventas"],
-        "runtime_status": {"alias_id": "ventas", "is_running": True, "mode": "both"},
+        "runtime_status": {
+            "alias_id": "ventas",
+            "is_running": True,
+            "worker_state": "degraded",
+            "mode": "both",
+            "scheduler_current_account_id": "acc-1",
+            "scheduler_next_account_id": "acc-2",
+            "sender_attached_account_id": "acc-global",
+            "sender_attached_thread_key": "acc-global:thread-9",
+            "last_heartbeat_at": 100.0,
+            "updated_at": 95.0,
+            "last_send_attempt_account_id": "acc-1",
+            "last_send_attempt_thread_key": "acc-1:thread-1",
+            "last_send_attempt_job_type": "message",
+            "last_send_attempt_job_id": 7,
+            "last_send_attempt_at": 90.0,
+            "last_send_attempt_outcome": "failed",
+            "last_send_attempt_reason_code": "timeout",
+            "last_send_account_id": "acc-2",
+            "last_send_thread_key": "acc-2:thread-2",
+            "last_send_job_type": "pack",
+            "last_send_job_id": 8,
+            "last_send_at": 92.0,
+            "last_send_outcome": "confirmed",
+            "last_send_reason_code": "",
+        },
         "rows": [],
         "total_count": 0,
         "current_thread_key": "",
         "thread": None,
         "thread_permissions": {},
+        "thread_truth": {},
         "messages": [],
         "packs": [],
-        "actions_status": "Selecciona una conversacion para habilitar IA y packs.",
+        "actions_status": "Selecciona una conversacion para ver estado operativo, acciones y runtime.",
         "loading": False,
         "force_scroll_to_bottom": False,
     }
@@ -800,6 +875,13 @@ def test_inbox_view_runtime_buttons_reflect_selected_alias_state() -> None:
     assert view._stop_runtime.isEnabled() is True
     assert view._mode_combo.isEnabled() is False
     assert view._delay_min.isEnabled() is False
+    assert view._projection_label.text() == "Proyeccion local 12:00:00"
+    assert view._remote_sync_label.text() == "Sync remota sin dato"
+    assert view._runtime_status.text() == "Runtime @ventas degradado"
+    assert "Scheduler @acc-1" in view._runtime_meta.text()
+    assert "Sender global @acc-global" in view._runtime_meta.text()
+    assert "Ultimo intento @acc-1" in view._runtime_meta.text()
+    assert "Ultimo resultado @acc-2" in view._runtime_meta.text()
 
     payload["runtime_status"] = {"alias_id": "ventas", "is_running": False, "mode": "both"}
     view._apply_snapshot(payload)
@@ -815,7 +897,9 @@ def test_inbox_view_refreshes_actions_panel_when_suggestion_projection_changes()
     view = InboxView(_page_context(), _ViewController())
     payload = {
         "metrics": {"threads": 1, "unread": 0, "pending": 0},
-        "sync_label": "Cache local",
+        "sync_label": "Proyeccion local lista",
+        "projection_status": {"label": "Proyeccion local lista", "updated_at": None, "ready": True},
+        "remote_sync_status": {"label": "Sync remota @acc-1 00:01:40"},
         "runtime_aliases": ["ventas"],
         "runtime_status": {"alias_id": "ventas", "is_running": False, "mode": "both"},
         "rows": [_thread_payload()],
@@ -823,6 +907,12 @@ def test_inbox_view_refreshes_actions_panel_when_suggestion_projection_changes()
         "current_thread_key": "acc-1:thread-1",
         "thread": _thread_payload(),
         "thread_permissions": _thread_permissions(runtime_active=False, owner="auto", can_manual_send=True),
+        "thread_truth": {
+            "code": "queued",
+            "label": "Mensaje en cola",
+            "detail": "Hay un mensaje local encolado.",
+            "alias_note": "Runtime y thread en @ventas",
+        },
         "messages": [],
         "packs": [],
         "actions_status": "Lista para accionar",
@@ -841,3 +931,48 @@ def test_inbox_view_refreshes_actions_panel_when_suggestion_projection_changes()
     view._apply_snapshot(payload)
 
     assert view._actions_panel._suggestion_preview.toPlainText() == "Nueva sugerencia visible."
+
+
+def test_inbox_view_surfaces_thread_truth_in_chat_and_actions() -> None:
+    _app()
+    view = InboxView(_page_context(), _ViewController())
+    thread = _thread_payload(owner="auto")
+    thread["account_alias"] = "soporte"
+    payload = {
+        "metrics": {"threads": 1, "unread": 0, "pending": 0},
+        "sync_label": "Proyeccion local lista",
+        "projection_status": {"label": "Proyeccion local 12:00:00", "updated_at": 100.0, "ready": True},
+        "remote_sync_status": {"label": "Sync remota @acc-1 12:01:00"},
+        "runtime_aliases": ["ventas", "soporte"],
+        "runtime_status": {"alias_id": "ventas", "is_running": True, "worker_state": "running", "mode": "both"},
+        "rows": [thread],
+        "total_count": 1,
+        "current_thread_key": "acc-1:thread-1",
+        "thread": thread,
+        "thread_permissions": {
+            **_thread_permissions(runtime_active=False, owner="auto", can_manual_send=True),
+            "thread_alias_id": "soporte",
+            "selected_runtime_alias": "ventas",
+            "selected_runtime_matches_thread": False,
+        },
+        "thread_truth": {
+            "code": "queued",
+            "label": "Mensaje en cola",
+            "detail": "Hay un mensaje local encolado.",
+            "alias_note": "Runtime seleccionado @ventas | alias del thread @soporte",
+        },
+        "messages": [],
+        "packs": [],
+        "actions_status": "Mensaje en cola. Alias del thread @soporte. Runtime seleccionado @ventas.",
+        "loading": False,
+        "force_scroll_to_bottom": False,
+    }
+
+    view._apply_snapshot(payload)
+
+    assert view._chat_view._state_badge.text() == "Mensaje en cola"
+    assert "Hay un mensaje local encolado." in view._chat_view._submeta.text()
+    assert "Runtime seleccionado @ventas" in view._chat_view._submeta.text()
+    assert view._actions_panel._thread_badge.text() == "Alias thread @soporte"
+    assert "Mensaje en cola" in view._actions_panel._detail_overview.text()
+    assert "Runtime seleccionado @ventas" in view._actions_panel._detail_overview.text()

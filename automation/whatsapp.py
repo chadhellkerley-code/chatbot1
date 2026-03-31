@@ -1215,7 +1215,6 @@ def _initiate_with_playwright(session_dir: Path) -> tuple[bool, Path | None, str
                     args=[
                         "--disable-notifications",
                         "--disable-infobars",
-                        "--no-sandbox",
                         "--disable-dev-shm-usage",
                     ],
                     viewport={"width": 1280, "height": 720},
@@ -2484,7 +2483,6 @@ def _create_playwright_runtime(user_data_dir: Path, *, headless: bool) -> _Playw
         args=[
             "--disable-notifications",
             "--disable-infobars",
-            "--no-sandbox",
             "--disable-dev-shm-usage",
         ],
         viewport={"width": 1280, "height": 720},

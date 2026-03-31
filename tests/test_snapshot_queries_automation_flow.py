@@ -33,3 +33,16 @@ def test_build_automation_flow_snapshot_ignores_prompt_aliases_not_present_in_ac
     assert snapshot["aliases"] == ["default"]
     assert snapshot["selected_alias"] == "default"
     assert snapshot["flow_config"]["alias"] == "default"
+
+
+def test_build_automation_flow_snapshot_uses_pack_type_as_binding_id() -> None:
+    services = SimpleNamespace(accounts=_FakeAccountsService(), automation=_FakeAutomationService())
+
+    snapshot = build_automation_flow_snapshot(
+        services,
+        active_alias="default",
+        selected_alias="default",
+    )
+
+    assert snapshot["pack_rows"] == [{"id": "PACK_A", "name": "Pack A"}]
+    assert snapshot["pack_options"] == ["PACK_A"]

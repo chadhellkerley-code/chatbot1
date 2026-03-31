@@ -20,8 +20,9 @@ except ImportError:  # pragma: no cover
 
 from . import session_store
 from paths import sessions_root
-from src.playwright_service import resolve_playwright_executable
+from src.playwright_service import get_account_fingerprint, resolve_playwright_executable
 from src.runtime.playwright_runtime import PlaywrightRuntime, launch_async_browser
+from src.stealth.stealth_core import patch_context
 
 _BASE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STORAGE_DIR = sessions_root(_BASE_ROOT) / "optin"
@@ -93,8 +94,12 @@ async def launch_browser(
         context_kwargs["proxy"] = {"server": resolved_proxy}
     if user_agent:
         context_kwargs["user_agent"] = user_agent
+    context_kwargs["extra_http_headers"] = {
+        "Accept-Language": str(get_account_fingerprint(account)["locale"]),
+    }
 
     context = await browser.new_context(**context_kwargs)
+    await patch_context(context, account)
     page = await context.new_page()
 
     async def _close_all() -> None:

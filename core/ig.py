@@ -50,6 +50,7 @@ from core.accounts import (
     auto_login_with_saved_password,
     get_account,
     has_playwright_storage_state,
+    is_account_enabled_for_operation,
     list_all,
     mark_connected,
     prompt_login,
@@ -1400,7 +1401,7 @@ def _handle_event(
 
 
 def _build_accounts_for_alias(alias: str, *, overnight: bool = False) -> list[Dict]:
-    all_acc = [a for a in list_all() if a.get("alias") == alias and a.get("active")]
+    all_acc = [a for a in list_all() if a.get("alias") == alias and is_account_enabled_for_operation(a)]
     if not all_acc:
         warn("No hay cuentas activas en ese alias.")
         if not overnight:

@@ -22,18 +22,17 @@ def test_create_alias_persists_canonical_registry_records(monkeypatch, tmp_path:
 
     assert created == "Ventas Norte"
     assert repeated == "Ventas Norte"
-    assert service.list_aliases() == ["default", "Ventas Norte"]
+    assert service.list_aliases() == ["Ventas Norte"]
 
     payload = service.context.read_json(service._alias_registry_path(), {})
     assert payload.get("schema_version") == 2
     rows = payload.get("aliases") if isinstance(payload, dict) else []
     assert isinstance(rows, list)
-    alias_rows = [row for row in rows if isinstance(row, dict) and row.get("alias_id") != "default"]
-    assert len(alias_rows) == 1
-    assert alias_rows[0]["alias_id"] == "ventas-norte"
-    assert alias_rows[0]["display_name"] == "Ventas Norte"
-    assert alias_rows[0]["created_at"]
-    assert alias_rows[0]["updated_at"]
+    assert len(rows) == 1
+    assert rows[0]["alias_id"] == "ventas-norte"
+    assert rows[0]["display_name"] == "Ventas Norte"
+    assert rows[0]["created_at"]
+    assert rows[0]["updated_at"]
 
 
 @pytest.mark.parametrize("raw_alias", ["ALL", " all ", "default", " DEFAULT ", "   "])
@@ -106,3 +105,32 @@ def test_list_accounts_projects_current_display_name_from_registry(monkeypatch, 
     assert rows[0]["alias_id"] == "ventas-norte"
     assert rows[0]["alias_display_name"] == "VENTAS norte"
     assert rows[0]["alias"] == "VENTAS norte"
+
+
+def test_move_accounts_creates_target_alias_and_updates_selected_accounts(monkeypatch, tmp_path: Path) -> None:
+    service = _build_service(tmp_path)
+    monkeypatch.setattr(
+        account_service_module.accounts_module,
+        "list_all",
+        lambda: [
+            {"username": "uno", "alias": "default"},
+            {"username": "dos", "alias": "default"},
+        ],
+    )
+    monkeypatch.setattr(account_service_module.accounts_module, "sync_alias_metadata", lambda *args, **kwargs: 0)
+    updates: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_update_account(username: str, payload: dict[str, object]) -> bool:
+        updates.append((username, dict(payload)))
+        return True
+
+    monkeypatch.setattr(account_service_module.accounts_module, "update_account", _fake_update_account)
+
+    moved = service.move_accounts(["uno", "dos", "uno"], "Ventas Norte")
+
+    assert moved == 2
+    assert service.list_aliases() == ["default", "Ventas Norte"]
+    assert updates == [
+        ("uno", {"alias": "Ventas Norte"}),
+        ("dos", {"alias": "Ventas Norte"}),
+    ]

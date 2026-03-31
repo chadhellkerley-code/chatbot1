@@ -46,6 +46,9 @@ CONVERSATIONS = STO / "conversation_events.jsonl"
 EXPORTS = exports_root(BASE)
 logger = logging.getLogger(__name__)
 
+# App/business timezone for daily counters, sent-log day bucketing, dashboard
+# "today" metrics, and quota calculations. This is intentionally separate from
+# the live browser/session timezone used by campaign Playwright contexts.
 TZ_LABEL = "America/Argentina/Cordoba"
 
 
@@ -90,6 +93,30 @@ _CAMPAIGN_SNAPSHOT_CACHE: OrderedDict[
     tuple[dict[str, int], set[str], set[str]],
 ] = OrderedDict()
 _CAMPAIGN_SNAPSHOT_LIMIT = 64
+
+
+def refresh_runtime_paths(base: Path | None = None) -> dict[str, Path]:
+    global BASE, STO, SENT, AUTO, STATE, CONVERSATIONS, EXPORTS
+
+    resolved_base = Path(base) if base is not None else Path(__file__).resolve().parent.parent
+    BASE = resolved_base
+    STO = storage_root(BASE)
+    SENT = STO / "sent_log.jsonl"
+    AUTO = STO / "autoresponder_state.json"
+    STATE = STO / "state.json"
+    CONVERSATIONS = STO / "conversation_events.jsonl"
+    EXPORTS = exports_root(BASE)
+    with _CAMPAIGN_SNAPSHOT_LOCK:
+        _CAMPAIGN_SNAPSHOT_CACHE.clear()
+    return {
+        "base": BASE,
+        "storage_root": STO,
+        "sent_log": SENT,
+        "autoresponder_state": AUTO,
+        "state": STATE,
+        "conversation_events": CONVERSATIONS,
+        "exports_root": EXPORTS,
+    }
 
 
 def _now_local() -> datetime:

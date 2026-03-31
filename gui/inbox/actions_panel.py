@@ -180,11 +180,11 @@ class ActionsPanel(QWidget):
         self._thread_badge.setObjectName("InboxThreadBadge")
         badges_row.addWidget(self._thread_badge, 0, Qt.AlignLeft)
 
-        self._classification_badge = QLabel("Todas")
+        self._classification_badge = QLabel("Sin clasificar")
         self._classification_badge.setObjectName("InboxStateBadge")
         badges_row.addWidget(self._classification_badge, 0, Qt.AlignLeft)
 
-        self._owner_badge = QLabel("Sin owner")
+        self._owner_badge = QLabel("Sin control")
         self._owner_badge.setObjectName("InboxMetaChip")
         badges_row.addWidget(self._owner_badge, 0, Qt.AlignLeft)
 
@@ -194,7 +194,7 @@ class ActionsPanel(QWidget):
 
         actions_card, actions_layout = _build_section(
             "Acciones del thread",
-            "Clasificacion, ownership y atajos manuales del thread actual.",
+            "Clasificacion, control manual/automatico y atajos del thread actual.",
         )
         self._status = QLabel("Selecciona una conversacion para habilitar acciones.")
         self._status.setObjectName("InboxMutedText")
@@ -206,17 +206,17 @@ class ActionsPanel(QWidget):
         classify_grid.setHorizontalSpacing(8)
         classify_grid.setVerticalSpacing(8)
 
-        self._qualify_button = QPushButton("Pasar a Agendar / Calificadas")
+        self._qualify_button = QPushButton("Tomar manual y calificar")
         self._qualify_button.setObjectName("InboxPrimaryButton")
         self._qualify_button.clicked.connect(self.markQualifiedRequested.emit)
         classify_grid.addWidget(self._qualify_button, 0, 0, 1, 2)
 
-        self._disqualify_button = QPushButton("Pasar a Descalificadas")
+        self._disqualify_button = QPushButton("Descalificar")
         self._disqualify_button.setObjectName("InboxMiniAction")
         self._disqualify_button.clicked.connect(self.markDisqualifiedRequested.emit)
         classify_grid.addWidget(self._disqualify_button, 1, 0)
 
-        self._clear_bucket_button = QPushButton("Volver a Todas")
+        self._clear_bucket_button = QPushButton("Restaurar a automatico")
         self._clear_bucket_button.setObjectName("InboxMiniAction")
         self._clear_bucket_button.clicked.connect(self.clearClassificationRequested.emit)
         classify_grid.addWidget(self._clear_bucket_button, 1, 1)
@@ -320,7 +320,7 @@ class ActionsPanel(QWidget):
             "Resumen compacto del estado comercial y operativo del lead.",
         )
 
-        self._detail_overview = QLabel("Alias, stage, owner y ultima actividad apareceran aqui.")
+        self._detail_overview = QLabel("Alias, stage, control y ultima actividad apareceran aqui.")
         self._detail_overview.setObjectName("InboxLeadSubtitle")
         self._detail_overview.setWordWrap(True)
         detail_layout.addWidget(self._detail_overview)
@@ -334,8 +334,8 @@ class ActionsPanel(QWidget):
             (
                 ("alias", "Alias"),
                 ("stage", "Stage"),
-                ("owner", "Owner"),
-                ("bucket", "Bucket"),
+                ("owner", "Control"),
+                ("bucket", "Clasificacion"),
                 ("last_activity", "Ultima actividad"),
                 ("quality", "Quality"),
                 ("last_action", "Ultima accion"),
@@ -358,7 +358,13 @@ class ActionsPanel(QWidget):
         self._reset_thread_details()
         self._update_availability()
 
-    def set_thread(self, thread: dict[str, Any] | None, *, permissions: dict[str, Any] | None = None) -> None:
+    def set_thread(
+        self,
+        thread: dict[str, Any] | None,
+        *,
+        permissions: dict[str, Any] | None = None,
+        truth: dict[str, Any] | None = None,
+    ) -> None:
         self._has_thread = bool(thread)
         self._healthy_account = True
         self._can_send_pack = False
@@ -369,8 +375,8 @@ class ActionsPanel(QWidget):
         self._current_suggestion = ""
         if not thread:
             self._thread_badge.setText("Sin thread activo")
-            self._classification_badge.setText("Todas")
-            self._owner_badge.setText("Sin owner")
+            self._classification_badge.setText("Sin clasificar")
+            self._owner_badge.setText("Sin control")
             self._reset_thread_details()
             self._update_suggestion_preview(None)
             self._update_availability()
@@ -388,9 +394,13 @@ class ActionsPanel(QWidget):
         self._can_request_ai = bool(self._thread_permissions.get("can_request_ai", self._has_thread))
         self._current_bucket = bucket
         self._current_owner = owner
+        truth_payload = dict(truth or {})
+        truth_label = str(truth_payload.get("label") or "").strip()
+        truth_detail = str(truth_payload.get("detail") or "").strip()
+        alias_note = str(truth_payload.get("alias_note") or "").strip()
 
         source_label = f"Alias @{alias_id}" if alias_id else f"Cuenta @{account_id}"
-        self._thread_badge.setText(source_label)
+        self._thread_badge.setText(f"Alias thread @{alias_id}" if alias_id else f"Cuenta thread @{account_id}")
         self._classification_badge.setText(_bucket_label(bucket))
         self._owner_badge.setText(_owner_label(owner))
         self._lead_title.setText(display_name)
@@ -407,10 +417,18 @@ class ActionsPanel(QWidget):
                 if part
             )
         )
+        if truth_label or truth_detail or alias_note:
+            self._detail_overview.setText(
+                "  |  ".join(
+                    part
+                    for part in (self._detail_overview.text(), truth_label, truth_detail, alias_note)
+                    if part
+                )
+            )
         self._detail_values["alias"].setText(f"@{alias_id}" if alias_id else f"@{account_id}")
         self._detail_values["stage"].setText(_text_value(thread.get("stage_id") or thread.get("stage"), fallback="Sin etapa"))
-        self._detail_values["owner"].setText(_text_value(thread.get("owner"), fallback="Sin owner"))
-        self._detail_values["bucket"].setText(_text_value(thread.get("bucket"), fallback="Sin bucket"))
+        self._detail_values["owner"].setText(_owner_label(thread.get("owner")))
+        self._detail_values["bucket"].setText(_bucket_label(thread.get("bucket")))
         self._detail_values["last_activity"].setText(_last_activity_value(thread))
         self._detail_values["quality"].setText(_text_value(thread.get("quality"), fallback="Sin quality"))
         self._detail_values["last_action"].setText(_text_value(thread.get("last_action_type"), fallback="Sin accion"))
@@ -476,7 +494,7 @@ class ActionsPanel(QWidget):
     def _reset_thread_details(self) -> None:
         self._lead_title.setText("Selecciona una conversacion")
         self._lead_subtitle.setText("La metadata operativa se mostrara aqui con espacio real y lectura clara.")
-        self._detail_overview.setText("Alias, stage, owner y ultima actividad apareceran aqui.")
+        self._detail_overview.setText("Alias, stage, control y ultima actividad apareceran aqui.")
         for value in self._detail_values.values():
             value.setText("-")
         self._tags_value.setText("Tags: Sin tags")
@@ -570,15 +588,15 @@ def _format_datetime(value: Any) -> str:
 
 def _bucket_label(value: str) -> str:
     return {
-        "qualified": "Agendar / Calificadas",
-        "disqualified": "Descalificadas",
-        "all": "Todas",
-    }.get(str(value or "").strip().lower(), "Todas")
+        "qualified": "Calificada",
+        "disqualified": "Descalificada",
+        "all": "Sin clasificar",
+    }.get(str(value or "").strip().lower(), "Sin clasificar")
 
 
 def _owner_label(value: str) -> str:
     return {
-        "manual": "Owner manual",
-        "auto": "Owner auto",
-        "none": "Sin owner",
-    }.get(str(value or "").strip().lower(), "Sin owner")
+        "manual": "Control manual",
+        "auto": "Control automatico",
+        "none": "Sin control",
+    }.get(str(value or "").strip().lower(), "Sin control")

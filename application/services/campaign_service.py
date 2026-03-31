@@ -16,7 +16,7 @@ from core.templates_store import TemplateStore
 from runtime.runtime import request_stop, reset_stop_event
 from src.dm_campaign.campaign_runner import start_campaign as run_campaign
 from src.dm_campaign.contracts import CampaignCapacity, CampaignLaunchRequest, CampaignRunSnapshot, CampaignRunStatus
-from src.dm_campaign.proxy_workers_runner import calculate_workers_for_alias
+from src.dm_campaign.proxy_workers_runner import calculate_workers_for_alias, refresh_campaign_runtime_paths
 from src.persistence import get_app_state_store
 
 from .base import ServiceContext, ServiceError, normalize_alias
@@ -29,6 +29,7 @@ _CAMPAIGN_PREFLIGHT_MIN_FREE_BYTES = 256 * 1024 * 1024
 class CampaignService:
     def __init__(self, context: ServiceContext) -> None:
         self.context = context
+        self._refresh_campaign_runtime_paths()
         self._template_store = TemplateStore(self.context.root_dir)
         self._lead_store = LeadListStore(self.context.leads_path())
         self._state_store = get_app_state_store(context.root_dir)
@@ -106,6 +107,30 @@ class CampaignService:
         except Exception:
             logger.exception("No se pudo restaurar campaign_state desde SQLite")
 
+    def _refresh_campaign_runtime_paths(self) -> dict[str, Path]:
+        payload = refresh_campaign_runtime_paths(self.context.root_dir)
+        return {
+            key: Path(value)
+            for key, value in payload.items()
+            if isinstance(value, Path)
+        }
+
+    def _log_campaign_paths(self, request: CampaignLaunchRequest) -> None:
+        try:
+            leads_path = self._lead_store.path_for(request.leads_alias).resolve()
+        except Exception:
+            leads_path = self.context.leads_path(request.leads_alias).resolve()
+        sent_log_path = self.context.storage_path("sent_log.jsonl").resolve()
+        lead_status_path = self.context.storage_path("lead_status.json").resolve()
+        self._log_campaign(
+            "info",
+            request.run_id,
+            "campaign_paths leads=%s sent_log=%s lead_status=%s",
+            leads_path,
+            sent_log_path,
+            lead_status_path,
+        )
+
     def _start_heartbeat(self, run_id: str) -> tuple[threading.Event, threading.Thread]:
         stop_event = threading.Event()
 
@@ -131,18 +156,40 @@ class CampaignService:
     def list_templates(self) -> list[dict[str, Any]]:
         return self._template_store.load_templates()
 
-    def get_capacity(self, alias: str) -> dict[str, Any]:
+    def get_capacity(
+        self,
+        alias: str,
+        *,
+        leads_alias: str = "",
+        workers_requested: int = 0,
+        run_id: str = "",
+    ) -> dict[str, Any]:
         clean_alias = normalize_alias(alias)
+        self._refresh_campaign_runtime_paths()
         try:
-            payload = calculate_workers_for_alias(clean_alias)
+            payload = calculate_workers_for_alias(
+                clean_alias,
+                leads_alias=str(leads_alias or "").strip(),
+                workers_requested=max(0, int(workers_requested or 0)),
+                run_id=str(run_id or "").strip(),
+                root_dir=self.context.root_dir,
+            )
         except Exception:
             payload = {}
         return CampaignCapacity.from_payload(
             {
                 "alias": clean_alias,
                 "workers_capacity": payload.get("workers_capacity"),
+                "leads_alias": payload.get("leads_alias"),
                 "proxies": payload.get("proxies"),
                 "has_none_accounts": payload.get("has_none_accounts"),
+                "workers_requested": payload.get("workers_requested"),
+                "workers_effective": payload.get("workers_effective"),
+                "selected_leads_total": payload.get("selected_leads_total"),
+                "planned_eligible_leads": payload.get("planned_eligible_leads"),
+                "planned_runnable_leads": payload.get("planned_runnable_leads"),
+                "remaining_slots_total": payload.get("remaining_slots_total"),
+                "account_remaining": payload.get("account_remaining"),
             }
         ).to_payload()
 
@@ -160,6 +207,7 @@ class CampaignService:
                 **raw_payload,
                 "alias": alias,
                 "leads_alias": leads_alias,
+                "root_dir": str(self.context.root_dir),
                 "run_id": str(raw_payload.get("run_id") or "").strip()
                 or datetime.now().strftime("campaign-%Y%m%d%H%M%S%f"),
                 "started_at": str(raw_payload.get("started_at") or "").strip()
@@ -268,7 +316,26 @@ class CampaignService:
 
     def _validate_launch_request(self, request: CampaignLaunchRequest, *, task_runner: Any | None = None) -> None:
         active_run = CampaignRunSnapshot.from_payload(self.current_run_snapshot())
-        if self._campaign_task_running(task_runner):
+        task_running = self._campaign_task_running(task_runner)
+        if active_run.task_active and not task_running:
+            reconciled = active_run.to_payload()
+            reconciled.update(
+                {
+                    "status": (
+                        CampaignRunStatus.STOPPED.value
+                        if CampaignRunStatus.parse(active_run.status) == CampaignRunStatus.STOPPING
+                        else CampaignRunStatus.INTERRUPTED.value
+                    ),
+                    "message": "Campana recuperada tras cierre inconsistente del runtime anterior.",
+                    "task_active": False,
+                    "workers_active": 0,
+                    "worker_rows": [],
+                    "finished_at": datetime.now().isoformat(timespec="seconds"),
+                }
+            )
+            self._update_current_run(reconciled, replace=True)
+            active_run = CampaignRunSnapshot.from_payload(reconciled)
+        if task_running:
             raise ServiceError("Ya hay una campana en ejecucion.")
         if active_run.task_active:
             raise ServiceError("Ya hay una campana en ejecucion.")
@@ -344,8 +411,41 @@ class CampaignService:
         return self._replace_launch_request(request, total_leads=total_leads)
 
     def _resolve_request_capacity(self, request: CampaignLaunchRequest) -> CampaignLaunchRequest:
-        capacity = CampaignCapacity.from_payload(self.get_capacity(request.alias))
+        capacity = CampaignCapacity.from_payload(
+            self.get_capacity(
+                request.alias,
+                leads_alias=request.leads_alias,
+                workers_requested=request.workers_requested,
+                run_id=request.run_id,
+            )
+        )
         return request.with_capacity(capacity.workers_capacity)
+
+    def _resolve_request_plan(self, request: CampaignLaunchRequest) -> tuple[CampaignLaunchRequest, dict[str, Any]]:
+        try:
+            self._refresh_campaign_runtime_paths()
+            plan = dict(
+                calculate_workers_for_alias(
+                    request.alias,
+                    leads_alias=request.leads_alias,
+                    workers_requested=request.workers_requested,
+                    run_id=request.run_id,
+                    root_dir=self.context.root_dir,
+                )
+                or {}
+            )
+        except Exception as exc:
+            raise ServiceError("No se pudo calcular el plan real de la campaña.") from exc
+        planned_total = max(0, int(plan.get("planned_runnable_leads") or 0))
+        workers_capacity = max(0, int(plan.get("workers_capacity") or 0))
+        return self._replace_launch_request(
+            request,
+            total_leads=planned_total,
+            workers_capacity=workers_capacity,
+            selected_leads_total=max(0, int(plan.get("selected_leads_total") or 0)),
+            planned_eligible_leads=max(0, int(plan.get("planned_eligible_leads") or 0)),
+            planned_queue=list(plan.get("planned_queue") or []),
+        ), plan
 
     def _validate_runtime_db_available(self) -> None:
         raw_db_path = getattr(self._state_store, "db_path", "")
@@ -421,27 +521,32 @@ class CampaignService:
         request: CampaignLaunchRequest,
         *,
         task_runner: Any | None = None,
-    ) -> CampaignLaunchRequest:
+    ) -> tuple[CampaignLaunchRequest, dict[str, Any]]:
+        self._refresh_campaign_runtime_paths()
         self._validate_launch_request(request, task_runner=task_runner)
         request = self._resolve_request_templates(request)
         request = self._resolve_request_total_leads(request)
-        request = self._resolve_request_capacity(request)
+        request, plan = self._resolve_request_plan(request)
         if request.workers_effective <= 0:
             raise ServiceError("No hay workers disponibles para el alias seleccionado.")
         self._validate_runtime_environment()
-        return request
+        return request, plan
 
     def _prepare_launch_request(
         self,
         config: CampaignLaunchRequest | Mapping[str, Any],
         *,
         task_runner: Any | None = None,
-    ) -> CampaignLaunchRequest:
+    ) -> tuple[CampaignLaunchRequest, dict[str, Any]]:
         request = self._build_launch_request(config)
         return self._preflight_launch_request(request, task_runner=task_runner)
 
-    def _starting_snapshot(self, request: CampaignLaunchRequest) -> dict[str, Any]:
+    def _starting_snapshot(self, request: CampaignLaunchRequest, *, plan: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        planning = dict(plan or {})
         snapshot = CampaignRunSnapshot.starting(request).to_payload()
+        snapshot["selected_leads_total"] = max(0, int(planning.get("selected_leads_total") or 0))
+        snapshot["planned_eligible_leads"] = max(0, int(planning.get("planned_eligible_leads") or request.total_leads))
+        snapshot["skipped_preblocked"] = max(0, int(planning.get("skipped_preblocked") or 0))
         if request.workers_effective < request.workers_requested:
             snapshot["message"] = (
                 f"Preparando campana y workers... "
@@ -449,8 +554,8 @@ class CampaignService:
             )
         return snapshot
 
-    def _persist_launch_started(self, request: CampaignLaunchRequest) -> dict[str, Any]:
-        snapshot = self._starting_snapshot(request)
+    def _persist_launch_started(self, request: CampaignLaunchRequest, *, plan: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        snapshot = self._starting_snapshot(request, plan=plan)
         try:
             self._update_current_run(snapshot, replace=True)
         except Exception as exc:
@@ -473,8 +578,9 @@ class CampaignService:
         request: CampaignLaunchRequest,
         *,
         message: str,
+        plan: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        snapshot = self._starting_snapshot(request)
+        snapshot = self._starting_snapshot(request, plan=plan)
         snapshot.update(
             {
                 "status": CampaignRunStatus.FAILED.value,
@@ -490,8 +596,9 @@ class CampaignService:
     def launch_campaign(self, config: CampaignLaunchRequest | Mapping[str, Any], *, task_runner: Any) -> dict[str, Any]:
         with self._launch_lock:
             previous_snapshot = self.current_run_snapshot()
-            request = self._prepare_launch_request(config, task_runner=task_runner)
-            starting_snapshot = self._persist_launch_started(request)
+            request, plan = self._prepare_launch_request(config, task_runner=task_runner)
+            starting_snapshot = self._persist_launch_started(request, plan=plan)
+            self._log_campaign_paths(request)
             try:
                 task_runner.start_task(
                     "campaign",
@@ -506,7 +613,7 @@ class CampaignService:
                     self._update_current_run(previous_snapshot, replace=True)
                 else:
                     self._update_current_run(
-                        self._launch_failed_snapshot(request, message=str(exc) or exc.__class__.__name__),
+                        self._launch_failed_snapshot(request, message=str(exc) or exc.__class__.__name__, plan=plan),
                         replace=True,
                     )
                 self._emit_service_event(
@@ -520,6 +627,7 @@ class CampaignService:
             return self.current_run_snapshot(run_id=request.run_id) or starting_snapshot
 
     def _run_campaign(self, request: CampaignLaunchRequest) -> dict[str, Any]:
+        self._refresh_campaign_runtime_paths()
         def _progress_update(progress: dict[str, Any]) -> None:
             patch = dict(progress or {})
             self._record_runtime_events(patch, run_id=request.run_id)
@@ -610,8 +718,8 @@ class CampaignService:
 
     def start_campaign(self, config: CampaignLaunchRequest | Mapping[str, Any]) -> dict[str, Any]:
         with self._launch_lock:
-            request = self._prepare_launch_request(config)
-            self._persist_launch_started(request)
+            request, plan = self._prepare_launch_request(config)
+            self._persist_launch_started(request, plan=plan)
         return self._run_campaign(request)
 
     def stop_campaign(self, reason: str = "campaign stopped from GUI") -> None:

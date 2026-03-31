@@ -121,10 +121,14 @@ def poll_account(username: str, password: str, proxy: Optional[Dict] = None) -> 
 def poll_all_accounts() -> Dict[str, Any]:
     """Queue polling tasks for active accounts."""
 
-    from core.accounts import list_all
+    from core.accounts import is_account_enabled_for_operation, list_all
 
     logger.info("[POLL ALL] Starting periodic polling")
-    active_accounts = [acc for acc in list_all() if acc.get("status") != "disabled"]
+    active_accounts = [
+        acc
+        for acc in list_all()
+        if acc.get("status") != "disabled" and is_account_enabled_for_operation(acc)
+    ]
     logger.info("[POLL ALL] Polling %s accounts", len(active_accounts))
 
     preflight = preflight_accounts_for_proxy_runtime(active_accounts)

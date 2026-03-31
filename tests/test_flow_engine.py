@@ -47,7 +47,7 @@ def test_flow_simple_3_stages_progresses_without_jumps() -> None:
     )
     assert decision["decision"] == "reply"
     assert decision["next_stage_id"] == "s2"
-    assert decision["action_type"] == "PACK_2"
+    assert decision["action_type"] == "PACK_1"
     updated = engine.apply_outbound(
         {"stage_id": "s1", "followup_level": 0, "objection_step": 0},
         decision,
@@ -90,7 +90,7 @@ def test_flow_complex_10_plus_clamps_out_of_order_transition() -> None:
         }
     )
     assert decision["next_stage_id"] == "s2"
-    assert decision["action_type"] == "PACK_2"
+    assert decision["action_type"] == "PACK_1"
 
 
 def test_followups_multiple_levels_no_repeat_no_double_send() -> None:
@@ -209,7 +209,7 @@ def test_chained_objections_resolve_and_reset_step() -> None:
             "objection_strategy_name": "OBJECION",
         }
     )
-    assert d1["action_type"] == "OBJECION"
+    assert d1["action_type"] == "objection_engine"
     assert d1["objection_step_after"] == 1
     state = engine.apply_outbound({"stage_id": "s1", "followup_level": 0, "objection_step": 0}, d1, sent_at=time.time())
     d2 = engine.evaluate(
@@ -226,7 +226,7 @@ def test_chained_objections_resolve_and_reset_step() -> None:
         }
     )
     assert d2["next_stage_id"] == "s2"
-    assert d2["action_type"] == "PACK_2"
+    assert d2["action_type"] == "PACK_1"
     assert d2["objection_step_after"] == 0
 
 
@@ -464,3 +464,58 @@ def test_select_pack_accepts_pack_id_strategy_name(monkeypatch) -> None:
     assert selected is not None
     assert selected["type"] == "PACK_A"
     assert memory_state["last_pack_used"]["PACK_A"] == "pack-uuid-1"
+
+
+def test_validate_and_normalize_flow_config_rejects_invalid_action_token() -> None:
+    with pytest.raises(ValueError, match="Action type invalido: mensaje"):
+        responder._validate_and_normalize_flow_config(
+            {
+                "version": 1,
+                "entry_stage_id": "s1",
+                "stages": [
+                    _stage(
+                        "s1",
+                        "mensaje",
+                        positive="s1",
+                        negative="s1",
+                        doubt="s1",
+                        neutral="s1",
+                    )
+                ],
+            }
+        )
+
+
+def test_validate_and_normalize_flow_config_accepts_canonical_text_action() -> None:
+    config = responder._validate_and_normalize_flow_config(
+        {
+            "version": 1,
+            "entry_stage_id": "s1",
+            "stages": [
+                _stage(
+                    "s1",
+                    "auto_reply",
+                    positive="s1",
+                    negative="s1",
+                    doubt="s1",
+                    neutral="s1",
+                    followups=[{"delay_hours": 2, "action_type": "followup_text"}],
+                    objection={
+                        "enabled": True,
+                        "action_type": "objection_engine",
+                        "max_steps": 2,
+                        "resolved_transition": "positive",
+                        "unresolved_transition": "negative",
+                    },
+                )
+            ],
+        }
+    )
+
+    stage = config["stages"][0]
+    assert stage["action_type"] == "auto_reply"
+    assert stage["followups"][0]["action_type"] == "followup_text"
+    assert stage["post_objection"]["action_type"] == "objection_engine"
+
+    ok, reason = responder._validate_flow_pack_bindings(config)
+    assert ok, reason

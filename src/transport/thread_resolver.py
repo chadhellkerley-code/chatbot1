@@ -15,27 +15,420 @@ if TYPE_CHECKING:
 class ThreadOpenResult:
     opened: bool
     reason: str
-    method: str = "sidebar_search"
+    method: str = "compose_dialog"
     thread_id: str = ""
 
 
 class SidebarThreadResolver:
+    _SIDEBAR_MIN_WIDTH_PX = 220
+    _SIDEBAR_SEARCH_INPUTS = (
+        "div[role='navigation'] input[name='searchInput']",
+        "div[role='navigation'] input[placeholder*='Search']",
+        "div[role='navigation'] input[placeholder*='Buscar']",
+        "div[role='navigation'] [role='searchbox']",
+        "input[name='searchInput']",
+        "[role='searchbox']",
+    )
+    _DIALOG_SURFACES = (
+        "div[role='dialog']",
+        "[aria-modal='true']",
+    )
+    _DIALOG_CLOSE_BUTTONS = (
+        "div[role='dialog'] [aria-label='Close']",
+        "div[role='dialog'] [aria-label='Cerrar']",
+        "div[role='dialog'] button:has-text('Close')",
+        "div[role='dialog'] button:has-text('Cerrar')",
+        "div[role='dialog'] div[role='button']:has-text('Close')",
+        "div[role='dialog'] div[role='button']:has-text('Cerrar')",
+    )
+
     def __init__(
         self,
         sender: "HumanInstagramSender",
         *,
+        compose_triggers: tuple[str, ...],
         search_inputs: tuple[str, ...],
         result_rows: tuple[str, ...],
+        confirm_buttons: tuple[str, ...],
         thread_open_timeout_ms: int,
         sidebar_row_timeout_ms: int,
         log_event: Callable[..., None],
     ) -> None:
         self._sender = sender
+        self._compose_triggers = tuple(compose_triggers)
         self._search_inputs = tuple(search_inputs)
         self._result_rows = tuple(result_rows)
+        self._confirm_buttons = tuple(confirm_buttons)
         self._thread_open_timeout_ms = int(thread_open_timeout_ms)
         self._sidebar_row_timeout_ms = int(sidebar_row_timeout_ms)
         self._log_event = log_event
+
+    async def _click_locator_best_effort(self, page: Page, locator: Locator) -> bool:
+        try:
+            await locator.scroll_into_view_if_needed(timeout=1_200)
+        except Exception:
+            pass
+        try:
+            await locator.click(timeout=1_500)
+            return True
+        except Exception:
+            pass
+        try:
+            await locator.click(timeout=1_500, force=True)
+            return True
+        except Exception:
+            pass
+        try:
+            await locator.evaluate(
+                """(node) => {
+                    if (!(node instanceof HTMLElement)) return false;
+                    try {
+                        node.scrollIntoView({ block: "center", inline: "nearest" });
+                    } catch (_error) {}
+                    node.click();
+                    return true;
+                }"""
+            )
+            return True
+        except Exception:
+            return False
+
+    async def _wait_compose_search_input(self, page: Page, *, timeout_ms: int) -> Optional[Locator]:
+        deadline = time.time() + (max(250, timeout_ms) / 1000.0)
+        while time.time() < deadline:
+            search_input = await self._sender._first_visible(page, self._search_inputs, max_scan_per_selector=3)
+            if search_input is not None:
+                return search_input
+            try:
+                await page.wait_for_timeout(140)
+            except Exception:
+                break
+        return await self._sender._first_visible(page, self._search_inputs, max_scan_per_selector=3)
+
+    async def _wait_sidebar_search_input(self, page: Page, *, timeout_ms: int) -> Optional[Locator]:
+        deadline = time.time() + (max(250, timeout_ms) / 1000.0)
+        while time.time() < deadline:
+            search_input = await self._sender._first_visible(
+                page,
+                self._SIDEBAR_SEARCH_INPUTS,
+                max_scan_per_selector=3,
+            )
+            if search_input is not None:
+                surface = await self._sidebar_surface_state(page)
+                if not surface or bool(surface.get("usable")):
+                    return search_input
+                self._log_event(
+                    "SIDEBAR_SURFACE_UNAVAILABLE",
+                    reason=str(surface.get("reason") or "collapsed"),
+                    nav_width=int(surface.get("nav_width") or 0),
+                    viewport_width=int(surface.get("viewport_width") or 0),
+                    viewport_height=int(surface.get("viewport_height") or 0),
+                    url=page.url if page else "",
+                )
+                try:
+                    await page.wait_for_timeout(140)
+                except Exception:
+                    break
+                continue
+            try:
+                await page.wait_for_timeout(140)
+            except Exception:
+                break
+        search_input = await self._sender._first_visible(page, self._SIDEBAR_SEARCH_INPUTS, max_scan_per_selector=3)
+        if search_input is None:
+            return None
+        surface = await self._sidebar_surface_state(page)
+        if surface and not bool(surface.get("usable")):
+            return None
+        return search_input
+
+    async def _sidebar_surface_state(self, page: Page) -> Dict[str, Any]:
+        try:
+            result = await page.evaluate(
+                """({ minWidth }) => {
+                    const isVisible = (node) => {
+                        if (!(node instanceof HTMLElement)) return false;
+                        const style = window.getComputedStyle(node);
+                        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        if (rect.width < 12 || rect.height < 10) return false;
+                        if (rect.bottom <= 0 || rect.right <= 0) return false;
+                        if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return false;
+                        return true;
+                    };
+                    const nav =
+                        document.querySelector("div[role='navigation']") ||
+                        document.querySelector("nav[role='navigation']") ||
+                        document.querySelector("aside");
+                    const search =
+                        document.querySelector("div[role='navigation'] input[name='searchInput']") ||
+                        document.querySelector("div[role='navigation'] input[placeholder*='Search']") ||
+                        document.querySelector("div[role='navigation'] input[placeholder*='Buscar']") ||
+                        document.querySelector("div[role='navigation'] [role='searchbox']");
+                    const navVisible = isVisible(nav);
+                    const searchVisible = isVisible(search);
+                    const navRect = navVisible ? nav.getBoundingClientRect() : null;
+                    const searchRect = searchVisible ? search.getBoundingClientRect() : null;
+                    const navWidth = navRect ? Math.round(navRect.width) : 0;
+                    const searchInSidebar = !!(searchRect && searchRect.left < (window.innerWidth * 0.5));
+                    const usable = navVisible && searchVisible && searchInSidebar && navWidth >= minWidth;
+                    let reason = "ok";
+                    if (!navVisible) {
+                        reason = "nav_missing";
+                    } else if (!searchVisible) {
+                        reason = "search_missing";
+                    } else if (!searchInSidebar) {
+                        reason = "search_outside_sidebar";
+                    } else if (navWidth < minWidth) {
+                        reason = "sidebar_collapsed";
+                    }
+                    return {
+                        usable,
+                        reason,
+                        nav_visible: navVisible,
+                        search_visible: searchVisible,
+                        nav_width: navWidth,
+                        viewport_width: Math.round(window.innerWidth || 0),
+                        viewport_height: Math.round(window.innerHeight || 0),
+                    };
+                }""",
+                {"minWidth": int(self._SIDEBAR_MIN_WIDTH_PX)},
+            )
+        except Exception:
+            return {}
+        return dict(result) if isinstance(result, dict) else {}
+
+    async def _open_compose_surface(self, page: Page, *, deadline: float) -> Optional[Locator]:
+        ready_search_input = await self._wait_compose_search_input(
+            page,
+            timeout_ms=min(1_200, self._sender._remaining_ms(deadline, 1_200)),
+        )
+        if ready_search_input is not None:
+            return ready_search_input
+        trigger = await self._sender._first_visible(page, self._compose_triggers, max_scan_per_selector=3)
+        if trigger is None:
+            self._log_event("COMPOSE_TRIGGER_MISSING", url=page.url if page else "")
+            return None
+        if not await self._click_locator_best_effort(page, trigger):
+            self._log_event("COMPOSE_TRIGGER_CLICK_FAILED", url=page.url if page else "")
+            return None
+        wait_ms = self._sender._remaining_ms(deadline, max(2_500, self._sidebar_row_timeout_ms))
+        search_input = await self._wait_compose_search_input(page, timeout_ms=wait_ms)
+        if search_input is None:
+            self._log_event("COMPOSE_SEARCH_INPUT_MISSING", url=page.url if page else "")
+        return search_input
+
+    async def _click_compose_confirm_if_needed(self, page: Page) -> bool:
+        button = await self._sender._first_visible(page, self._confirm_buttons, max_scan_per_selector=3)
+        if button is None:
+            return False
+        clicked = await self._click_locator_best_effort(page, button)
+        if clicked:
+            self._log_event("COMPOSE_CONFIRM_CLICKED", url=page.url if page else "")
+        return clicked
+
+    async def _compose_surface_active(self, page: Page) -> bool:
+        try:
+            search_input = await self._sender._first_visible(page, self._search_inputs, max_scan_per_selector=2)
+        except Exception:
+            search_input = None
+        if search_input is not None:
+            return True
+        try:
+            confirm_button = await self._sender._first_visible(page, self._confirm_buttons, max_scan_per_selector=2)
+        except Exception:
+            confirm_button = None
+        return confirm_button is not None
+
+    async def _dialog_surface_visible(self, page: Page) -> bool:
+        try:
+            dialog = await self._sender._first_visible(page, self._DIALOG_SURFACES, max_scan_per_selector=2)
+        except Exception:
+            dialog = None
+        return dialog is not None
+
+    async def cleanup_stale_compose_state(self, page: Page, *, deadline: float) -> bool:
+        attempts = 0
+        while attempts < 3:
+            compose_active = await self._compose_surface_active(page)
+            dialog_visible = await self._dialog_surface_visible(page)
+            if not compose_active and not dialog_visible:
+                return True
+            close_button = await self._sender._first_visible(page, self._DIALOG_CLOSE_BUTTONS, max_scan_per_selector=2)
+            if close_button is not None:
+                await self._click_locator_best_effort(page, close_button)
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            try:
+                await page.wait_for_timeout(180)
+            except Exception:
+                break
+            attempts += 1
+        compose_active = await self._compose_surface_active(page)
+        dialog_visible = await self._dialog_surface_visible(page)
+        if compose_active or dialog_visible:
+            try:
+                await self._sender._inbox_navigator.ensure_inbox_surface(page, deadline=deadline)
+            except Exception:
+                return False
+        return not (await self._compose_surface_active(page) or await self._dialog_surface_visible(page))
+
+    async def _main_chat_surface_visible(self, page: Page) -> bool:
+        try:
+            result = await page.evaluate(
+                """() => {
+                    const isVisible = (node) => {
+                        if (!(node instanceof HTMLElement)) return false;
+                        const style = window.getComputedStyle(node);
+                        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 24 && rect.height > 18;
+                    };
+                    const main = document.querySelector("[role='main'], main");
+                    return isVisible(main);
+                }"""
+            )
+        except Exception:
+            return True
+        return bool(result)
+
+    async def _right_chat_surface_ready(self, page: Page) -> bool:
+        if not await self._main_chat_surface_visible(page):
+            return False
+        try:
+            composer = await self._sender._message_composer.thread_composer(page)
+        except Exception:
+            composer = None
+        if composer is not None:
+            return True
+        try:
+            result = await page.evaluate(
+                """() => {
+                    const isVisible = (node) => {
+                        if (!(node instanceof HTMLElement)) return false;
+                        const style = window.getComputedStyle(node);
+                        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 24 && rect.height > 18;
+                    };
+                    const main = document.querySelector("[role='main'], main");
+                    if (!(main instanceof HTMLElement) || !isVisible(main)) return false;
+                    const headerSelectors = [
+                        "[role='main'] header",
+                        "main header",
+                    ];
+                    for (const selector of headerSelectors) {
+                        const node = document.querySelector(selector);
+                        if (isVisible(node)) {
+                            return true;
+                        }
+                    }
+                    const historySelectors = [
+                        "[role='main'] [role='row']",
+                        "[role='main'] [role='grid']",
+                        "[role='main'] ul",
+                        "[role='main'] section",
+                        "[role='main'] article",
+                    ];
+                    for (const selector of historySelectors) {
+                        const node = document.querySelector(selector);
+                        if (isVisible(node)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        except Exception:
+            return True
+        return bool(result)
+
+    async def _chat_header_matches_target(self, page: Page, username: str) -> bool:
+        target = self._sender._normalize_username(username).lower()
+        if not target:
+            return False
+        try:
+            header_links = page.locator("header a[href^='/'], main header a[href^='/']")
+            total_links = await header_links.count()
+        except Exception:
+            total_links = 0
+            header_links = None
+        for idx in range(min(total_links, 8)):
+            try:
+                href = str(await header_links.nth(idx).get_attribute("href") or "").strip()
+            except Exception:
+                continue
+            candidate = href.strip("/")
+            if not candidate or "/" in candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered in {"direct", "accounts"}:
+                continue
+            if self._sender._normalize_username(candidate).lower() == target:
+                return True
+        try:
+            matched = await page.evaluate(
+                r"""({ target }) => {
+                    const normalize = (value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+                    const extractTokens = (value) => {
+                        const seen = new Set();
+                        const tokens = [];
+                        const matches = normalize(value).match(/@?[a-z0-9._]{1,30}/g) || [];
+                        for (const raw of matches) {
+                            const candidate = raw.replace(/^@/, "");
+                            if (!candidate || seen.has(candidate)) continue;
+                            seen.add(candidate);
+                            tokens.push(candidate);
+                        }
+                        return tokens;
+                    };
+                    const isVisible = (node) => {
+                        if (!(node instanceof HTMLElement)) return false;
+                        const style = window.getComputedStyle(node);
+                        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        if (rect.width < 12 || rect.height < 10) return false;
+                        if (rect.bottom <= 0 || rect.right <= 0) return false;
+                        if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return false;
+                        return true;
+                    };
+                    const topBoundary = Math.max(260, window.innerHeight * 0.45);
+                    const leftBoundary = window.innerWidth * 0.35;
+                    const candidates = Array.from(document.querySelectorAll("header *, main *"));
+                    for (const node of candidates) {
+                        if (!isVisible(node)) continue;
+                        const rect = node.getBoundingClientRect();
+                        if (rect.top > topBoundary) continue;
+                        if (rect.left < leftBoundary) continue;
+                        const samples = [
+                            node.getAttribute("aria-label"),
+                            node.getAttribute("title"),
+                            node.textContent,
+                        ];
+                        for (const sample of samples) {
+                            const tokens = extractTokens(sample);
+                            if (tokens.includes(target)) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }""",
+                {"target": target},
+            )
+        except Exception:
+            matched = False
+        return bool(matched)
 
     async def _probe_sidebar_results(
         self,
@@ -234,6 +627,8 @@ class SidebarThreadResolver:
             current_thread = self.extract_thread_id_from_direct_url(current_url)
             in_thread_url = "/direct/t/" in current_url and bool(current_thread)
             changed_from_before = not previous_thread or current_thread != previous_thread or current_url != previous_url
+            header_match = await self._chat_header_matches_target(page, username)
+            candidate_match = self._sender._normalize_username(candidate_username).lower() == target if candidate_username else False
             if in_thread_url and changed_from_before:
                 self._log_event(
                     "THREAD_OPEN_OK",
@@ -242,6 +637,20 @@ class SidebarThreadResolver:
                     current_thread=current_thread,
                     previous_thread=previous_thread or "-",
                     url=current_url,
+                    matched_via="sidebar_thread_header" if header_match else "sidebar_thread_url_only",
+                    header_match=header_match,
+                )
+                return True
+            if in_thread_url and candidate_match:
+                self._log_event(
+                    "THREAD_OPEN_OK",
+                    row_username=candidate_username or "-",
+                    target_username=target,
+                    current_thread=current_thread or "-",
+                    previous_thread=previous_thread or "-",
+                    url=current_url,
+                    matched_via="sidebar_target_header" if header_match else "sidebar_target_url_only",
+                    header_match=header_match,
                 )
                 return True
             try:
@@ -417,6 +826,79 @@ class SidebarThreadResolver:
             thread_id=current_thread,
         )
 
+    async def _clear_search_input_best_effort(self, page: Page, search_input: Locator) -> None:
+        try:
+            await self._sender._focus_input_best_effort(search_input)
+            await self._sender._clear_input_best_effort(page, search_input)
+            await self._wait_for_search_value(page, search_input, "", timeout_ms=700)
+        except Exception:
+            return None
+
+    async def _try_open_existing_sidebar_thread(
+        self,
+        page: Page,
+        username: str,
+        *,
+        deadline: float,
+        flow_hook: Optional[Callable[[str, bool], None]] = None,
+    ) -> Optional[ThreadOpenResult]:
+        target = self._sender._normalize_username(username).lower()
+        if not target:
+            return ThreadOpenResult(False, "invalid_username", method="sidebar_search")
+        search_timeout = min(1_200, self._sender._remaining_ms(deadline, 1_200))
+        if search_timeout <= 0:
+            return None
+        search_input = await self._wait_sidebar_search_input(page, timeout_ms=search_timeout)
+        if search_input is None:
+            return ThreadOpenResult(False, "sidebar_unavailable", method="sidebar_search")
+        try:
+            baseline_probe = await self._probe_sidebar_results(page)
+            baseline_signature = str(baseline_probe.get("signature") or "").strip()
+            if callable(flow_hook):
+                flow_hook("typing existing thread search", True)
+            await self.clear_and_type_search(page, search_input, username)
+            if callable(flow_hook):
+                flow_hook("waiting existing thread results", True)
+            wait_timeout = self._sender._remaining_ms(deadline, self._sidebar_row_timeout_ms)
+            if wait_timeout <= 0:
+                return ThreadOpenResult(False, "thread_open_failed")
+            probe = await self.wait_sidebar_results_ready(
+                page,
+                username,
+                timeout_ms=wait_timeout,
+                baseline_signature=baseline_signature,
+            )
+            row = await self.find_exact_sidebar_row(page, username, timeout_ms=wait_timeout)
+            if self._sender._is_chrome_error_url(page):
+                return ThreadOpenResult(False, "chrome_error")
+            surface = await self._sidebar_surface_state(page)
+            if surface and not bool(surface.get("usable")):
+                return ThreadOpenResult(False, "sidebar_unavailable", method="sidebar_search")
+            query_value = self._sender._normalize_username(str(probe.get("query_value") or "")).lower()
+            if query_value and query_value != target:
+                return ThreadOpenResult(False, "sidebar_unavailable", method="sidebar_search")
+            if row is None:
+                return ThreadOpenResult(False, "username_not_found", method="sidebar_search")
+            open_timeout = self._sender._remaining_ms(deadline, self._thread_open_timeout_ms)
+            if open_timeout <= 0:
+                return ThreadOpenResult(False, "thread_open_failed", method="sidebar_search")
+            opened = await self.wait_thread_open(
+                page,
+                row,
+                username,
+                timeout_ms=open_timeout,
+                flow_hook=flow_hook,
+            )
+            current_thread = self.extract_thread_id_from_direct_url(page.url or "")
+            return ThreadOpenResult(
+                opened,
+                "ok" if opened else "thread_open_failed",
+                method="sidebar_search",
+                thread_id=current_thread,
+            )
+        finally:
+            await self._clear_search_input_best_effort(page, search_input)
+
     async def open_thread_from_sidebar(
         self,
         page: Page,
@@ -428,98 +910,15 @@ class SidebarThreadResolver:
         if self._sender._is_chrome_error_url(page):
             self._log_event("CHROME_ERROR_IN_OPEN_THREAD", url=page.url if page else "")
             return ThreadOpenResult(False, "chrome_error")
-
-        if callable(flow_hook):
-            flow_hook("open search", False)
-            flow_hook("waiting search input visible", True)
-        search_input = await self._sender._first_visible(page, self._search_inputs, max_scan_per_selector=2)
-        if search_input is None:
-            self._log_event("SIDEBAR_SEARCH_INPUT_MISSING", url=page.url if page else "")
-            if self._sender._is_chrome_error_url(page):
-                return ThreadOpenResult(False, "chrome_error")
+        cleaned = await self.cleanup_stale_compose_state(page, deadline=deadline)
+        if not cleaned:
             return ThreadOpenResult(False, "ui_not_found")
-        if callable(flow_hook):
-            flow_hook("search input visible", False)
-
-        baseline_probe = await self._probe_sidebar_results(page)
-        try:
-            if callable(flow_hook):
-                flow_hook(f"typing username: {self._sender._normalize_username(username)}", True)
-            await self.clear_and_type_search(page, search_input, username)
-        except Exception as exc:
-            self._log_event("SIDEBAR_SEARCH_TYPE_FAIL", error=repr(exc))
-            if self._sender._is_chrome_error_url(page):
-                return ThreadOpenResult(False, "chrome_error")
-            return ThreadOpenResult(False, "ui_not_found")
-
-        if self._sender._is_chrome_error_url(page):
-            return ThreadOpenResult(False, "chrome_error")
-
-        row_timeout = self._sender._remaining_ms(deadline, self._sidebar_row_timeout_ms)
-        if row_timeout <= 0:
-            return ThreadOpenResult(False, "thread_open_failed")
-        if callable(flow_hook):
-            flow_hook("waiting search results", True)
-        results_wait_started_at = time.perf_counter()
-        ready_probe = await self.wait_sidebar_results_ready(
+        result = await self._try_open_existing_sidebar_thread(
             page,
             username,
-            timeout_ms=row_timeout,
-            baseline_signature=str(baseline_probe.get("signature") or ""),
-        )
-        self._log_event(
-            "SIDEBAR_RESULTS_READY",
-            target_username=self._sender._normalize_username(username).lower(),
-            wait_ms=int((time.perf_counter() - results_wait_started_at) * 1000),
-            row_count=max(0, int(ready_probe.get("row_count") or 0)),
-            exact_match=bool(ready_probe.get("exact_match")),
-            surface_changed=bool(ready_probe.get("surface_changed")),
-            query_value=str(ready_probe.get("query_value") or ""),
-        )
-        if bool(ready_probe.get("exact_match")):
-            js_open_result = await self._open_exact_match_via_js(
-                page,
-                username,
-                deadline=deadline,
-                flow_hook=flow_hook,
-            )
-            if js_open_result is not None:
-                return js_open_result
-
-        row_timeout = self._sender._remaining_ms(deadline, self._sidebar_row_timeout_ms)
-        if row_timeout <= 0:
-            return ThreadOpenResult(False, "thread_open_failed")
-        row = await self.find_exact_sidebar_row(page, username, timeout_ms=row_timeout)
-        if row is None:
-            js_open_result = await self._open_exact_match_via_js(
-                page,
-                username,
-                deadline=deadline,
-                flow_hook=flow_hook,
-            )
-            if js_open_result is not None:
-                return js_open_result
-            self._log_event("SIDEBAR_EXACT_MATCH_MISSING", username=username)
-            if self._sender._is_chrome_error_url(page):
-                return ThreadOpenResult(False, "chrome_error")
-            return ThreadOpenResult(False, "username_not_found")
-
-        open_timeout = self._sender._remaining_ms(deadline, self._thread_open_timeout_ms)
-        if open_timeout <= 0:
-            return ThreadOpenResult(False, "thread_open_failed")
-        if callable(flow_hook):
-            flow_hook("results detected", False)
-            flow_hook("clicking result", True)
-        opened = await self.wait_thread_open(
-            page,
-            row,
-            username,
-            timeout_ms=open_timeout,
+            deadline=deadline,
             flow_hook=flow_hook,
         )
-        current_thread = self.extract_thread_id_from_direct_url(page.url or "")
-        return ThreadOpenResult(
-            opened,
-            "ok" if opened else "thread_open_failed",
-            thread_id=current_thread,
-        )
+        if result is None:
+            return ThreadOpenResult(False, "username_not_found", method="sidebar_search")
+        return result

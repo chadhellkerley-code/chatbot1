@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from application.services import AutomationService, ServiceContext
 from core import responder
 
@@ -133,3 +135,31 @@ def test_automation_service_does_not_overwrite_existing_data_root_files(monkeypa
     assert service.list_packs()[0]["name"] == "Pack Primary"
     flow = service.get_flow_config("ventas")
     assert flow["entry_stage_id"] == "stage_primary"
+
+
+def test_automation_service_save_flow_config_rejects_invalid_action_type(monkeypatch, tmp_path: Path) -> None:
+    _configure_responder_paths(monkeypatch, tmp_path)
+    service = AutomationService(ServiceContext.default(root_dir=tmp_path))
+
+    with pytest.raises(ValueError, match="Action type invalido: mensaje"):
+        service.save_flow_config(
+            "ventas",
+            {
+                "version": 1,
+                "entry_stage_id": "stage_1",
+                "stages": [
+                    {
+                        "id": "stage_1",
+                        "action_type": "mensaje",
+                        "transitions": {
+                            "positive": "stage_1",
+                            "negative": "stage_1",
+                            "doubt": "stage_1",
+                            "neutral": "stage_1",
+                        },
+                        "followups": [],
+                        "post_objection": {"enabled": False, "action_type": "", "max_steps": 1},
+                    }
+                ],
+            },
+        )

@@ -6,6 +6,8 @@ import threading
 import time
 from typing import Any
 
+from src.inbox_diagnostics import record_inbox_diagnostic
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +25,46 @@ class AliasRuntimeScheduler:
         self._threads: dict[str, threading.Thread] = {}
         self._stops: dict[str, threading.Event] = {}
 
+    def _record_diagnostic(
+        self,
+        *,
+        alias_id: str,
+        account_id: str = "",
+        event_type: str,
+        stage: str,
+        outcome: str,
+        reason: str = "",
+        reason_code: str = "",
+        exception: BaseException | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        record_inbox_diagnostic(
+            self._store,
+            event_type=event_type,
+            stage=stage,
+            outcome=outcome,
+            account_id=account_id,
+            alias_id=alias_id,
+            reason=reason,
+            reason_code=reason_code,
+            exception=exception,
+            payload=payload,
+            callsite_skip=2,
+        )
+
     def start_alias(self, alias_id: str, config: dict[str, Any]) -> dict[str, Any]:
         clean_alias = str(alias_id or "").strip()
         if not clean_alias:
             return {}
+        self._record_diagnostic(
+            alias_id=clean_alias,
+            event_type="alias_runtime_start_requested",
+            stage="start",
+            outcome="attempt",
+            reason="alias_runtime_start_requested",
+            reason_code="alias_runtime_start_requested",
+            payload={"config": dict(config or {})},
+        )
         started_at = time.time()
         with self._lock:
             worker = self._threads.get(clean_alias)
@@ -62,6 +100,14 @@ class AliasRuntimeScheduler:
         clean_alias = str(alias_id or "").strip()
         if not clean_alias:
             return {}
+        self._record_diagnostic(
+            alias_id=clean_alias,
+            event_type="alias_runtime_stop_requested",
+            stage="stop",
+            outcome="attempt",
+            reason="alias_runtime_stop_requested",
+            reason_code="alias_runtime_stop_requested",
+        )
         with self._lock:
             stop_event = self._stops.get(clean_alias)
             worker = self._threads.get(clean_alias)
@@ -283,6 +329,14 @@ class AliasRuntimeScheduler:
                     break
                 if not accounts:
                     last_error = "no_active_accounts"
+                    self._record_diagnostic(
+                        alias_id=alias_id,
+                        event_type="process_account_turn_skipped",
+                        stage="process_account_turn",
+                        outcome="skip",
+                        reason=last_error,
+                        reason_code=last_error,
+                    )
                     drain_reason = last_error
                     self._drain_pending_jobs(alias_id, reason=drain_reason)
                     break
@@ -310,7 +364,19 @@ class AliasRuntimeScheduler:
                                 "stats": stats,
                             },
                         )
-                        result = self._runtime.process_account_turn(account, mode=mode)
+                        try:
+                            result = self._runtime.process_account_turn(account, mode=mode)
+                        except Exception as exc:
+                            self._record_diagnostic(
+                                alias_id=alias_id,
+                                account_id=account_id,
+                                event_type="process_account_turn_failed",
+                                stage="process_account_turn",
+                                outcome="fail",
+                                exception=exc,
+                                payload={"mode": mode, "turn": turn},
+                            )
+                            raise
                         stats["accounts_processed"] += 1
                         stats["turns"] += 1
                         stats["queued_jobs"] += int(result.get("queued_jobs") or 0)
@@ -371,6 +437,14 @@ class AliasRuntimeScheduler:
             exit_state = "error"
             drain_reason = "runtime_crashed"
             last_error = f"{type(exc).__name__}: {exc}"
+            self._record_diagnostic(
+                alias_id=alias_id,
+                event_type="alias_runtime_loop_failed",
+                stage="loop",
+                outcome="fail",
+                exception=exc,
+                payload={"mode": mode, "stats": stats},
+            )
             logger.exception("Alias runtime worker crashed for %s", alias_id)
             self._drain_pending_jobs(alias_id, reason=drain_reason)
         finally:

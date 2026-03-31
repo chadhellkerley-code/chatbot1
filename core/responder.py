@@ -23,6 +23,7 @@ from core.accounts import (
     _store_account_password,
     get_account,
     has_playwright_storage_state,
+    is_account_enabled_for_operation,
     list_all,
     mark_connected,
 )
@@ -333,6 +334,35 @@ _FLOW_OBJECTION_ACTION_ALIASES = {
     "objection",
     "objecion",
 }
+_FLOW_ACTION_SPECIAL_ALIASES = {
+    "auto_reply": "auto_reply",
+    "autorespuesta": "auto_reply",
+    "reply_prompt": "auto_reply",
+    "followup_text": "followup_text",
+    "followup_prompt": "followup_text",
+    "objection_engine": "objection_engine",
+    "objecion_engine": "objection_engine",
+    "objection": "objection_engine",
+    "objecion": "objection_engine",
+    "no_send": "no_send",
+    "no_enviar": "no_send",
+    "noenviar": "no_send",
+    "no_responder": "no_send",
+    "noresponder": "no_send",
+    "ninguna": "no_send",
+    "none": "no_send",
+    "nada": "no_send",
+    "omitir": "no_send",
+    "skip": "no_send",
+    "sin_enviar": "no_send",
+    "sin_envio": "no_send",
+}
+_FLOW_TEXT_ACTION_TYPES = {
+    "auto_reply",
+    "followup_text",
+    "objection_engine",
+}
+_FLOW_NON_PACK_ACTION_TYPES = set(_FLOW_TEXT_ACTION_TYPES) | {"no_send"}
 _OUTBOX_STARTED_TTL_SECONDS = 90.0
 
 
@@ -350,6 +380,10 @@ def _normalize_text_token(value: object) -> str:
 
 def _flow_action_token(value: object) -> str:
     return _normalize_text_token(value).replace(" ", "_")
+
+
+def _canonical_flow_special_action_type(value: object) -> str:
+    return _FLOW_ACTION_SPECIAL_ALIASES.get(_flow_action_token(value), "")
 
 
 def _canonical_flow_stage_id(value: object) -> str:
@@ -2118,8 +2152,9 @@ class FlowEngine:
                 inbound_type=transition_key,
                 transitions=transition_map,
             )
-            next_stage = self._stage_for(next_stage_id)
-            action_type = str(next_stage.get("action_type") or "").strip()
+            # Replies are composed from the current stage. The transition target is
+            # still persisted only after the outbound send is confirmed.
+            action_type = str(stage.get("action_type") or "").strip()
             return {
                 "decision": "reply",
                 "reason": "inbound_relevant",
@@ -2405,16 +2440,20 @@ def _choose_targets(alias: str) -> list[str]:
     alias_lower = alias_key.lower()
 
     if alias.upper() == "ALL":
-        candidates = [a["username"] for a in accounts_data if a.get("active")]
+        candidates = [a["username"] for a in accounts_data if is_account_enabled_for_operation(a)]
     else:
         alias_matches = [
-            a for a in accounts_data if a.get("alias", "").lower() == alias_lower and a.get("active")
+            a
+            for a in accounts_data
+            if a.get("alias", "").lower() == alias_lower and is_account_enabled_for_operation(a)
         ]
         if alias_matches:
             candidates = [a["username"] for a in alias_matches]
         else:
             username_matches = [
-                a for a in accounts_data if a.get("username", "").lower() == alias_lower and a.get("active")
+                a
+                for a in accounts_data
+                if a.get("username", "").lower() == alias_lower and is_account_enabled_for_operation(a)
             ]
             if username_matches:
                 candidates = [username_matches[0]["username"]]
@@ -3557,51 +3596,80 @@ def _pack_has_sendable_actions(pack: Dict[str, object]) -> bool:
     return _pack_sendable_action_count(pack.get("actions")) > 0
 
 
-def _flow_required_action_types(flow_config: Dict[str, object]) -> Dict[str, List[str]]:
+def _flow_required_action_types(flow_config: Dict[str, object]) -> Dict[str, object]:
     stages_raw = flow_config.get("stages")
     stages = list(stages_raw) if isinstance(stages_raw, list) else []
     required: List[str] = []
-    invalid_no_send: List[str] = []
+    invalid_actions: List[str] = []
+    has_valid_actions = False
     seen: set[str] = set()
     seen_invalid: set[str] = set()
     for stage in stages:
         if not isinstance(stage, dict):
             continue
-        stage_action = _canonical_pack_strategy_name(stage.get("action_type"))
+        stage_action_raw = str(stage.get("action_type") or "").strip()
+        try:
+            stage_action = _canonical_flow_action_type(stage_action_raw, strict=bool(stage_action_raw))
+        except ValueError:
+            stage_action = ""
+            if stage_action_raw and stage_action_raw not in seen_invalid:
+                seen_invalid.add(stage_action_raw)
+                invalid_actions.append(stage_action_raw)
         if stage_action:
-            if _is_no_send_strategy(stage_action):
-                token = _flow_action_token(stage_action)
-                if token and token not in seen_invalid:
-                    seen_invalid.add(token)
-                    invalid_no_send.append(stage_action)
-            else:
-                token = _flow_action_token(stage_action)
-                if token and token not in seen:
-                    seen.add(token)
-                    required.append(stage_action)
+            has_valid_actions = True
+        if stage_action and _flow_action_requires_pack(stage_action):
+            token = _flow_action_token(stage_action)
+            if token and token not in seen:
+                seen.add(token)
+                required.append(stage_action)
         followups_raw = stage.get("followups")
         followups = list(followups_raw) if isinstance(followups_raw, list) else []
         for followup in followups:
             if not isinstance(followup, dict):
                 continue
-            follow_action = _canonical_pack_strategy_name(
-                followup.get("action_type") or stage_action or ""
-            )
+            follow_action_raw = followup.get("action_type") or stage_action or ""
+            follow_action_text = str(follow_action_raw or "").strip()
+            try:
+                follow_action = _canonical_flow_action_type(
+                    follow_action_raw,
+                    strict=bool(follow_action_text),
+                )
+            except ValueError:
+                follow_action = ""
+                if follow_action_text and follow_action_text not in seen_invalid:
+                    seen_invalid.add(follow_action_text)
+                    invalid_actions.append(follow_action_text)
             if not follow_action:
                 continue
-            if _is_no_send_strategy(follow_action):
-                token = _flow_action_token(follow_action)
-                if token and token not in seen_invalid:
-                    seen_invalid.add(token)
-                    invalid_no_send.append(follow_action)
+            has_valid_actions = True
+            if not _flow_action_requires_pack(follow_action):
                 continue
             token = _flow_action_token(follow_action)
             if token and token not in seen:
                 seen.add(token)
                 required.append(follow_action)
+        objection_raw = stage.get("post_objection")
+        objection_cfg = dict(objection_raw) if isinstance(objection_raw, dict) else {}
+        objection_action_raw = str(objection_cfg.get("action_type") or "").strip()
+        if bool(objection_cfg.get("enabled")) and objection_action_raw:
+            try:
+                objection_action = _canonical_flow_action_type(objection_action_raw, strict=True)
+            except ValueError:
+                objection_action = ""
+                if objection_action_raw not in seen_invalid:
+                    seen_invalid.add(objection_action_raw)
+                    invalid_actions.append(objection_action_raw)
+            if objection_action:
+                has_valid_actions = True
+            if objection_action and _flow_action_requires_pack(objection_action):
+                token = _flow_action_token(objection_action)
+                if token and token not in seen:
+                    seen.add(token)
+                    required.append(objection_action)
     return {
         "required": required,
-        "invalid_no_send": invalid_no_send,
+        "invalid_actions": invalid_actions,
+        "has_valid_actions": has_valid_actions,
     }
 
 
@@ -3655,13 +3723,55 @@ def _pack_binding_maps(
     return by_id, by_type, type_by_key
 
 
+def _canonical_flow_action_type(
+    value: object,
+    *,
+    allow_empty: bool = False,
+    strict: bool = False,
+) -> str:
+    clean_value = str(value or "").strip()
+    if not clean_value:
+        if allow_empty:
+            return ""
+        if strict:
+            raise ValueError("El action_type no puede estar vacio.")
+        return ""
+    special = _canonical_flow_special_action_type(clean_value)
+    if special:
+        return special
+    by_id, by_type, type_by_key = _pack_binding_maps(
+        active_only=False,
+        sendable_only=False,
+    )
+    if clean_value in by_type:
+        return clean_value
+    pack = by_id.get(clean_value)
+    if isinstance(pack, dict):
+        pack_type = str(pack.get("type") or "").strip()
+        if pack_type:
+            return pack_type
+    binding_key = _pack_binding_key(clean_value)
+    if binding_key:
+        canonical_type = type_by_key.get(binding_key)
+        if canonical_type:
+            return canonical_type
+    if strict:
+        raise ValueError(f"Action type invalido: {clean_value}")
+    return clean_value
+
+
+def _flow_action_requires_pack(value: object) -> bool:
+    canonical = _canonical_flow_action_type(value, allow_empty=True)
+    return bool(canonical) and canonical not in _FLOW_NON_PACK_ACTION_TYPES
+
+
 def _canonical_pack_strategy_name(
     value: object,
     *,
     active_only: bool = False,
     sendable_only: bool = False,
 ) -> str:
-    clean_value = str(value or "").strip()
+    clean_value = _canonical_flow_action_type(value, allow_empty=True)
     if not clean_value:
         return ""
     by_id, by_type, type_by_key = _pack_binding_maps(
@@ -3690,15 +3800,15 @@ def _validate_flow_pack_bindings(
 ) -> tuple[bool, str]:
     required_payload = _flow_required_action_types(flow_config)
     required_types = list(required_payload.get("required") or [])
-    invalid_no_send = list(required_payload.get("invalid_no_send") or [])
-    if invalid_no_send:
-        return (
-            False,
-            "El flow tiene etapas/followups con estrategia de NO_ENVIO: "
-            + ", ".join(invalid_no_send),
-        )
+    invalid_actions = list(required_payload.get("invalid_actions") or [])
+    has_valid_actions = bool(required_payload.get("has_valid_actions"))
+    if invalid_actions:
+        account_suffix = f" (@{account_id})" if account_id else ""
+        return False, "Flow con action_type invalido" + account_suffix + " -> " + ", ".join(sorted(set(invalid_actions)))
+    if not required_types and not has_valid_actions:
+        return False, "El flow no tiene acciones de envio configuradas."
     if not required_types:
-        return False, "El flow no tiene acciones de envÃ­o configuradas."
+        return True, ""
     send_counts = _active_pack_send_counts_by_type()
     send_counts_by_key: Dict[str, int] = {}
     for raw_type, raw_count in send_counts.items():
@@ -3828,22 +3938,7 @@ def _active_pack_stage_lookup() -> Dict[str, str]:
 
 
 def _is_no_send_strategy(strategy_name: object) -> bool:
-    token = _normalize_text_token(strategy_name)
-    if not token:
-        return False
-    return token in {
-        "no_enviar",
-        "noenviar",
-        "no_responder",
-        "noresponder",
-        "ninguna",
-        "none",
-        "nada",
-        "omitir",
-        "skip",
-        "sin_enviar",
-        "sin_envio",
-    }
+    return _canonical_flow_special_action_type(strategy_name) == "no_send"
 
 
 def _flow_followup_hours(
@@ -3905,7 +4000,7 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
                 candidate = f"{stage_id}_{suffix}"
             stage_id = candidate
         seen_stage_ids.add(stage_id)
-        action_type = _canonical_pack_strategy_name(stage.get("action_type"))
+        action_type = _canonical_flow_action_type(stage.get("action_type"), allow_empty=True)
         transitions_raw = stage.get("transitions")
         transitions = dict(transitions_raw) if isinstance(transitions_raw, dict) else {}
         normalized_transitions: Dict[str, str] = {}
@@ -3929,10 +4024,11 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
                     continue
                 if delay_hours < 0:
                     continue
-                action = _canonical_pack_strategy_name(
+                action = _canonical_flow_action_type(
                     followup_item.get("action_type")
                     or followup_item.get("type")
-                    or action_type
+                    or action_type,
+                    allow_empty=True,
                 )
             else:
                 try:
@@ -3954,7 +4050,7 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
 
         objection_raw = stage.get("post_objection")
         objection = dict(objection_raw) if isinstance(objection_raw, dict) else {}
-        objection_action = _canonical_pack_strategy_name(objection.get("action_type"))
+        objection_action = _canonical_flow_action_type(objection.get("action_type"), allow_empty=True)
         try:
             objection_max_steps = int(
                 objection.get("max_steps") or _FLOW_DEFAULT_OBJECTION_MAX_STEPS
@@ -4035,6 +4131,66 @@ def _normalize_flow_config(raw_config: object) -> Dict[str, object]:
             },
         },
     }
+
+
+def _validate_and_normalize_flow_config(raw_config: object) -> Dict[str, object]:
+    normalized = _normalize_flow_config(raw_config)
+    stages_raw = normalized.get("stages")
+    stages = list(stages_raw) if isinstance(stages_raw, list) else []
+    if not stages:
+        raise ValueError("El flow debe tener al menos una etapa.")
+    stage_ids = {
+        str(stage.get("id") or "").strip()
+        for stage in stages
+        if isinstance(stage, dict) and str(stage.get("id") or "").strip()
+    }
+    if not stage_ids:
+        raise ValueError("El flow debe tener IDs de etapa validos.")
+    entry_stage_id = str(normalized.get("entry_stage_id") or "").strip()
+    if not entry_stage_id or entry_stage_id not in stage_ids:
+        raise ValueError("La etapa inicial del flow es invalida.")
+
+    validated_stages: List[Dict[str, object]] = []
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        validated_stage = dict(stage)
+        validated_stage["action_type"] = _canonical_flow_action_type(
+            validated_stage.get("action_type"),
+            strict=True,
+        )
+        followups_raw = validated_stage.get("followups")
+        followups = list(followups_raw) if isinstance(followups_raw, list) else []
+        validated_followups: List[Dict[str, object]] = []
+        for followup in followups:
+            if not isinstance(followup, dict):
+                continue
+            validated_followup = dict(followup)
+            validated_followup["action_type"] = _canonical_flow_action_type(
+                validated_followup.get("action_type"),
+                strict=True,
+            )
+            validated_followups.append(validated_followup)
+        validated_stage["followups"] = validated_followups
+
+        objection_raw = validated_stage.get("post_objection")
+        objection_cfg = dict(objection_raw) if isinstance(objection_raw, dict) else {}
+        objection_enabled = bool(objection_cfg.get("enabled"))
+        if objection_enabled:
+            objection_cfg["action_type"] = _canonical_flow_action_type(
+                objection_cfg.get("action_type"),
+                strict=True,
+            )
+        else:
+            objection_cfg["action_type"] = _canonical_flow_action_type(
+                objection_cfg.get("action_type"),
+                allow_empty=True,
+            )
+        validated_stage["post_objection"] = objection_cfg
+        validated_stages.append(validated_stage)
+
+    normalized["stages"] = validated_stages
+    return normalized
 
 
 def _default_flow_config_from_prompt_entry(
@@ -10010,7 +10166,7 @@ def decision_cycle_from_memory(
                 sent_ok = True
                 response_countable = True
                 _safezone_register_success(user)
-            elif _flow_action_token(action_type) in {"auto_reply", "autorespuesta", "reply_prompt"}:
+            elif _canonical_flow_action_type(action_type, allow_empty=True) in {"auto_reply", "followup_text"}:
                 generated_reply = _generate_autoreply_response(
                     inbound_text,
                     _DEFAULT_RESPONDER_STRATEGY_PROMPT,
@@ -11719,7 +11875,7 @@ def _process_followups_math(
             fu_omitted += 1
             continue
         sent_ok = False
-        if _flow_action_token(action_type) in {"followup_prompt", "followup_text", "auto_reply", "autorespuesta", "reply_prompt"}:
+        if _canonical_flow_action_type(action_type, allow_empty=True) in {"auto_reply", "followup_text"}:
             convo_text = _conversation_text_from_memory(messages[:40], getattr(client, "user_id", ""))
             generated = _generate_autoreply_response(
                 "(sin respuesta del lead aun)",

@@ -130,6 +130,46 @@ def test_campaign_monitor_counts_preblocked_leads_in_completed_progress() -> Non
     assert payload["remaining"] == 0
 
 
+def test_campaign_monitor_uses_planned_queue_total_without_counting_preblocked_progress() -> None:
+    services = SimpleNamespace(
+        campaigns=_FakeCampaignService(
+            {
+                "run_id": "run-plan",
+                "alias": "alias-1",
+                "leads_alias": "leads-1",
+                "sent": 0,
+                "failed": 0,
+                "skipped": 0,
+                "skipped_preblocked": 29,
+                "retried": 0,
+                "remaining": 16,
+                "total_leads": 16,
+                "selected_leads_total": 45,
+                "planned_eligible_leads": 16,
+                "workers_active": 0,
+                "workers_requested": 1,
+                "workers_capacity": 1,
+                "workers_effective": 1,
+                "worker_rows": [],
+                "task_active": True,
+                "status": "Starting",
+            }
+        )
+    )
+
+    payload = build_campaign_monitor_snapshot(
+        services,
+        _FakeTasks(),
+        monitor_state={"run_id": "run-plan", "total_leads": 16},
+    )
+
+    assert payload["total_leads"] == 16
+    assert payload["selected_leads_total"] == 45
+    assert payload["planned_eligible_leads"] == 16
+    assert payload["progress"] == 0
+    assert payload["remaining"] == 16
+
+
 def test_campaign_monitor_preserves_interrupted_status_as_terminal() -> None:
     services = SimpleNamespace(
         campaigns=_FakeCampaignService(

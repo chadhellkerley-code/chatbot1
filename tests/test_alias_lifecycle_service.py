@@ -53,7 +53,7 @@ def test_rename_alias_updates_display_name_without_rekey(monkeypatch, tmp_path: 
     assert result["alias"]["alias_id"] == "ventas-norte"
     assert result["alias"]["display_name"] == "VENTAS norte"
     assert result["active_alias"] == "VENTAS norte"
-    assert service.accounts.list_aliases() == ["default", "VENTAS norte"]
+    assert service.accounts.list_aliases() == ["VENTAS norte"]
     assert [row["username"] for row in service.accounts.list_accounts("ventas norte")] == ["uno"]
 
 
@@ -84,7 +84,7 @@ def test_merge_aliases_moves_accounts_and_updates_active_alias(monkeypatch, tmp_
     assert result["moved_accounts"] == 2
     assert result["active_alias"] == "Destino"
     assert all(str(row.get("alias") or "") == "Destino" for row in rows)
-    assert service.accounts.list_aliases() == ["default", "Destino"]
+    assert service.accounts.list_aliases() == ["Destino"]
 
 
 def test_delete_alias_resets_active_alias_to_default(monkeypatch, tmp_path: Path) -> None:
@@ -97,7 +97,7 @@ def test_delete_alias_resets_active_alias_to_default(monkeypatch, tmp_path: Path
     assert result["deleted_alias"]["display_name"] == "Temporal"
     assert result["moved_accounts"] == 0
     assert result["active_alias"] == "default"
-    assert service.accounts.list_aliases() == ["default"]
+    assert service.accounts.list_aliases() == []
 
 
 def test_rename_alias_migrates_accounts_warmup_and_automation_state(monkeypatch, tmp_path: Path) -> None:
@@ -155,7 +155,7 @@ def test_delete_alias_rolls_back_all_state_when_automation_conflicts(monkeypatch
     assert warmup_rows[0]["alias"] == "Origen"
     assert service.automation.get_prompt_entry("Origen")["objection_prompt"] == "Prompt origen"
     assert service.automation.get_prompt_entry("Destino")["objection_prompt"] == "Prompt destino"
-    assert service.accounts.list_aliases() == ["default", "Destino", "Origen"]
+    assert service.accounts.list_aliases() == ["Destino", "Origen"]
 
 
 def test_rename_alias_blocks_when_source_or_target_alias_is_in_active_tasks(monkeypatch, tmp_path: Path) -> None:

@@ -71,34 +71,52 @@ class _StrictPlaywright:
         self.chromium = _StrictChromium(fail=fail, results=results)
 
 
-def test_launch_browser_prefers_chrome_channel_before_embedded_fallback(monkeypatch, tmp_path: Path) -> None:
-    fake_playwright = _FakePlaywright()
-    embedded = tmp_path / "chromium.exe"
-    embedded.write_bytes(b"fake-chromium")
-    monkeypatch.setattr(playwright_runtime, "_should_fallback_to_embedded", lambda _exc: True)
+def test_launch_browser_default_mode_uses_chrome_only_candidate(monkeypatch, tmp_path: Path) -> None:
+    fake_playwright = _StrictPlaywright()
+    chrome = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+    chrome.parent.mkdir(parents=True, exist_ok=True)
+    chrome.write_bytes(b"fake-google-chrome")
+    monkeypatch.setattr(
+        playwright_runtime,
+        "_chrome_only_launch_candidates",
+        lambda executable_path, headless=False: [("Google Chrome", str(chrome))],
+    )
     monkeypatch.setattr(
         playwright_runtime,
         "resolve_playwright_chromium_executable",
-        lambda headless=False: embedded,
+        lambda headless=False: tmp_path / "chromium.exe",
     )
 
     browser = asyncio.run(playwright_runtime._launch_browser(fake_playwright, headless=False))
 
     assert browser == {"browser": "ok"}
-    assert fake_playwright.chromium.launch_calls[0]["channel"] == "chrome"
-    assert "executable_path" not in fake_playwright.chromium.launch_calls[0]
-    assert fake_playwright.chromium.launch_calls[1]["executable_path"] == str(embedded)
+    assert fake_playwright.chromium.launch_calls == [
+        {
+            "headless": False,
+            "slow_mo": 0,
+            "args": playwright_runtime.PLAYWRIGHT_BASE_FLAGS,
+            "executable_path": str(chrome),
+        }
+    ]
 
 
-def test_launch_persistent_context_prefers_chrome_channel_before_embedded_fallback(monkeypatch, tmp_path: Path) -> None:
-    fake_playwright = _FakePlaywright()
-    embedded = tmp_path / "chromium.exe"
-    embedded.write_bytes(b"fake-chromium")
-    monkeypatch.setattr(playwright_runtime, "_should_fallback_to_embedded", lambda _exc: True)
+def test_launch_persistent_context_default_mode_uses_chrome_only_candidate(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_playwright = _StrictPlaywright()
+    chrome = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+    chrome.parent.mkdir(parents=True, exist_ok=True)
+    chrome.write_bytes(b"fake-google-chrome")
+    monkeypatch.setattr(
+        playwright_runtime,
+        "_chrome_only_launch_candidates",
+        lambda executable_path, headless=False: [("Google Chrome", str(chrome))],
+    )
     monkeypatch.setattr(
         playwright_runtime,
         "resolve_playwright_chromium_executable",
-        lambda headless=False: embedded,
+        lambda headless=False: tmp_path / "chromium.exe",
     )
 
     context = asyncio.run(
@@ -110,9 +128,14 @@ def test_launch_persistent_context_prefers_chrome_channel_before_embedded_fallba
     )
 
     assert context == {"context": "ok"}
-    assert fake_playwright.chromium.persistent_calls[0]["channel"] == "chrome"
-    assert "executable_path" not in fake_playwright.chromium.persistent_calls[0]
-    assert fake_playwright.chromium.persistent_calls[1]["executable_path"] == str(embedded)
+    assert fake_playwright.chromium.persistent_calls == [
+        {
+            "user_data_dir": str(Path("C:/profiles/worker_one")),
+            "headless": False,
+            "args": playwright_runtime.PLAYWRIGHT_BASE_FLAGS,
+            "executable_path": str(chrome),
+        }
+    ]
 
 
 def test_launch_browser_managed_uses_playwright_executable_without_chrome_channel(monkeypatch, tmp_path: Path) -> None:

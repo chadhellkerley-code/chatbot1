@@ -186,6 +186,7 @@ class _FakeCampaignLeads:
         self.list_calls: list[int] = []
         self.summary_calls: list[int] = []
         self.load_calls: list[tuple[int, str]] = []
+        self.summary_count = 5
 
     def list_lists(self) -> list[str]:
         self.list_calls.append(threading.get_ident())
@@ -195,12 +196,12 @@ class _FakeCampaignLeads:
     def list_list_summaries(self) -> list[dict[str, Any]]:
         self.summary_calls.append(threading.get_ident())
         time.sleep(0.1)
-        return [{"name": "lead-list", "count": 5}]
+        return [{"name": "lead-list", "count": self.summary_count}]
 
     def load_list(self, alias: str) -> list[dict[str, Any]]:
         self.load_calls.append((threading.get_ident(), str(alias or "")))
         time.sleep(0.1)
-        return [{"username": "lead-1"} for _ in range(5)]
+        return [{"username": "lead-1"} for _ in range(self.summary_count)]
 
 
 class _FakeCampaignService:
@@ -213,6 +214,10 @@ class _FakeCampaignService:
         self.hold_task_open = False
         self.task_started = threading.Event()
         self.task_release = threading.Event()
+        self.workers_capacity = 3
+        self.remaining_slots_total = 5
+        self.planned_eligible_leads = 5
+        self.planned_runnable_leads = 5
         self._current_run = {
             "run_id": "run-1",
             "alias": "default",
@@ -251,14 +256,38 @@ class _FakeCampaignService:
         time.sleep(0.1)
         return [{"name": "Hola", "text": "Hola {{username}}", "id": "tpl-1"}]
 
-    def get_capacity(self, alias: str) -> dict[str, Any]:
+    def get_capacity(
+        self,
+        alias: str,
+        *,
+        leads_alias: str = "",
+        workers_requested: int = 0,
+    ) -> dict[str, Any]:
         self.capacity_thread_ids.append(threading.get_ident())
         time.sleep(0.1)
         return {
             "alias": str(alias or ""),
-            "workers_capacity": 3,
+            "leads_alias": str(leads_alias or ""),
+            "workers_capacity": self.workers_capacity,
+            "workers_requested": max(0, int(workers_requested or 0)),
+            "workers_effective": (
+                min(self.workers_capacity, max(0, int(workers_requested or 0)))
+                if workers_requested
+                else self.workers_capacity
+            ),
             "proxies": [],
             "has_none_accounts": True,
+            "remaining_slots_total": self.remaining_slots_total,
+            "planned_eligible_leads": self.planned_eligible_leads if leads_alias else 0,
+            "planned_runnable_leads": self.planned_runnable_leads if leads_alias else 0,
+            "account_remaining": [
+                {
+                    "username": "acct-1",
+                    "remaining": self.remaining_slots_total,
+                    "sent_today": 0,
+                    "limit": self.remaining_slots_total,
+                },
+            ],
         }
 
     def build_template_entries(
@@ -282,8 +311,15 @@ class _FakeCampaignService:
         self.launch_calls.append(dict(config))
         if self.launch_error is not None:
             raise self.launch_error
-        workers_capacity = int(self.get_capacity(str(config.get("alias") or "")).get("workers_capacity") or 0)
         workers_requested = int(config.get("workers_requested") or 1)
+        workers_capacity = int(
+            self.get_capacity(
+                str(config.get("alias") or ""),
+                leads_alias=str(config.get("leads_alias") or ""),
+                workers_requested=workers_requested,
+            ).get("workers_capacity")
+            or 0
+        )
         workers_effective = min(workers_requested, workers_capacity) if workers_capacity > 0 else 0
         started_at = str(config.get("started_at") or "2026-03-08T10:00:01")
         run_id = str(config.get("run_id") or f"run-{len(self.launch_calls)}")
@@ -587,6 +623,8 @@ def test_campaign_create_page_loads_form_async_and_starts_without_sync_reads() -
         assert all(thread_id != threading.get_ident() for thread_id in services.campaigns.template_thread_ids)
         assert all(thread_id != threading.get_ident() for thread_id in services.campaigns.capacity_thread_ids)
         assert services.leads.load_calls == []
+        assert _wait_until(lambda: "Cupo restante hoy: 5" in page._capacity_label.text())
+        assert "Leads ejecutables: 5" in page._capacity_label.text()
 
         load_calls_before = len(services.leads.load_calls)
         page._template_combo.setCurrentIndex(1)
@@ -603,6 +641,41 @@ def test_campaign_create_page_loads_form_async_and_starts_without_sync_reads() -
         assert route_calls[0][1]["workers_requested"] == 1
         assert route_calls[0][1]["workers_capacity"] == 3
         assert route_calls[0][1]["workers_effective"] == 1
+    finally:
+        queries.shutdown()
+        tasks.shutdown("test cleanup")
+
+
+def test_campaign_create_page_uses_planned_queue_total_in_summary_and_launch() -> None:
+    _app()
+    services = _FakeCampaignServices()
+    services.leads.summary_count = 45
+    services.campaigns.remaining_slots_total = 16
+    services.campaigns.planned_eligible_leads = 18
+    services.campaigns.planned_runnable_leads = 16
+    logs = LogStore()
+    tasks = TaskManager(logs)
+    route_calls: list[tuple[str, Any]] = []
+    ctx, queries = _build_ctx(
+        services=services,
+        tasks=tasks,
+        logs=logs,
+        open_route=lambda route, payload=None: route_calls.append((route, payload)),
+    )
+    page = CampaignCreatePage(ctx)
+    try:
+        page.on_navigate_to()
+
+        assert _wait_until(lambda: page._alias_combo.count() == 1)
+        assert _wait_until(lambda: page._summary_values["count"].text() == "16")
+        assert "Leads elegibles: 18" in page._capacity_label.text()
+        assert "Leads ejecutables: 16" in page._capacity_label.text()
+
+        page._template_combo.setCurrentIndex(1)
+        page._start_campaign()
+
+        assert route_calls
+        assert services.campaigns.launch_calls[0]["total_leads"] == 16
     finally:
         queries.shutdown()
         tasks.shutdown("test cleanup")

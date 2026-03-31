@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 from paths import browser_profiles_root
 from src.instagram_adapter import human_login, is_logged_in
 from src.playwright_service import resolve_playwright_executable
+from src.stealth.stealth_core import patch_context
 from playwright.sync_api import sync_playwright
 import time
 
@@ -100,6 +101,7 @@ def run_login_simple():
                 viewport={'width': 1280, 'height': 720},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
+            patch_context(context, username)
             
             page = context.new_page()
             

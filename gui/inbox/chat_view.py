@@ -192,7 +192,13 @@ class ChatView(QWidget):
     def set_runtime_state(self, *, active: bool) -> None:
         self._runtime_active = bool(active)
 
-    def set_thread(self, thread: dict[str, Any] | None, *, permissions: dict[str, Any] | None = None) -> None:
+    def set_thread(
+        self,
+        thread: dict[str, Any] | None,
+        *,
+        permissions: dict[str, Any] | None = None,
+        truth: dict[str, Any] | None = None,
+    ) -> None:
         if not thread:
             self._cancel_pending_render()
             self._current_thread_key = ""
@@ -232,6 +238,7 @@ class ChatView(QWidget):
         self._current_health_state = str(thread.get("account_health") or "healthy").strip().lower() or "healthy"
         owner = str(thread.get("owner") or "none").strip().lower() or "none"
         resolved = self._resolve_permissions(thread, permissions)
+        truth_payload = dict(truth or {})
         self._runtime_active = bool(resolved.get("runtime_active", False))
         self._manual_send_reason = str(resolved.get("manual_send_reason") or "").strip().lower()
         can_reply = bool(resolved.get("can_manual_send"))
@@ -245,9 +252,9 @@ class ChatView(QWidget):
         self._avatar.setText(_initials(display_name))
         self._title.setText(display_name)
         self._meta.setText(f"@{recipient}  |  {source_label}")
-        self._submeta.setText(_thread_submeta(thread))
+        self._submeta.setText(_thread_submeta(thread, truth=truth_payload))
         self._context_badge.setText(stage or bucket or "Thread activo")
-        self._state_badge.setText(_thread_state(thread))
+        self._state_badge.setText(str(truth_payload.get("label") or _thread_state(thread)).strip() or "Thread activo")
         self._composer_hint.setText(self._composer_hint_text())
         self._input.setPlaceholderText(self._composer_placeholder(can_reply, read_only))
         self._input.setReadOnly(read_only or not can_reply)
@@ -287,8 +294,6 @@ class ChatView(QWidget):
             )
             return
 
-        if seen_text:
-            self._state_badge.setText(seen_text)
         normalized_rows = _normalize_message_rows(rows)
         message_signatures = [_message_signature(row) for row in normalized_rows]
         message_identities = [_message_identity(row, index) for index, row in enumerate(normalized_rows)]
@@ -371,7 +376,7 @@ class ChatView(QWidget):
             return
         self.sendRequested.emit(content)
         self._input.clear()
-        self._state_badge.setText("Mensaje en cola...")
+        self._state_badge.setText("Mensaje en cola local")
 
     def _resolve_permissions(
         self,
@@ -673,31 +678,56 @@ def _thread_state(thread: dict[str, Any]) -> str:
             "proxy_error": "Error de proxy",
             "unknown": "Estado de cuenta desconocido",
         }.get(health, "Estado de cuenta desconocido")
-    thread_error = str(thread.get("thread_error") or "").strip()
+    thread_status = str(thread.get("thread_status") or "").strip().lower()
+    sender_status = str(thread.get("sender_status") or "").strip().lower()
+    pack_status = str(thread.get("pack_status") or "").strip().lower()
+    thread_error = str(thread.get("thread_error") or thread.get("sender_error") or thread.get("pack_error") or "").strip()
+    if thread_status == "opening":
+        return "Abriendo thread"
+    if sender_status == "preparing":
+        return "Preparando thread"
+    if pack_status == "queued":
+        return "Pack en cola"
+    if pack_status == "running":
+        return "Enviando pack"
+    if sender_status == "queued":
+        return "Mensaje en cola"
+    if sender_status == "sending":
+        return "Enviando mensaje"
     if thread_error:
-        return "Error al cargar"
+        return "Envio fallido"
     seen_text = str(thread.get("last_seen_text") or "").strip()
-    if seen_text:
-        return seen_text
     direction = str(thread.get("last_message_direction") or "").strip().lower()
+    if direction == "outbound":
+        return "Envio confirmado"
     if direction == "inbound":
         return "Pendiente de respuesta"
-    if direction == "outbound":
-        return "Ultimo mensaje enviado"
+    if seen_text:
+        return seen_text
     return "Conversacion activa"
 
 
-def _thread_submeta(thread: dict[str, Any]) -> str:
+def _thread_submeta(thread: dict[str, Any], *, truth: dict[str, Any] | None = None) -> str:
     parts: list[str] = []
+    truth_payload = dict(truth or {})
+    detail = str(truth_payload.get("detail") or "").strip()
+    alias_note = str(truth_payload.get("alias_note") or "").strip()
     stage = str(thread.get("stage_id") or thread.get("stage") or "").strip()
     bucket = str(thread.get("bucket") or "").strip()
     alias_id = str(thread.get("account_alias") or "").strip()
+    seen_text = str(thread.get("last_seen_text") or "").strip()
+    if detail:
+        parts.append(detail)
+    if alias_note:
+        parts.append(alias_note)
     if stage:
         parts.append(f"Etapa {stage}")
     if bucket:
         parts.append(f"Bucket {bucket}")
     if alias_id:
         parts.append(f"Alias @{alias_id}")
+    if seen_text:
+        parts.append(seen_text)
     if not parts:
         parts.append("Conversacion lista para revisar y responder.")
     return "  |  ".join(parts)

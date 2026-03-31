@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core import responder as responder_module
 from gui.flow_editor.flow_view import FlowBuilderCanvas
 from gui.query_runner import QueryError
 
@@ -27,6 +28,9 @@ from .automation_dialogs import AutomationModalDialog, confirm_automation_action
 from .automation_pages_base import AutomationSectionPage
 from .page_base import PageContext, safe_float, table_item
 from .snapshot_queries import build_automation_flow_snapshot
+
+
+_DEFAULT_CANONICAL_ACTION = "auto_reply"
 
 
 def _empty_flow() -> dict[str, Any]:
@@ -42,7 +46,7 @@ def _empty_flow() -> dict[str, Any]:
     }
 
 
-def _default_stage(stage_id: str, *, action_type: str = "mensaje") -> dict[str, Any]:
+def _default_stage(stage_id: str, *, action_type: str = _DEFAULT_CANONICAL_ACTION) -> dict[str, Any]:
     return {
         "id": stage_id,
         "action_type": action_type,
@@ -166,12 +170,16 @@ class StageEditorDialog(AutomationModalDialog):
         follow_actions.addStretch(1)
         self.body_layout().addLayout(follow_actions)
 
-        self._fill_action_combo(self._action_combo, str(payload.get("action_type") or "mensaje"))
+        self._fill_action_combo(
+            self._action_combo,
+            str(payload.get("action_type") or _DEFAULT_CANONICAL_ACTION),
+        )
         self._fill_action_combo(
             self._objection_action,
-            str(objection.get("action_type") or payload.get("action_type") or "mensaje"),
+            str(objection.get("action_type") or payload.get("action_type") or "objection_engine"),
+            include_objection_engine=True,
         )
-        self._fill_action_combo(self._follow_action, "followup")
+        self._fill_action_combo(self._follow_action, "followup_text")
         self._fill_stage_combo(self._positive, str(transitions.get("positive") or current_stage_id), current_stage_id)
         self._fill_stage_combo(self._negative, str(transitions.get("negative") or current_stage_id), current_stage_id)
         self._fill_stage_combo(self._neutral, str(transitions.get("neutral") or current_stage_id), current_stage_id)
@@ -188,15 +196,20 @@ class StageEditorDialog(AutomationModalDialog):
         self._populate_followups(list(payload.get("followups") or []))
         self.add_buttons(confirm_text="Guardar", cancel_text="Cerrar")
 
-    def _fill_action_combo(self, combo: QComboBox, current_value: str) -> None:
+    def _fill_action_combo(
+        self,
+        combo: QComboBox,
+        current_value: str,
+        *,
+        include_objection_engine: bool = False,
+    ) -> None:
         combo.blockSignals(True)
         combo.clear()
-        combo.addItem("Mensaje", "mensaje")
-        combo.addItem("Condicion", "condicion")
-        combo.addItem("Follow-up", "followup")
-        combo.addItem("Accion IA", "ia")
-        combo.addItem("Transicion", "transicion")
-        combo.addItem("Final", "final")
+        combo.addItem("Respuesta IA", "auto_reply")
+        combo.addItem("Texto de follow-up", "followup_text")
+        if include_objection_engine:
+            combo.addItem("Motor de objeciones", "objection_engine")
+        combo.addItem("No enviar", "no_send")
         for pack_id in self._pack_options:
             combo.addItem(f"Pack: {self._pack_names.get(pack_id, pack_id)}", pack_id)
         combo.setCurrentIndex(max(0, combo.findData(current_value)))
@@ -245,14 +258,22 @@ class StageEditorDialog(AutomationModalDialog):
                 delay_value = 0.0
             action_value = str(action_item.text() if action_item else "").strip()
             if delay_value >= 0 and action_value:
-                rows.append({"delay_hours": delay_value, "action_type": action_value})
+                rows.append(
+                    {
+                        "delay_hours": delay_value,
+                        "action_type": responder_module._canonical_flow_action_type(
+                            action_value,
+                            strict=True,
+                        ),
+                    }
+                )
         return rows
 
     def _add_followup_row(self) -> None:
         row_index = self._follow_table.rowCount()
         self._follow_table.insertRow(row_index)
         self._follow_table.setItem(row_index, 0, table_item(self._follow_delay.value()))
-        self._follow_table.setItem(row_index, 1, table_item(self._follow_action.currentData() or "followup"))
+        self._follow_table.setItem(row_index, 1, table_item(self._follow_action.currentData() or "followup_text"))
 
     def _remove_followup_row(self) -> None:
         row_index = self._follow_table.currentRow()
@@ -261,8 +282,16 @@ class StageEditorDialog(AutomationModalDialog):
 
     def payload(self) -> dict[str, Any]:
         stage_id = str(self._stage_id.text() or "").strip()
-        action_value = str(self._action_combo.currentData() or "mensaje").strip() or "mensaje"
+        action_value = responder_module._canonical_flow_action_type(
+            self._action_combo.currentData(),
+            strict=True,
+        )
         fallback_stage = stage_id or (self._stage_ids[0] if self._stage_ids else "")
+        objection_action = responder_module._canonical_flow_action_type(
+            self._objection_action.currentData(),
+            strict=bool(self._objection_enabled.isChecked()),
+            allow_empty=not bool(self._objection_enabled.isChecked()),
+        )
         return {
             "id": stage_id,
             "action_type": action_value,
@@ -275,7 +304,7 @@ class StageEditorDialog(AutomationModalDialog):
             "followups": self._collect_followups(),
             "post_objection": {
                 "enabled": bool(self._objection_enabled.isChecked()),
-                "action_type": str(self._objection_action.currentData() or action_value).strip() or action_value,
+                "action_type": objection_action,
                 "max_steps": 2,
                 "resolved_transition": str(self._objection_resolved.currentData() or "positive").strip() or "positive",
                 "unresolved_transition": str(self._objection_unresolved.currentData() or "negative").strip() or "negative",
@@ -285,12 +314,9 @@ class StageEditorDialog(AutomationModalDialog):
 
 class AutomationFlowPage(AutomationSectionPage):
     _CANVAS_TO_ACTION = {
-        "crear_etapa": "mensaje",
-        "condicion": "condicion",
-        "followup": "followup",
-        "transicion": "transicion",
-        "accion_ia": "ia",
-        "final": "final",
+        "auto_reply": "auto_reply",
+        "followup_text": "followup_text",
+        "no_send": "no_send",
     }
 
     def __init__(self, ctx: PageContext, parent=None) -> None:
@@ -486,12 +512,10 @@ class AutomationFlowPage(AutomationSectionPage):
         if action_value in self._pack_names:
             return f"Pack: {self._pack_names.get(action_value, action_value)}"
         labels = {
-            "mensaje": "Mensaje",
-            "condicion": "Condicion",
-            "followup": "Follow-up",
-            "ia": "Accion IA",
-            "transicion": "Transicion",
-            "final": "Final",
+            "auto_reply": "Respuesta IA",
+            "followup_text": "Texto de follow-up",
+            "objection_engine": "Motor de objeciones",
+            "no_send": "No enviar",
         }
         return labels.get(action_value, action_value or "-")
 
@@ -636,8 +660,11 @@ class AutomationFlowPage(AutomationSectionPage):
     def _resolve_canvas_action_type(self, token: str) -> str:
         clean_token = str(token or "").strip().lower()
         if clean_token == "pack":
-            return self._pack_options[0] if self._pack_options else "mensaje"
-        return self._CANVAS_TO_ACTION.get(clean_token, "mensaje")
+            return self._pack_options[0] if self._pack_options else _DEFAULT_CANONICAL_ACTION
+        canonical = responder_module._canonical_flow_action_type(clean_token, allow_empty=True)
+        if canonical:
+            return canonical
+        return self._CANVAS_TO_ACTION.get(clean_token, _DEFAULT_CANONICAL_ACTION)
 
     def _open_stage_editor(
         self,
@@ -740,7 +767,7 @@ class AutomationFlowPage(AutomationSectionPage):
     def _add_stage(
         self,
         *,
-        action_type: str = "mensaje",
+        action_type: str = _DEFAULT_CANONICAL_ACTION,
         x: float | None = None,
         y: float | None = None,
         open_editor: bool = False,
@@ -859,6 +886,11 @@ class AutomationFlowPage(AutomationSectionPage):
     def save_flow(self) -> None:
         self._sync_layout_from_canvas()
         alias = str(self._alias_combo.currentData() or self._ctx.state.active_alias).strip()
+        try:
+            self._flow_config = responder_module._validate_and_normalize_flow_config(self._flow_config)
+        except ValueError as exc:
+            self.show_error(str(exc))
+            return
         self._ctx.services.automation.save_flow_config(alias, self._flow_config)
         self.set_status(f"Flow guardado para alias {alias}.")
 
