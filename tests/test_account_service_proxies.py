@@ -82,6 +82,10 @@ def test_load_proxies_migrates_legacy_json_into_sqlite(monkeypatch, tmp_path: Pa
             "server": "http://127.0.0.1:9000",
             "user": "alice",
             "pass": "secret",
+<<<<<<< HEAD
+            "timezone_id": "",
+=======
+>>>>>>> origin/main
             "active": True,
             "disabled_reason": "",
             "last_test_at": "",
@@ -366,6 +370,24 @@ def test_assign_proxy_requires_existing_active_proxy(monkeypatch, tmp_path: Path
     assert updated_calls == []
 
 
+<<<<<<< HEAD
+def test_import_proxies_csv_persists_explicit_timezone_id(tmp_path: Path) -> None:
+    service = _build_service(tmp_path)
+    csv_path = tmp_path / "proxies.csv"
+    csv_path.write_text(
+        "id,server,user,pass,timezone_id,active\n"
+        "proxy-a,http://127.0.0.1:9000,alice,secret,Europe/Madrid,true\n",
+        encoding="utf-8",
+    )
+
+    result = service.import_proxies_csv(csv_path)
+
+    assert result == {"imported": 1}
+    assert service.list_proxy_records()[0]["timezone_id"] == "Europe/Madrid"
+
+
+=======
+>>>>>>> origin/main
 def test_assign_proxy_clears_legacy_proxy_fields(monkeypatch, tmp_path: Path) -> None:
     service = _build_service(tmp_path)
     service.upsert_proxy({"id": "proxy-a", "server": "http://127.0.0.1:9000", "active": True})

@@ -11,6 +11,10 @@ if str(ROOT) not in sys.path:
 from paths import browser_profiles_root
 from src.playwright_service import resolve_playwright_executable
 from src.runtime.playwright_runtime import launch_sync_browser
+<<<<<<< HEAD
+from src.stealth.stealth_core import patch_context
+=======
+>>>>>>> origin/main
 
 INSTAGRAM_URL = "https://www.instagram.com/"
 PROFILES_DIR = browser_profiles_root(ROOT)
@@ -69,6 +73,10 @@ def main() -> None:
     context = None
     try:
         context = browser.new_context(storage_state=str(storage_path))
+<<<<<<< HEAD
+        patch_context(context, user)
+=======
+>>>>>>> origin/main
         page = context.new_page()
         page.goto(INSTAGRAM_URL, wait_until="domcontentloaded", timeout=45_000)
         title = page.title()

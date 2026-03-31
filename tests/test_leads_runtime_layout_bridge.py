@@ -42,6 +42,33 @@ def test_service_leaves_legacy_filter_storage_unreferenced(
     assert not (data_root / "lead_filters").exists()
 
 
+<<<<<<< HEAD
+def test_delete_list_removes_legacy_copy_so_it_does_not_reappear_after_restart(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_root = tmp_path / "data"
+    legacy_root = tmp_path / "storage" / "leads"
+    legacy_root.mkdir(parents=True, exist_ok=True)
+    (legacy_root / "demo.txt").write_text("uno\ndos\n", encoding="utf-8")
+    monkeypatch.setenv("INSTACRM_DATA_ROOT", str(data_root))
+
+    service = LeadsService(ServiceContext(root_dir=tmp_path))
+    assert service.list_lists() == ["demo"]
+
+    service.delete_list("demo")
+
+    assert service.list_lists() == []
+    assert not (data_root / "leads" / "demo.txt").exists()
+    assert not (legacy_root / "demo.txt").exists()
+
+    reloaded = LeadsService(ServiceContext(root_dir=tmp_path))
+
+    assert reloaded.list_lists() == []
+
+
+=======
+>>>>>>> origin/main
 def test_service_migrates_templates_into_active_data_root(
     tmp_path: Path,
     monkeypatch,

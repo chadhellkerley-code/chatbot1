@@ -6,6 +6,10 @@ from types import SimpleNamespace
 from application.services.base import ServiceContext
 from application.services.leads_service import LeadsService
 from gui.snapshot_queries import (
+<<<<<<< HEAD
+    build_campaign_capacity_snapshot,
+=======
+>>>>>>> origin/main
     build_campaign_create_snapshot,
     build_leads_import_snapshot,
     build_leads_lists_snapshot,
@@ -21,8 +25,31 @@ class _FakeCampaigns:
     def list_templates(self) -> list[dict[str, str]]:
         return [{"name": "saludo", "text": "hola"}]
 
+<<<<<<< HEAD
+    def get_capacity(
+        self,
+        alias: str,
+        *,
+        leads_alias: str = "",
+        workers_requested: int = 0,
+    ) -> dict[str, object]:
+        return {
+            "alias": alias,
+            "leads_alias": leads_alias,
+            "workers_capacity": 2,
+            "workers_requested": workers_requested,
+            "workers_effective": min(2, max(0, int(workers_requested or 0))) if workers_requested else 2,
+            "proxies": ["p1"],
+            "has_none_accounts": False,
+            "remaining_slots_total": 7,
+            "planned_eligible_leads": 0,
+            "planned_runnable_leads": 0,
+            "account_remaining": [],
+        }
+=======
     def get_capacity(self, alias: str) -> dict[str, object]:
         return {"alias": alias, "workers_capacity": 2, "proxies": ["p1"], "has_none_accounts": False}
+>>>>>>> origin/main
 
 
 class _HugeSummaryLeads:
@@ -52,6 +79,27 @@ def test_campaign_create_snapshot_reads_real_lead_lists(tmp_path: Path) -> None:
     assert snapshot["capacity"]["workers_capacity"] == 2
 
 
+<<<<<<< HEAD
+def test_campaign_capacity_snapshot_exposes_real_quota_and_plan_fields() -> None:
+    services = SimpleNamespace(
+        campaigns=_FakeCampaigns(),
+    )
+
+    snapshot = build_campaign_capacity_snapshot(
+        services,
+        alias="matias",
+        leads_alias="demo",
+        workers_requested=1,
+    )
+
+    assert snapshot["alias"] == "matias"
+    assert snapshot["leads_alias"] == "demo"
+    assert snapshot["workers_requested"] == 1
+    assert snapshot["remaining_slots_total"] == 7
+
+
+=======
+>>>>>>> origin/main
 def test_campaign_create_snapshot_uses_list_summaries_without_loading_full_lists(
     tmp_path: Path,
     monkeypatch,

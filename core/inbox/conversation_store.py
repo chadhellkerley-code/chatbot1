@@ -359,12 +359,20 @@ class ConversationStore:
         *,
         source: str = "manual",
         pack_id: str = "",
+<<<<<<< HEAD
+        local_message_id: str = "",
+=======
+>>>>>>> origin/main
     ) -> dict[str, Any] | None:
         return self._storage.append_local_outbound_message(
             thread_key,
             text,
             source=source,
             pack_id=pack_id,
+<<<<<<< HEAD
+            local_message_id=local_message_id,
+=======
+>>>>>>> origin/main
         )
 
     def set_local_outbound_status(self, thread_key: str, local_message_id: str, *, status: str) -> None:
@@ -413,6 +421,32 @@ class ConversationStore:
             scheduled_at=scheduled_at,
         )
 
+<<<<<<< HEAD
+    def enqueue_send_queue_job(
+        self,
+        task_type: str,
+        *,
+        thread_key: str,
+        account_id: str,
+        payload: dict[str, Any],
+        dedupe_key: str = "",
+        priority: int | None = None,
+        state: str = "queued",
+        scheduled_at: float | None = None,
+    ) -> dict[str, Any]:
+        return self._storage.enqueue_send_queue_job(
+            task_type,
+            thread_key=thread_key,
+            account_id=account_id,
+            payload=payload,
+            dedupe_key=dedupe_key,
+            priority=priority,
+            state=state,
+            scheduled_at=scheduled_at,
+        )
+
+=======
+>>>>>>> origin/main
     def update_send_queue_job(
         self,
         job_id: int,
@@ -467,6 +501,12 @@ class ConversationStore:
             reason=reason,
         )
 
+<<<<<<< HEAD
+    def reconcile_send_queue_thread_state(self, thread_key: str) -> None:
+        self._storage.reconcile_send_queue_thread_state(thread_key)
+
+=======
+>>>>>>> origin/main
     def update_thread_state(self, thread_key: str, updates: dict[str, Any]) -> None:
         self._storage.update_thread_state(thread_key, updates)
 
@@ -492,6 +532,69 @@ class ConversationStore:
     def list_thread_events(self, thread_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._storage.list_thread_events(thread_key, limit=limit)
 
+<<<<<<< HEAD
+    def record_diagnostic_event(
+        self,
+        *,
+        account_id: str = "",
+        alias_id: str = "",
+        thread_key: str = "",
+        job_type: str = "",
+        stage: str,
+        event_type: str,
+        outcome: str,
+        reason_code: str = "",
+        reason: str = "",
+        file: str = "",
+        function: str = "",
+        line: int = 0,
+        exception_type: str = "",
+        exception_message: str = "",
+        traceback: str = "",
+        payload: dict[str, Any] | None = None,
+        created_at: float | None = None,
+    ) -> int:
+        return self._storage.record_diagnostic_event(
+            account_id=account_id,
+            alias_id=alias_id,
+            thread_key=thread_key,
+            job_type=job_type,
+            stage=stage,
+            event_type=event_type,
+            outcome=outcome,
+            reason_code=reason_code,
+            reason=reason,
+            file=file,
+            function=function,
+            line=line,
+            exception_type=exception_type,
+            exception_message=exception_message,
+            traceback=traceback,
+            payload=payload,
+            created_at=created_at,
+        )
+
+    def list_diagnostic_events(
+        self,
+        *,
+        limit: int = 100,
+        account_id: str = "",
+        alias_id: str = "",
+        thread_key: str = "",
+        event_type: str = "",
+        stage: str = "",
+    ) -> list[dict[str, Any]]:
+        return self._storage.list_diagnostic_events(
+            limit=limit,
+            account_id=account_id,
+            alias_id=alias_id,
+            thread_key=thread_key,
+            event_type=event_type,
+            stage=stage,
+        )
+
+=======
+>>>>>>> origin/main
     def get_runtime_alias_state(self, alias_id: str) -> dict[str, Any]:
         return self._storage.get_runtime_alias_state(alias_id)
 

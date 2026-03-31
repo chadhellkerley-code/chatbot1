@@ -9,6 +9,10 @@ from src.runtime.ownership_router import OwnershipRouter
 
 class InboxController(QObject):
     snapshot_changed = Signal(object)
+<<<<<<< HEAD
+    runtime_status_changed = Signal(object)
+=======
+>>>>>>> origin/main
 
     def __init__(
         self,
@@ -16,6 +20,10 @@ class InboxController(QObject):
         *,
         on_thread_selected: Callable[[str], None] | None = None,
         snapshot_poll_ms: int = 0,
+<<<<<<< HEAD
+        runtime_poll_ms: int = 1000,
+=======
+>>>>>>> origin/main
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -30,8 +38,20 @@ class InboxController(QObject):
         self._loading_thread_key = ""
         self._requested_thread_key = ""
         self._auto_selected_thread_key = ""
+<<<<<<< HEAD
+        self._projection_updated_at: float | None = None
+        self._projection_reason = ""
+        self._ownership_router = OwnershipRouter()
+        self._runtime_poll_ms = max(0, int(runtime_poll_ms or 0))
+        self._runtime_timer = QTimer(self)
+        self._runtime_timer.setInterval(max(250, self._runtime_poll_ms) if self._runtime_poll_ms else 0)
+        self._runtime_timer.timeout.connect(self.refresh_runtime_status)
+        self._last_runtime_token = ""
+        self._last_runtime_running: bool | None = None
+=======
         self._sync_label = "Cache local"
         self._ownership_router = OwnershipRouter()
+>>>>>>> origin/main
         runtime_aliases = list(getattr(self._service, "list_runtime_aliases", lambda: [])() or [])
         self._runtime_alias = str(runtime_aliases[0] or "").strip() if runtime_aliases else ""
 
@@ -59,6 +79,11 @@ class InboxController(QObject):
         set_ui_active = getattr(self._service, "set_ui_active", None)
         if callable(set_ui_active):
             set_ui_active(True)
+<<<<<<< HEAD
+        self._start_runtime_refresh()
+        self.refresh_runtime_status(force=True)
+=======
+>>>>>>> origin/main
         self._schedule_refresh(force=True)
         if clean_key:
             self._requested_thread_key = clean_key
@@ -68,6 +93,10 @@ class InboxController(QObject):
         self._active = False
         self._refresh_scheduled = False
         self._requested_thread_key = ""
+<<<<<<< HEAD
+        self._stop_runtime_refresh()
+=======
+>>>>>>> origin/main
         set_ui_active = getattr(self._service, "set_ui_active", None)
         if callable(set_ui_active):
             set_ui_active(False)
@@ -80,7 +109,10 @@ class InboxController(QObject):
         self._schedule_refresh(force=True)
 
     def force_refresh(self) -> None:
+<<<<<<< HEAD
+=======
         self._sync_label = "Sincronizando..."
+>>>>>>> origin/main
         self._service.refresh()
         self._schedule_refresh(force=True)
 
@@ -179,6 +211,10 @@ class InboxController(QObject):
 
     def set_runtime_alias(self, alias_id: str) -> None:
         self._runtime_alias = str(alias_id or "").strip()
+<<<<<<< HEAD
+        self.refresh_runtime_status(force=True)
+=======
+>>>>>>> origin/main
         self._schedule_refresh(force=True)
 
     def start_runtime(self, config: dict[str, Any]) -> None:
@@ -189,6 +225,10 @@ class InboxController(QObject):
         starter = getattr(self._service, "start_alias_runtime", None)
         if callable(starter):
             starter(alias, config)
+<<<<<<< HEAD
+            self.refresh_runtime_status(force=True)
+=======
+>>>>>>> origin/main
             self._schedule_refresh(force=True)
 
     def stop_runtime(self) -> None:
@@ -198,10 +238,55 @@ class InboxController(QObject):
         stopper = getattr(self._service, "stop_alias_runtime", None)
         if callable(stopper):
             stopper(alias)
+<<<<<<< HEAD
+            self.refresh_runtime_status(force=True)
+            self._schedule_refresh(force=True)
+
+    def _start_runtime_refresh(self) -> None:
+        if not self._runtime_poll_ms or self._runtime_timer.isActive():
+            return
+        self._runtime_timer.start()
+
+    def _stop_runtime_refresh(self) -> None:
+        if self._runtime_timer.isActive():
+            self._runtime_timer.stop()
+
+    def refresh_runtime_status(self, *, force: bool = False) -> None:
+        if not self._active and not force:
+            return
+        runtime_status = {}
+        runtime_getter = getattr(self._service, "alias_runtime_status", None)
+        if callable(runtime_getter) and self._runtime_alias:
+            try:
+                runtime_status = dict(runtime_getter(self._runtime_alias) or {})
+            except Exception:
+                runtime_status = {}
+        ui_status = _runtime_status_ui(runtime_status)
+        token = _runtime_status_token(ui_status)
+        running = bool(ui_status.get("is_running"))
+        running_changed = self._last_runtime_running is not None and running != self._last_runtime_running
+        self._last_runtime_running = running
+        if force or token != self._last_runtime_token:
+            self._last_runtime_token = token
+            self.runtime_status_changed.emit(ui_status)
+        if running_changed:
+=======
+>>>>>>> origin/main
             self._schedule_refresh(force=True)
 
     def _on_cache_updated(self, payload: Any) -> None:
         updated_at = None
+<<<<<<< HEAD
+        reason = ""
+        if isinstance(payload, dict):
+            updated_at = payload.get("updated_at")
+            reason = str(payload.get("reason") or "").strip()
+        stamp = _coerce_timestamp(updated_at)
+        if stamp is not None:
+            self._projection_updated_at = stamp
+        if reason:
+            self._projection_reason = reason
+=======
         if isinstance(payload, dict):
             updated_at = payload.get("updated_at")
         try:
@@ -210,6 +295,7 @@ class InboxController(QObject):
             stamp = None
         if stamp is not None:
             self._sync_label = f"Actualizado {datetime.fromtimestamp(stamp).strftime('%H:%M:%S')}"
+>>>>>>> origin/main
         self._schedule_refresh()
 
     def _on_state_updated(self, _payload: Any) -> None:
@@ -289,7 +375,15 @@ class InboxController(QObject):
         runtime_status = {}
         runtime_getter = getattr(self._service, "alias_runtime_status", None)
         if callable(runtime_getter) and self._runtime_alias:
+<<<<<<< HEAD
+            try:
+                runtime_status = dict(runtime_getter(self._runtime_alias) or {})
+            except Exception:
+                runtime_status = {}
+        runtime_status = _runtime_status_ui(runtime_status)
+=======
             runtime_status = dict(runtime_getter(self._runtime_alias) or {})
+>>>>>>> origin/main
         runtime_aliases = list(getattr(self._service, "list_runtime_aliases", lambda: [])() or [])
         thread_runtime_status = _thread_runtime_status(
             self._service,
@@ -302,6 +396,34 @@ class InboxController(QObject):
             runtime_status=thread_runtime_status,
             router=self._ownership_router,
         )
+<<<<<<< HEAD
+        thread_alias_id = _thread_alias_id(thread)
+        selected_runtime_alias = str(self._runtime_alias or "").strip()
+        thread_permissions.update(
+            {
+                "thread_alias_id": thread_alias_id,
+                "selected_runtime_alias": selected_runtime_alias,
+                "selected_runtime_matches_thread": bool(
+                    thread_alias_id
+                    and selected_runtime_alias
+                    and thread_alias_id.lower() == selected_runtime_alias.lower()
+                ),
+            }
+        )
+        projection_status = _projection_status_ui(
+            updated_at=self._projection_updated_at,
+            reason=self._projection_reason,
+            ready=projection_ready,
+        )
+        remote_sync_status = _remote_sync_status_ui(thread)
+        thread_truth = _thread_truth_ui(
+            thread,
+            messages=messages,
+            runtime_status=thread_runtime_status,
+            selected_runtime_alias=selected_runtime_alias,
+        )
+=======
+>>>>>>> origin/main
         payload = {
             "rows": rows,
             "total_count": len(all_rows),
@@ -315,7 +437,13 @@ class InboxController(QObject):
                 "qualified": qualified_count,
                 "disqualified": disqualified_count,
             },
+<<<<<<< HEAD
+            "sync_label": projection_status.get("label") or "Proyeccion local",
+            "projection_status": projection_status,
+            "remote_sync_status": remote_sync_status,
+=======
             "sync_label": self._sync_label,
+>>>>>>> origin/main
             "thread": thread,
             "messages": messages,
             "seen_text": str((thread or {}).get("last_seen_text") or "").strip() if isinstance(thread, dict) else "",
@@ -330,11 +458,21 @@ class InboxController(QObject):
                 and not messages
             ),
             "force_scroll_to_bottom": bool(self._pending_force_scroll),
+<<<<<<< HEAD
+            "actions_status": _actions_status(thread, thread_permissions, truth=thread_truth),
+            "runtime_aliases": runtime_aliases,
+            "runtime_status": runtime_status,
+            "selected_runtime_alias": selected_runtime_alias,
+            "thread_runtime_status": thread_runtime_status,
+            "thread_permissions": thread_permissions,
+            "thread_truth": thread_truth,
+=======
             "actions_status": _actions_status(thread, thread_permissions),
             "runtime_aliases": runtime_aliases,
             "runtime_status": runtime_status,
             "thread_runtime_status": thread_runtime_status,
             "thread_permissions": thread_permissions,
+>>>>>>> origin/main
         }
         self.snapshot_changed.emit(payload)
         if messages:
@@ -363,10 +501,99 @@ def _matches_filter(row: dict[str, Any], mode: str) -> bool:
     return True
 
 
+<<<<<<< HEAD
+def _runtime_status_ui(status: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(status, dict) or not status:
+        return {}
+    payload = dict(status)
+    payload.setdefault("scheduler_current_account_id", str(payload.get("current_account_id") or "").strip())
+    payload.setdefault("scheduler_next_account_id", str(payload.get("next_account_id") or "").strip())
+    payload.setdefault("sender_attached_account_id", str(payload.get("sender_attached_account_id") or "").strip())
+    payload.setdefault("sender_attached_thread_key", str(payload.get("sender_attached_thread_key") or "").strip())
+    payload.setdefault("last_send_attempt_account_id", str(payload.get("last_send_attempt_account_id") or "").strip())
+    payload.setdefault("last_send_attempt_thread_key", str(payload.get("last_send_attempt_thread_key") or "").strip())
+    payload.setdefault("last_send_attempt_job_id", int(payload.get("last_send_attempt_job_id") or 0))
+    payload.setdefault("last_send_attempt_job_type", str(payload.get("last_send_attempt_job_type") or "").strip())
+    payload.setdefault("last_send_attempt_at", payload.get("last_send_attempt_at"))
+    payload.setdefault("last_send_attempt_outcome", str(payload.get("last_send_attempt_outcome") or "").strip())
+    payload.setdefault("last_send_attempt_reason_code", str(payload.get("last_send_attempt_reason_code") or "").strip())
+    payload.setdefault("last_send_outcome", str(payload.get("last_send_outcome") or "").strip())
+    payload.setdefault("last_send_reason_code", str(payload.get("last_send_reason_code") or "").strip())
+    payload.setdefault("last_send_reason", str(payload.get("last_send_reason") or "").strip())
+    payload.setdefault("last_send_account_id", str(payload.get("last_send_account_id") or "").strip())
+    payload.setdefault("last_send_thread_key", str(payload.get("last_send_thread_key") or "").strip())
+    payload.setdefault("last_send_job_id", int(payload.get("last_send_job_id") or 0))
+    payload.setdefault("last_send_job_type", str(payload.get("last_send_job_type") or "").strip())
+    payload.setdefault("last_send_at", payload.get("last_send_at"))
+    payload.setdefault("last_send_exception_type", str(payload.get("last_send_exception_type") or "").strip())
+    payload.setdefault("last_send_exception_message", str(payload.get("last_send_exception_message") or "").strip())
+    payload.setdefault("last_heartbeat_at", payload.get("last_heartbeat_at"))
+    payload.setdefault("updated_at", payload.get("updated_at"))
+    keep_keys = {
+        "alias_id",
+        "is_running",
+        "worker_state",
+        "mode",
+        "current_turn_count",
+        "max_turns_per_account",
+        "last_error",
+        "current_account_id",
+        "next_account_id",
+        "scheduler_current_account_id",
+        "scheduler_next_account_id",
+        "sender_attached_account_id",
+        "sender_attached_thread_key",
+        "last_send_attempt_account_id",
+        "last_send_attempt_thread_key",
+        "last_send_attempt_job_id",
+        "last_send_attempt_job_type",
+        "last_send_attempt_at",
+        "last_send_attempt_outcome",
+        "last_send_attempt_reason_code",
+        "last_send_outcome",
+        "last_send_reason_code",
+        "last_send_reason",
+        "last_send_account_id",
+        "last_send_thread_key",
+        "last_send_job_id",
+        "last_send_job_type",
+        "last_send_at",
+        "last_send_exception_type",
+        "last_send_exception_message",
+        "last_heartbeat_at",
+        "updated_at",
+    }
+    return {key: payload.get(key) for key in keep_keys if key in payload}
+
+
+def _runtime_status_token(status: dict[str, Any]) -> str:
+    if not isinstance(status, dict) or not status:
+        return ""
+    parts: list[tuple[str, str]] = []
+    for key in sorted(status.keys()):
+        value = status.get(key)
+        parts.append((str(key), str(value)))
+    return "|".join(f"{key}={value}" for key, value in parts)
+
+
+def _actions_status(
+    thread: dict[str, Any] | None,
+    permissions: dict[str, Any] | None = None,
+    *,
+    truth: dict[str, Any] | None = None,
+) -> str:
+    if not isinstance(thread, dict):
+        return "Selecciona una conversacion para ver estado operativo, acciones y runtime."
+    permissions = dict(permissions or {})
+    truth_payload = dict(truth or {})
+    truth_label = str(truth_payload.get("label") or "").strip()
+    alias_note = str(truth_payload.get("alias_note") or "").strip()
+=======
 def _actions_status(thread: dict[str, Any] | None, permissions: dict[str, Any] | None = None) -> str:
     if not isinstance(thread, dict):
         return "Selecciona una conversacion para habilitar IA y packs."
     permissions = dict(permissions or {})
+>>>>>>> origin/main
     health = str(thread.get("account_health") or "healthy").strip().lower()
     if health != "healthy":
         label = {
@@ -378,6 +605,44 @@ def _actions_status(thread: dict[str, Any] | None, permissions: dict[str, Any] |
             "unknown": "Estado desconocido",
         }.get(health, "Estado desconocido")
         detail = str(thread.get("account_health_reason") or "").strip()
+<<<<<<< HEAD
+        prefix = truth_label or "Cuenta con error"
+        message = f"{prefix}\nCuenta con error: {label}"
+        if detail:
+            message = f"{message}\n{detail}"
+        if alias_note:
+            message = f"{message}\n{alias_note}"
+        return message
+    suggestion_status = str(thread.get("suggestion_status") or "").strip().lower()
+    if suggestion_status == "queued":
+        return "\n".join(part for part in (truth_label, "Sugerencia IA en cola.", alias_note) if part)
+    if suggestion_status == "failed":
+        return "\n".join(
+            part
+            for part in (
+                truth_label,
+                str(thread.get("suggestion_error") or "No se pudo generar sugerencia."),
+                alias_note,
+            )
+            if part
+        )
+    if not bool(permissions.get("can_request_ai", True)) or not bool(permissions.get("can_send_pack", True)):
+        manual_status = _manual_action_status(thread, permissions)
+        return "\n".join(part for part in (truth_label, manual_status, alias_note) if part)
+    return (
+        "\n".join(
+            part
+            for part in (
+                truth_label,
+                (
+                    f"Cuenta emisora: @{str(thread.get('account_id') or '-').strip()}\n"
+                    f"Cliente: @{str(thread.get('recipient_username') or '-').strip() or '-'}"
+                ),
+                alias_note,
+            )
+            if part
+        )
+=======
         return f"Cuenta con error: {label}" if not detail else f"Cuenta con error: {label}\n{detail}"
     suggestion_status = str(thread.get("suggestion_status") or "").strip().lower()
     if suggestion_status == "queued":
@@ -389,6 +654,7 @@ def _actions_status(thread: dict[str, Any] | None, permissions: dict[str, Any] |
     return (
         f"Cuenta emisora: @{str(thread.get('account_id') or '-').strip()}\n"
         f"Cliente: @{str(thread.get('recipient_username') or '-').strip() or '-'}"
+>>>>>>> origin/main
     )
 
 
@@ -440,6 +706,12 @@ def _thread_permissions(
             "can_clear_classification": False,
             "composer_mode": "disabled",
             "manual_send_reason": "no_thread",
+<<<<<<< HEAD
+            "thread_alias_id": "",
+            "selected_runtime_alias": "",
+            "selected_runtime_matches_thread": False,
+=======
+>>>>>>> origin/main
         }
     row = dict(thread)
     health = str(row.get("account_health") or "healthy").strip().lower() or "healthy"
@@ -501,12 +773,38 @@ def _manual_send_block_reason(
 
 def _manual_action_status(thread: dict[str, Any], permissions: dict[str, Any]) -> str:
     reason = str(permissions.get("manual_send_reason") or "").strip().lower()
+<<<<<<< HEAD
+    thread_alias_id = str(permissions.get("thread_alias_id") or "").strip()
+    selected_runtime_alias = str(permissions.get("selected_runtime_alias") or "").strip()
+    alias_suffix = ""
+    if thread_alias_id:
+        alias_suffix = f" Alias del thread: @{thread_alias_id}."
+        if selected_runtime_alias and selected_runtime_alias.lower() != thread_alias_id.lower():
+            alias_suffix = (
+                f" Alias del thread: @{thread_alias_id}. Runtime seleccionado: @{selected_runtime_alias}."
+            )
+    if reason == "runtime_auto_owner":
+        return (
+            "Runtime activo para el alias real del thread."
+            " Toma manual o frena ese runtime para usar IA y packs."
+            f"{alias_suffix}"
+        )
+    if reason == "disqualified":
+        return "Thread descalificado. El backend no acepta acciones manuales sobre este contacto."
+    if reason == "runtime_closed":
+        return (
+            "El thread esta cerrado mientras el runtime sigue activo."
+            " Frena el runtime o retoma manual antes de actuar."
+            f"{alias_suffix}"
+        )
+=======
     if reason == "runtime_auto_owner":
         return "Runtime activo para este alias. Toma el thread manual o frena el runtime para usar IA y packs."
     if reason == "disqualified":
         return "Thread descalificado. El backend no acepta acciones manuales sobre este contacto."
     if reason == "runtime_closed":
         return "El thread esta cerrado mientras el runtime sigue activo. Frena el runtime o retoma manual antes de actuar."
+>>>>>>> origin/main
     if reason == "runtime_manual_blocked":
         return "El thread es manual pero no cumple las reglas actuales para responder con el runtime activo."
     return (
@@ -562,3 +860,230 @@ def _merge_thread_snapshot(
         )
     payload["messages"] = [dict(row) for row in messages or [] if isinstance(row, dict)]
     return payload if payload else None
+<<<<<<< HEAD
+
+
+def _coerce_timestamp(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _format_clock(stamp: Any) -> str:
+    resolved = _coerce_timestamp(stamp)
+    if resolved is None or resolved <= 0:
+        return "-"
+    return datetime.fromtimestamp(resolved).strftime("%H:%M:%S")
+
+
+def _projection_status_ui(*, updated_at: float | None, reason: str, ready: bool) -> dict[str, Any]:
+    if updated_at is not None:
+        label = f"Proyeccion local {_format_clock(updated_at)}"
+    elif ready:
+        label = "Proyeccion local lista"
+    else:
+        label = "Proyeccion local cargando"
+    return {
+        "label": label,
+        "updated_at": updated_at,
+        "reason": str(reason or "").strip(),
+        "ready": bool(ready),
+    }
+
+
+def _remote_sync_status_ui(thread: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(thread, dict):
+        return {
+            "label": "Sync remota: selecciona un thread",
+            "account_id": "",
+            "account_last_sync_at": None,
+            "thread_last_synced_at": None,
+        }
+    account_id = str(thread.get("account_id") or "").strip()
+    account_last_sync_at = _coerce_timestamp(thread.get("account_last_sync_at"))
+    thread_last_synced_at = _coerce_timestamp(thread.get("last_synced_at"))
+    if account_last_sync_at is not None:
+        label = (
+            f"Sync remota @{account_id} {_format_clock(account_last_sync_at)}"
+            if account_id
+            else f"Sync remota {_format_clock(account_last_sync_at)}"
+        )
+    elif thread_last_synced_at is not None:
+        label = f"Thread persistido {_format_clock(thread_last_synced_at)}"
+    else:
+        label = "Sync remota sin dato"
+    return {
+        "label": label,
+        "account_id": account_id,
+        "account_last_sync_at": account_last_sync_at,
+        "thread_last_synced_at": thread_last_synced_at,
+    }
+
+
+def _latest_outbound_message(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for row in reversed(messages):
+        if str(row.get("direction") or "").strip().lower() == "outbound":
+            return dict(row)
+    return None
+
+
+def _delivery_truth(message: dict[str, Any] | None) -> str:
+    if not isinstance(message, dict):
+        return ""
+    status = str(message.get("delivery_status") or "").strip().lower()
+    sent_status = str(message.get("sent_status") or "").strip().lower()
+    if status in {"pending", "sending", "error"}:
+        return status
+    if sent_status in {"cancelled", "failed"}:
+        return sent_status
+    if sent_status in {"confirmed", "sent"} or status == "sent":
+        return "confirmed"
+    return ""
+
+
+def _is_cancelled_reason(value: Any) -> bool:
+    reason = str(value or "").strip().lower()
+    if not reason:
+        return False
+    return any(
+        token in reason
+        for token in (
+            "cancel",
+            "runtime_stop",
+            "runtime_stopping",
+            "runtime_inactive",
+            "takeover",
+        )
+    )
+
+
+def _thread_truth_ui(
+    thread: dict[str, Any] | None,
+    *,
+    messages: list[dict[str, Any]],
+    runtime_status: dict[str, Any] | None,
+    selected_runtime_alias: str,
+) -> dict[str, Any]:
+    if not isinstance(thread, dict):
+        return {"code": "none", "label": "Sin seleccion", "detail": "", "alias_note": ""}
+    sender_status = str(thread.get("sender_status") or "").strip().lower()
+    pack_status = str(thread.get("pack_status") or "").strip().lower()
+    thread_status = str(thread.get("thread_status") or "").strip().lower()
+    thread_error = str(thread.get("thread_error") or "").strip()
+    sender_error = str(thread.get("sender_error") or "").strip()
+    pack_error = str(thread.get("pack_error") or "").strip()
+    health = str(thread.get("account_health") or "healthy").strip().lower()
+    needs_reply = bool(thread.get("needs_reply"))
+    last_seen_text = str(thread.get("last_seen_text") or "").strip()
+    last_direction = str(thread.get("last_message_direction") or "").strip().lower()
+    runtime_payload = dict(runtime_status or {})
+    latest_outbound = _latest_outbound_message(messages)
+    delivery_truth = _delivery_truth(latest_outbound)
+    thread_key = str(thread.get("thread_key") or "").strip()
+    runtime_last_send_thread_key = str(runtime_payload.get("last_send_thread_key") or "").strip()
+    runtime_last_send_outcome = str(runtime_payload.get("last_send_outcome") or "").strip().lower()
+    runtime_last_send_reason = str(
+        runtime_payload.get("last_send_reason") or runtime_payload.get("last_send_reason_code") or ""
+    ).strip()
+    thread_alias_id = _thread_alias_id(thread)
+    clean_selected_alias = str(selected_runtime_alias or "").strip()
+    alias_note = ""
+    if thread_alias_id:
+        if clean_selected_alias and clean_selected_alias.lower() != thread_alias_id.lower():
+            alias_note = f"Runtime seleccionado @{clean_selected_alias} | alias del thread @{thread_alias_id}"
+        elif clean_selected_alias:
+            alias_note = f"Runtime y thread en @{thread_alias_id}"
+
+    label = "Thread listo"
+    code = "ready"
+    detail = ""
+    if health != "healthy":
+        code = "account_error"
+        label = "Cuenta con error"
+        detail = str(thread.get("account_health_reason") or "").strip()
+    elif thread_status == "opening":
+        code = "opening"
+        label = "Abriendo thread"
+        detail = "Preparando apertura real del thread."
+    elif sender_status == "preparing":
+        code = "preparing"
+        label = "Preparando thread"
+        detail = "El sender esta preparando contexto antes de enviar."
+    elif pack_status == "running":
+        code = "pack_running"
+        label = "Enviando pack"
+        detail = "Hay un pack en curso."
+    elif sender_status == "sending":
+        code = "sending"
+        label = "Enviando mensaje"
+        detail = "El sender esta en envio activo."
+    elif pack_status == "queued":
+        code = "pack_queued"
+        label = "Pack en cola"
+        detail = "Hay un pack esperando turno."
+    elif sender_status == "queued":
+        code = "queued"
+        label = "Mensaje en cola"
+        detail = "Hay un mensaje local encolado."
+    elif (
+        runtime_last_send_thread_key == thread_key
+        and runtime_last_send_outcome == "cancelled"
+    ) or _is_cancelled_reason(sender_error) or _is_cancelled_reason(pack_error):
+        code = "cancelled"
+        label = "Envio cancelado"
+        detail = runtime_last_send_reason or sender_error or pack_error
+    elif thread_status == "failed" or sender_status == "failed" or pack_status == "failed":
+        code = "failed"
+        label = "Envio fallido"
+        detail = thread_error or sender_error or pack_error
+    elif thread_error:
+        code = "thread_error"
+        label = "Error del thread"
+        detail = thread_error
+    elif delivery_truth == "sending":
+        code = "sending"
+        label = "Enviando mensaje"
+        detail = "El ultimo mensaje sigue en envio."
+    elif delivery_truth == "pending":
+        code = "queued"
+        label = "Mensaje en cola"
+        detail = "El ultimo mensaje todavia no salio del storage local."
+    elif delivery_truth == "cancelled":
+        code = "cancelled"
+        label = "Envio cancelado"
+        detail = runtime_last_send_reason or "cancelled"
+    elif delivery_truth == "failed":
+        code = "failed"
+        label = "Envio fallido"
+        detail = sender_error or pack_error or "failed"
+    elif pack_status == "done":
+        code = "confirmed"
+        label = "Pack confirmado"
+        detail = "El ultimo pack quedo confirmado en storage."
+    elif delivery_truth == "confirmed" and last_direction == "outbound":
+        code = "confirmed"
+        label = "Envio confirmado"
+        detail = "El ultimo outbound quedo confirmado en storage."
+    elif needs_reply:
+        code = "needs_reply"
+        label = "Pendiente de respuesta"
+        detail = "El ultimo inbound sigue sin respuesta confirmada."
+    elif last_seen_text:
+        code = "seen"
+        label = "Sin pendiente"
+        detail = last_seen_text
+    elif last_direction == "outbound":
+        code = "confirmed"
+        label = "Sin pendiente"
+        detail = "Ultimo movimiento confirmado: outbound."
+    return {
+        "code": code,
+        "label": label,
+        "detail": detail,
+        "alias_note": alias_note,
+    }
+=======
+>>>>>>> origin/main

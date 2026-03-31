@@ -1,0 +1,72 @@
+{
+  "worker_id": "worker-1",
+  "network_key": "direct",
+  "proxy_id": "__no_proxy__",
+  "accounts": [
+    {
+      "username": "matidiazlife",
+      "active": true,
+      "connected": true,
+      "alias_id": "nuevas",
+      "alias_display_name": "nuevas",
+      "profile_edit_count": 0,
+      "profile_edit_types": [],
+      "first_seen": "2026-03-23T05:17:28Z",
+      "messages_per_account": 45,
+      "max_messages": 45,
+      "usage_state": "active",
+      "alias": "nuevas",
+      "password": "Flor12345.",
+      "assigned_proxy_id": null,
+      "proxy_url": "",
+      "proxy_user": "",
+      "proxy_pass": "",
+      "proxy_sticky_minutes": 10,
+      "has_totp": true,
+      "recent_activity_count": 42,
+      "low_profile_auto": true,
+      "low_profile": true,
+      "low_profile_reason": "cuenta nueva (6d); 42 envÃƒÂ­os/48h",
+      "low_profile_source": "auto",
+      "low_profile_manual": false,
+      "effective_network_key": "direct",
+      "network_mode": "direct",
+      "proxy_preflight_status": "none",
+      "proxy_preflight_message": "",
+      "runtime_proxy_id": "__no_proxy__",
+      "sent_today": 0
+    }
+  ],
+  "all_proxy_ids": [
+    "direct"
+  ],
+  "delay_min": 100,
+  "delay_max": 180,
+  "template_variants": [
+    "holaaa",
+    "que tal todo?",
+    "tengo una preguntita",
+    "como va?"
+  ],
+  "cooldown_fail_threshold": 3,
+  "campaign_alias": "nuevas",
+  "leads_alias": "27.3",
+  "campaign_run_id": "campaign-20260329185123214427",
+  "headless": false,
+  "send_flow_timeout_seconds": 75.0,
+  "visible_browser_layout": {
+    "scope": "campaign:campaign-20260329185123214427",
+    "target_count": 1,
+    "layout_policy": "compact",
+    "stagger_min_ms": 300,
+    "stagger_max_ms": 800,
+    "stagger_step_ms": 100
+  },
+  "active_account_limit": 6,
+  "session_close_timeout_seconds": 12.0,
+  "ipc": {
+    "host": "127.0.0.1",
+    "port": 60002,
+    "authkey_b64": "Fffa6SyMSp+AQrZ+w8+VAGu3QngJoi5q"
+  }
+}

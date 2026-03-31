@@ -132,6 +132,103 @@ def test_open_profile_sessions_routes_other_changes_to_edit_profile(
     assert calls[0]["restore_page_if_closed"] is False
 
 
+<<<<<<< HEAD
+def test_open_account_profiles_routes_to_each_account_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    rows = [
+        {
+            "username": "tester",
+            "alias": "alias-a",
+            "active": True,
+            "connected": True,
+            "health_badge": "VIVA",
+        }
+    ]
+    _install_accounts(monkeypatch, rows)
+    calls = _capture_manual_opens(monkeypatch)
+
+    result = service.open_account_profiles("alias-a", ["tester"], action_label="Abrir cuenta")
+
+    assert result == {
+        "alias": "alias-a",
+        "action": "Abrir cuenta",
+        "opened": ["tester"],
+        "count": 1,
+    }
+    assert len(calls) == 1
+    assert calls[0]["record"] == {
+        **rows[0],
+        "alias_id": "alias-a",
+        "alias_display_name": "alias-a",
+    }
+    assert calls[0]["start_url"] == "https://www.instagram.com/tester/"
+    assert calls[0]["action_label"] == "Abrir cuenta"
+    assert calls[0]["max_seconds"] is None
+    assert calls[0]["restore_page_if_closed"] is False
+
+
+def test_open_manual_sessions_allows_connected_accounts_regardless_of_health(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    rows = [
+        {
+            "username": "tester",
+            "alias": "alias-a",
+            "active": True,
+            "connected": True,
+            "health_badge": "NO ACTIVA",
+        }
+    ]
+    _install_accounts(monkeypatch, rows)
+    calls = _capture_manual_opens(monkeypatch)
+
+    result = service.open_manual_sessions(
+        "alias-a",
+        ["tester"],
+        start_url="https://www.instagram.com/accounts/edit/",
+        action_label="Cambiar username",
+    )
+
+    assert result["opened"] == ["tester"]
+    assert len(calls) == 1
+
+
+def test_open_manual_sessions_allows_deactivated_usage_state_when_connected(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    rows = [
+        {
+            "username": "tester",
+            "alias": "alias-a",
+            "active": True,
+            "usage_state": "deactivated",
+            "connected": True,
+            "health_badge": "NO ACTIVA",
+        }
+    ]
+    _install_accounts(monkeypatch, rows)
+    calls = _capture_manual_opens(monkeypatch)
+
+    result = service.open_manual_sessions(
+        "alias-a",
+        ["tester"],
+        start_url="https://www.instagram.com/accounts/edit/",
+        action_label="Cambiar username",
+    )
+
+    assert result["opened"] == ["tester"]
+    assert len(calls) == 1
+
+
+=======
+>>>>>>> origin/main
 def test_open_manual_sessions_rejects_accounts_requiring_relogin(
     monkeypatch,
     tmp_path: Path,
@@ -149,7 +246,11 @@ def test_open_manual_sessions_rejects_accounts_requiring_relogin(
     _install_accounts(monkeypatch, rows)
     _capture_manual_opens(monkeypatch)
 
+<<<<<<< HEAD
+    with pytest.raises(Exception, match="deben estar conectadas"):
+=======
     with pytest.raises(Exception, match="requieren re-login"):
+>>>>>>> origin/main
         service.open_manual_sessions(
             "alias-a",
             ["tester"],

@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+<<<<<<< HEAD
+import re
 import threading
 import time
 import uuid
+from contextlib import contextmanager
+=======
+import threading
+import time
+import uuid
+>>>>>>> origin/main
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
@@ -13,14 +21,113 @@ from playwright.async_api import Page
 
 from core.proxy_preflight import account_proxy_preflight
 from core.proxy_registry import ProxyResolutionError
+<<<<<<< HEAD
+from src.browser_profile_lifecycle import emit_profile_lifecycle_diagnostic, mark_profile_unclean_shutdown
+from src.browser_profile_paths import browser_storage_state_path
+from src.browser_telemetry import log_browser_stage
+from src.playwright_service import PlaywrightService
+from src.runtime.playwright_runtime import PersistentProfileOwnershipError, run_coroutine_sync
+=======
 from src.browser_profile_paths import browser_storage_state_path
 from src.browser_telemetry import log_browser_stage
 from src.playwright_service import PlaywrightService
 from src.runtime.playwright_runtime import run_coroutine_sync
+>>>>>>> origin/main
 
 SessionLoginFunc = Callable[..., Awaitable[Tuple[PlaywrightService, Any, Page]]]
 
 
+<<<<<<< HEAD
+def _normalize_subsystem_label(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9_-]+", "_", str(value or "").strip().lower()).strip("_")
+    return cleaned or "default"
+
+
+def _normalize_navigation_owner_type(owner: str) -> str:
+    text = str(owner or "").strip().lower()
+    if not text:
+        return "unknown"
+    match = re.split(r"[:/\s]+", text, maxsplit=1)
+    cleaned = re.sub(r"[^a-z0-9_-]+", "_", str(match[0] or "").strip()).strip("_")
+    return cleaned or "unknown"
+
+
+class NavigationLockedError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        owner: str,
+        owner_type: str,
+        current_owner: str,
+        current_owner_type: str,
+        username: str,
+        subsystem: str,
+        timeout: float,
+        acquired_at: float,
+    ) -> None:
+        self.owner = str(owner or "").strip()
+        self.owner_type = str(owner_type or "").strip()
+        self.current_owner = str(current_owner or "").strip()
+        self.current_owner_type = str(current_owner_type or "").strip()
+        self.username = str(username or "").strip()
+        self.subsystem = str(subsystem or "").strip()
+        self.timeout = max(0.0, float(timeout or 0.0))
+        self.acquired_at = float(acquired_at or 0.0)
+        super().__init__(
+            f"navigation_locked owner={self.owner or 'unknown'} "
+            f"navigation_in_use_by={self.current_owner or 'unknown'} "
+            f"navigation_timeout={self.timeout:.2f}"
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "navigation_locked": True,
+            "navigation_in_use_by": self.current_owner,
+            "navigation_owner": self.owner,
+            "navigation_owner_type": self.owner_type,
+            "navigation_current_owner_type": self.current_owner_type,
+            "navigation_timeout": self.timeout,
+            "navigation_acquired_at": self.acquired_at,
+            "subsystem": self.subsystem,
+            "account": self.username,
+        }
+
+
+class NavigationOwnershipError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        owner: str,
+        current_owner: str,
+        username: str,
+        subsystem: str,
+    ) -> None:
+        self.owner = str(owner or "").strip()
+        self.current_owner = str(current_owner or "").strip()
+        self.username = str(username or "").strip()
+        self.subsystem = str(subsystem or "").strip()
+        super().__init__(
+            f"navigation_release_owner_mismatch owner={self.owner or 'unknown'} "
+            f"current_owner={self.current_owner or 'unknown'}"
+        )
+
+
+@dataclass
+class _NavigationState:
+    current_owner: str = ""
+    owner_type: str = ""
+    acquired_at: float = 0.0
+    depth: int = 0
+    retired: bool = False
+    retired_reason: str = ""
+    condition: threading.Condition = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.condition = threading.Condition(threading.RLock())
+
+
+=======
+>>>>>>> origin/main
 @dataclass(frozen=True)
 class ManagedSession:
     key: str
@@ -31,6 +138,44 @@ class ManagedSession:
     reused: bool
     lease_id: str = ""
     pool_key: str = ""
+<<<<<<< HEAD
+    _acquire_navigation_sync: Callable[[str, float], dict[str, Any]] | None = field(default=None, repr=False, compare=False)
+    _acquire_navigation_async: Callable[[str, float], Awaitable[dict[str, Any]]] | None = field(default=None, repr=False, compare=False)
+    _release_navigation_sync: Callable[[str], None] | None = field(default=None, repr=False, compare=False)
+    _release_navigation_async: Callable[[str], Awaitable[None]] | None = field(default=None, repr=False, compare=False)
+    _navigation_metadata: Callable[[], dict[str, Any]] | None = field(default=None, repr=False, compare=False)
+
+    def acquire_navigation(self, owner: str, timeout: float) -> dict[str, Any]:
+        if self._acquire_navigation_sync is None:
+            raise RuntimeError("navigation_acquire_unavailable")
+        return dict(self._acquire_navigation_sync(str(owner or ""), float(timeout or 0.0)))
+
+    async def acquire_navigation_async(self, owner: str, timeout: float) -> dict[str, Any]:
+        if self._acquire_navigation_async is None:
+            return self.acquire_navigation(owner, timeout)
+        return dict(await self._acquire_navigation_async(str(owner or ""), float(timeout or 0.0)))
+
+    def release_navigation(self, owner: str) -> None:
+        if self._release_navigation_sync is None:
+            raise RuntimeError("navigation_release_unavailable")
+        self._release_navigation_sync(str(owner or ""))
+
+    async def release_navigation_async(self, owner: str) -> None:
+        if self._release_navigation_async is None:
+            self.release_navigation(owner)
+            return
+        await self._release_navigation_async(str(owner or ""))
+
+    def navigation_metadata(self) -> dict[str, Any]:
+        if self._navigation_metadata is None:
+            return {
+                "current_owner": "",
+                "owner_type": "",
+                "timestamp": 0.0,
+            }
+        return dict(self._navigation_metadata())
+=======
+>>>>>>> origin/main
 
 
 @dataclass
@@ -42,6 +187,10 @@ class _SessionEntry:
     proxy_key: str
     sticky_owners: set[str] = field(default_factory=set)
     leases: dict[str, str] = field(default_factory=dict)
+<<<<<<< HEAD
+    navigation: _NavigationState = field(default_factory=_NavigationState)
+=======
+>>>>>>> origin/main
 
     @property
     def persistent(self) -> bool:
@@ -75,12 +224,20 @@ class SessionManager:
         profiles_root: str,
         normalize_username: Callable[[str], str],
         log_event: Callable[..., None],
+<<<<<<< HEAD
+        subsystem: str = "default",
+=======
+>>>>>>> origin/main
     ) -> None:
         self._headless = bool(headless)
         self._persistent = bool(keep_browser_open_per_account)
         self._profiles_root = str(profiles_root)
         self._normalize_username = normalize_username
         self._log_event = log_event
+<<<<<<< HEAD
+        self._subsystem = _normalize_subsystem_label(subsystem)
+=======
+>>>>>>> origin/main
         self._manager_id = uuid.uuid4().hex
         self._held_leases: Dict[str, str] = {}
         env_name = (
@@ -98,7 +255,11 @@ class SessionManager:
         return self._normalize_username(username).lower()
 
     def _pool_key(self, key: str) -> str:
+<<<<<<< HEAD
+        return f"{'headless' if self._headless else 'headful'}:{self._subsystem}:{key}"
+=======
         return f"{'headless' if self._headless else 'headful'}:{key}"
+>>>>>>> origin/main
 
     @staticmethod
     def page_closed(page: Optional[Page]) -> bool:
@@ -159,6 +320,213 @@ class SessionManager:
             entry.sticky_owners.add(self._manager_id)
         return lease_id
 
+<<<<<<< HEAD
+    def _navigation_metadata(self, entry: _SessionEntry) -> dict[str, Any]:
+        with entry.navigation.condition:
+            return {
+                "current_owner": str(entry.navigation.current_owner or ""),
+                "owner_type": str(entry.navigation.owner_type or ""),
+                "timestamp": float(entry.navigation.acquired_at or 0.0),
+            }
+
+    def _emit_navigation_event(
+        self,
+        event_name: str,
+        *,
+        username: str,
+        owner: str,
+        owner_type: str,
+        current_owner: str = "",
+        current_owner_type: str = "",
+        timeout: float = 0.0,
+        acquired_at: float = 0.0,
+        depth: int = 0,
+        reason: str = "",
+    ) -> None:
+        payload = {
+            "account": username,
+            "subsystem": self._subsystem,
+            "owner": owner,
+            "owner_type": owner_type,
+            "current_owner": current_owner,
+            "current_owner_type": current_owner_type,
+            "navigation_in_use_by": current_owner,
+            "navigation_timeout": max(0.0, float(timeout or 0.0)),
+            "timestamp": float(acquired_at or time.time()),
+            "depth": int(depth or 0),
+            "reason": reason,
+        }
+        self._log_event(event_name, **payload)
+
+    def _resolve_navigation_entry(self, session: ManagedSession) -> _SessionEntry:
+        pool_key = str(session.pool_key or self._held_leases.get(session.lease_id) or self._pool_key(session.key))
+        with self._GLOBAL_LOCK:
+            entry = self._SHARED_SESSIONS.get(pool_key)
+        if entry is None:
+            raise RuntimeError("navigation_session_missing")
+        return entry
+
+    def acquire_navigation_sync(self, session: ManagedSession, owner: str, timeout: float) -> dict[str, Any]:
+        entry = self._resolve_navigation_entry(session)
+        clean_owner = str(owner or "").strip()
+        if not clean_owner:
+            raise ValueError("navigation_owner_required")
+        owner_type = _normalize_navigation_owner_type(clean_owner)
+        timeout_seconds = max(0.0, float(timeout or 0.0))
+        deadline = time.monotonic() + timeout_seconds
+        conflict_emitted = False
+        while True:
+            with entry.navigation.condition:
+                if entry.navigation.retired:
+                    raise RuntimeError(entry.navigation.retired_reason or "navigation_session_retired")
+                if self.page_closed(entry.page) or self.context_closed(entry.ctx):
+                    raise RuntimeError("navigation_session_unavailable")
+                if not entry.navigation.current_owner or entry.navigation.current_owner == clean_owner:
+                    if not entry.navigation.current_owner:
+                        entry.navigation.current_owner = clean_owner
+                        entry.navigation.owner_type = owner_type
+                        entry.navigation.acquired_at = time.time()
+                    entry.navigation.depth = max(0, int(entry.navigation.depth or 0)) + 1
+                    meta = {
+                        "current_owner": entry.navigation.current_owner,
+                        "owner_type": entry.navigation.owner_type,
+                        "timestamp": entry.navigation.acquired_at,
+                    }
+                    self._emit_navigation_event(
+                        "navigation_acquired",
+                        username=entry.key,
+                        owner=clean_owner,
+                        owner_type=entry.navigation.owner_type,
+                        current_owner=entry.navigation.current_owner,
+                        current_owner_type=entry.navigation.owner_type,
+                        acquired_at=entry.navigation.acquired_at,
+                        depth=entry.navigation.depth,
+                    )
+                    return meta
+                current_owner = str(entry.navigation.current_owner or "")
+                current_owner_type = str(entry.navigation.owner_type or "")
+                acquired_at = float(entry.navigation.acquired_at or 0.0)
+                remaining = max(0.0, deadline - time.monotonic())
+                if not conflict_emitted:
+                    self._emit_navigation_event(
+                        "navigation_conflict",
+                        username=entry.key,
+                        owner=clean_owner,
+                        owner_type=owner_type,
+                        current_owner=current_owner,
+                        current_owner_type=current_owner_type,
+                        timeout=timeout_seconds,
+                        acquired_at=acquired_at,
+                        depth=entry.navigation.depth,
+                        reason="navigation_in_use",
+                    )
+                    conflict_emitted = True
+                if remaining <= 0.0:
+                    self._emit_navigation_event(
+                        "navigation_timeout",
+                        username=entry.key,
+                        owner=clean_owner,
+                        owner_type=owner_type,
+                        current_owner=current_owner,
+                        current_owner_type=current_owner_type,
+                        timeout=timeout_seconds,
+                        acquired_at=acquired_at,
+                        depth=entry.navigation.depth,
+                        reason="navigation_lock_timeout",
+                    )
+                    raise NavigationLockedError(
+                        owner=clean_owner,
+                        owner_type=owner_type,
+                        current_owner=current_owner,
+                        current_owner_type=current_owner_type,
+                        username=entry.key,
+                        subsystem=self._subsystem,
+                        timeout=timeout_seconds,
+                        acquired_at=acquired_at,
+                    )
+                entry.navigation.condition.wait(timeout=min(0.1, remaining))
+
+    async def acquire_navigation(self, session: ManagedSession, owner: str, timeout: float) -> dict[str, Any]:
+        return await asyncio.to_thread(self.acquire_navigation_sync, session, owner, timeout)
+
+    def release_navigation_sync(self, session: ManagedSession, owner: str) -> None:
+        try:
+            entry = self._resolve_navigation_entry(session)
+        except RuntimeError as exc:
+            if str(exc) == "navigation_session_missing":
+                return
+            raise
+        clean_owner = str(owner or "").strip()
+        if not clean_owner:
+            raise ValueError("navigation_owner_required")
+        released_at = time.time()
+        with entry.navigation.condition:
+            if entry.navigation.retired:
+                return
+            current_owner = str(entry.navigation.current_owner or "")
+            current_owner_type = str(entry.navigation.owner_type or "")
+            if current_owner != clean_owner:
+                self._emit_navigation_event(
+                    "navigation_conflict",
+                    username=entry.key,
+                    owner=clean_owner,
+                    owner_type=_normalize_navigation_owner_type(clean_owner),
+                    current_owner=current_owner,
+                    current_owner_type=current_owner_type,
+                    acquired_at=float(entry.navigation.acquired_at or 0.0),
+                    depth=entry.navigation.depth,
+                    reason="release_owner_mismatch",
+                )
+                raise NavigationOwnershipError(
+                    owner=clean_owner,
+                    current_owner=current_owner,
+                    username=entry.key,
+                    subsystem=self._subsystem,
+                )
+            entry.navigation.depth = max(0, int(entry.navigation.depth or 0) - 1)
+            released = entry.navigation.depth == 0
+            if released:
+                owner_type = str(entry.navigation.owner_type or "")
+                entry.navigation.current_owner = ""
+                entry.navigation.owner_type = ""
+                entry.navigation.acquired_at = 0.0
+                entry.navigation.condition.notify_all()
+            else:
+                owner_type = current_owner_type
+        self._emit_navigation_event(
+            "navigation_released",
+            username=entry.key,
+            owner=clean_owner,
+            owner_type=owner_type,
+            acquired_at=released_at,
+            depth=0 if released else entry.navigation.depth,
+        )
+
+    async def release_navigation(self, session: ManagedSession, owner: str) -> None:
+        await asyncio.to_thread(self.release_navigation_sync, session, owner)
+
+    def _retire_navigation(self, entry: Optional[_SessionEntry], *, reason: str) -> None:
+        if entry is None:
+            return
+        with entry.navigation.condition:
+            entry.navigation.retired = True
+            entry.navigation.retired_reason = str(reason or "navigation_session_retired")
+            entry.navigation.current_owner = ""
+            entry.navigation.owner_type = ""
+            entry.navigation.acquired_at = 0.0
+            entry.navigation.depth = 0
+            entry.navigation.condition.notify_all()
+
+    @staticmethod
+    def _signal_open_state(state: Optional[_OpenState], error: BaseException | None = None) -> None:
+        if state is None:
+            return
+        if error is not None and state.error is None:
+            state.error = error
+        state.event.set()
+
+=======
+>>>>>>> origin/main
     async def open_session(
         self,
         *,
@@ -224,6 +592,64 @@ class SessionManager:
                         reused=True,
                         lease_id=lease_id,
                         pool_key=pool_key,
+<<<<<<< HEAD
+                        _acquire_navigation_sync=lambda owner, timeout, _session_key=pool_key: self.acquire_navigation_sync(
+                            ManagedSession(
+                                key=key,
+                                svc=entry.svc,
+                                ctx=entry.ctx,
+                                page=entry.page,
+                                persistent=entry.persistent,
+                                reused=True,
+                                lease_id=lease_id,
+                                pool_key=_session_key,
+                            ),
+                            owner,
+                            timeout,
+                        ),
+                        _acquire_navigation_async=lambda owner, timeout, _session_key=pool_key: self.acquire_navigation(
+                            ManagedSession(
+                                key=key,
+                                svc=entry.svc,
+                                ctx=entry.ctx,
+                                page=entry.page,
+                                persistent=entry.persistent,
+                                reused=True,
+                                lease_id=lease_id,
+                                pool_key=_session_key,
+                            ),
+                            owner,
+                            timeout,
+                        ),
+                        _release_navigation_sync=lambda owner, _session_key=pool_key: self.release_navigation_sync(
+                            ManagedSession(
+                                key=key,
+                                svc=entry.svc,
+                                ctx=entry.ctx,
+                                page=entry.page,
+                                persistent=entry.persistent,
+                                reused=True,
+                                lease_id=lease_id,
+                                pool_key=_session_key,
+                            ),
+                            owner,
+                        ),
+                        _release_navigation_async=lambda owner, _session_key=pool_key: self.release_navigation(
+                            ManagedSession(
+                                key=key,
+                                svc=entry.svc,
+                                ctx=entry.ctx,
+                                page=entry.page,
+                                persistent=entry.persistent,
+                                reused=True,
+                                lease_id=lease_id,
+                                pool_key=_session_key,
+                            ),
+                            owner,
+                        ),
+                        _navigation_metadata=lambda: self._navigation_metadata(entry),
+=======
+>>>>>>> origin/main
                     )
                 open_state = self._OPENING.get(pool_key)
                 if open_state is not None and open_state.event.is_set() and open_state.error is not None:
@@ -232,12 +658,22 @@ class SessionManager:
                 if open_state is None:
                     self._OPENING[pool_key] = _OpenState(proxy_key=proxy_key)
                     should_open = True
+<<<<<<< HEAD
+                else:
+                    # Only one opener may own a pool key at a time. Callers
+                    # waiting on a different proxy reopen after the current
+                    # attempt finishes, which avoids cross-proxy result races.
+                    wait_state = open_state
+            if stale_entry is not None:
+                self._retire_navigation(stale_entry, reason="stale_session_replaced")
+=======
                 elif open_state.proxy_key == proxy_key:
                     wait_state = open_state
                 else:
                     self._OPENING[pool_key] = _OpenState(proxy_key=proxy_key)
                     should_open = True
             if stale_entry is not None:
+>>>>>>> origin/main
                 await self._close_session_entry(stale_entry)
             if should_open:
                 break
@@ -251,12 +687,28 @@ class SessionManager:
                 open_state = self._OPENING.get(pool_key)
                 if open_state is wait_state and open_state.event.is_set() and open_state.error is not None:
                     self._OPENING.pop(pool_key, None)
+<<<<<<< HEAD
+                    if isinstance(open_state.error, Exception):
+                        raise open_state.error
+=======
+>>>>>>> origin/main
                     raise RuntimeError(str(open_state.error) or type(open_state.error).__name__) from open_state.error
 
         timeout_seconds = self._resolve_open_timeout(deadline=deadline)
         action_account = dict(account or {})
         action_account.setdefault("reuse_session_only", True)
+<<<<<<< HEAD
+        action_account.setdefault(
+            "validate_reused_session",
+            False if self._subsystem == "campaign" else True,
+        )
+        action_account.setdefault("_playwright_subsystem", self._subsystem)
+        if self._subsystem == "campaign":
+            action_account.setdefault("require_persistent_profile", True)
+            action_account.setdefault("disable_safe_browser_recovery", True)
+=======
         action_account.setdefault("validate_reused_session", True)
+>>>>>>> origin/main
         login_coro = login_func(action_account, headless=self._headless, proxy=proxy)
         try:
             if timeout_seconds is None:
@@ -276,6 +728,36 @@ class SessionManager:
             )
             raise TimeoutError("session_open_timeout") from exc
         except Exception as exc:
+<<<<<<< HEAD
+            log_payload = {
+                "key": key,
+                "error": str(exc) or type(exc).__name__,
+                "error_type": type(exc).__name__,
+            }
+            browser_stage_payload = {
+                "component": "playwright_session_manager",
+                "stage": "session_open_end",
+                "status": "failed",
+                "account": username,
+                "error": str(exc) or type(exc).__name__,
+                "error_type": type(exc).__name__,
+            }
+            if isinstance(exc, PersistentProfileOwnershipError):
+                log_payload.update(
+                    {
+                        "reason": exc.reason_code,
+                        "conflict_code": exc.conflict_code,
+                        "handoff_code": exc.handoff_code,
+                        "profile_dir": exc.profile_dir,
+                        "requested_mode": exc.requested_mode,
+                        "active_mode": exc.active_mode,
+                    }
+                )
+                browser_stage_payload["reason"] = exc.reason_code
+            self._log_event("SESSION_OPEN_FAILED", **log_payload)
+            self._publish_open_failure(pool_key, exc)
+            log_browser_stage(**browser_stage_payload)
+=======
             self._log_event("SESSION_OPEN_FAILED", key=key, error=str(exc) or type(exc).__name__, error_type=type(exc).__name__)
             self._publish_open_failure(pool_key, exc)
             log_browser_stage(
@@ -286,6 +768,7 @@ class SessionManager:
                 error=str(exc) or type(exc).__name__,
                 error_type=type(exc).__name__,
             )
+>>>>>>> origin/main
             raise
 
         entry = _SessionEntry(key=key, svc=svc, ctx=ctx, page=page, proxy_key=proxy_key)
@@ -299,9 +782,15 @@ class SessionManager:
                 self._SHARED_SESSIONS[pool_key] = entry
             lease_id = self._attach_lease(pool_key, entry)
             open_state = self._OPENING.pop(pool_key, None)
+<<<<<<< HEAD
+            self._signal_open_state(open_state)
+        if stale_entry is not None:
+            self._retire_navigation(stale_entry, reason="stale_session_replaced")
+=======
             if open_state is not None:
                 open_state.event.set()
         if stale_entry is not None:
+>>>>>>> origin/main
             await self._close_session_entry(stale_entry)
         self._log_event("SESSION_OPEN", key=key, persistent=entry.persistent, url=entry.page.url if entry.page else "")
         log_browser_stage(
@@ -329,6 +818,64 @@ class SessionManager:
             reused=False,
             lease_id=lease_id,
             pool_key=pool_key,
+<<<<<<< HEAD
+            _acquire_navigation_sync=lambda owner, timeout, _session_key=pool_key: self.acquire_navigation_sync(
+                ManagedSession(
+                    key=key,
+                    svc=entry.svc,
+                    ctx=entry.ctx,
+                    page=entry.page,
+                    persistent=entry.persistent,
+                    reused=False,
+                    lease_id=lease_id,
+                    pool_key=_session_key,
+                ),
+                owner,
+                timeout,
+            ),
+            _acquire_navigation_async=lambda owner, timeout, _session_key=pool_key: self.acquire_navigation(
+                ManagedSession(
+                    key=key,
+                    svc=entry.svc,
+                    ctx=entry.ctx,
+                    page=entry.page,
+                    persistent=entry.persistent,
+                    reused=False,
+                    lease_id=lease_id,
+                    pool_key=_session_key,
+                ),
+                owner,
+                timeout,
+            ),
+            _release_navigation_sync=lambda owner, _session_key=pool_key: self.release_navigation_sync(
+                ManagedSession(
+                    key=key,
+                    svc=entry.svc,
+                    ctx=entry.ctx,
+                    page=entry.page,
+                    persistent=entry.persistent,
+                    reused=False,
+                    lease_id=lease_id,
+                    pool_key=_session_key,
+                ),
+                owner,
+            ),
+            _release_navigation_async=lambda owner, _session_key=pool_key: self.release_navigation(
+                ManagedSession(
+                    key=key,
+                    svc=entry.svc,
+                    ctx=entry.ctx,
+                    page=entry.page,
+                    persistent=entry.persistent,
+                    reused=False,
+                    lease_id=lease_id,
+                    pool_key=_session_key,
+                ),
+                owner,
+            ),
+            _navigation_metadata=lambda: self._navigation_metadata(entry),
+=======
+>>>>>>> origin/main
         )
 
     async def save_storage_state(self, session: ManagedSession, username: str) -> None:
@@ -347,8 +894,19 @@ class SessionManager:
                 entry.ctx,
                 browser_storage_state_path(entry.key, profiles_root=self._profiles_root),
             )
+<<<<<<< HEAD
+        except Exception as exc:
+            self._log_event(
+                "SESSION_STORAGE_SAVE_FAILED",
+                key=entry.key,
+                error=str(exc) or type(exc).__name__,
+                error_type=type(exc).__name__,
+                subsystem=self._subsystem,
+            )
+=======
         except Exception:
             pass
+>>>>>>> origin/main
 
     async def discard_if_unhealthy(
         self,
@@ -390,6 +948,10 @@ class SessionManager:
         if entry_to_persist is not None:
             await self._save_entry_storage_state(entry_to_persist)
         if entry_to_close is not None:
+<<<<<<< HEAD
+            self._retire_navigation(entry_to_close, reason="session_released")
+=======
+>>>>>>> origin/main
             await self._close_session_entry(entry_to_close)
 
     async def drop_cached_session(self, key: str) -> None:
@@ -400,8 +962,15 @@ class SessionManager:
             if entry_to_close is not None:
                 for lease_id in list(entry_to_close.leases.keys()):
                     self._held_leases.pop(lease_id, None)
+<<<<<<< HEAD
+            open_state = self._OPENING.pop(pool_key, None)
+        self._signal_open_state(open_state, RuntimeError("session_dropped"))
+        if entry_to_close is not None:
+            self._retire_navigation(entry_to_close, reason="session_dropped")
+=======
                 self._OPENING.pop(pool_key, None)
         if entry_to_close is not None:
+>>>>>>> origin/main
             await self._close_session_entry(entry_to_close)
 
     async def close_all_cached_sessions_async(self) -> None:
@@ -419,6 +988,10 @@ class SessionManager:
                     if removed is not None:
                         entries_to_close.append(removed)
         for entry in entries_to_close:
+<<<<<<< HEAD
+            self._retire_navigation(entry, reason="session_manager_shutdown")
+=======
+>>>>>>> origin/main
             await self._close_session_entry(entry)
 
     def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
@@ -434,6 +1007,76 @@ class SessionManager:
 
     async def _close_session_entry(self, entry: _SessionEntry) -> None:
         await self._save_entry_storage_state(entry)
+<<<<<<< HEAD
+        page = entry.page
+        if not self.page_closed(page):
+            page_close = getattr(page, "close", None)
+            if callable(page_close):
+                try:
+                    await page_close()
+                except Exception as exc:
+                    self._log_event(
+                        "SESSION_PAGE_CLOSE_FAILED",
+                        key=entry.key,
+                        error=str(exc) or type(exc).__name__,
+                        error_type=type(exc).__name__,
+                        subsystem=self._subsystem,
+                    )
+        try:
+            if entry.ctx is not None:
+                await entry.ctx.close()
+        except Exception as exc:
+            profile_dir = browser_storage_state_path(entry.key, profiles_root=self._profiles_root).parent
+            owner_token = str(getattr(entry.ctx, "_profile_lifecycle_owner_token", "") or "").strip()
+            profile_mode = str(getattr(entry.ctx, "_profile_lifecycle_mode", "") or ("headless" if self._headless else "headful"))
+            profile_subsystem = str(getattr(entry.ctx, "_profile_lifecycle_subsystem", "") or self._subsystem)
+            emit_profile_lifecycle_diagnostic(
+                event_type="browser_close_failed",
+                profile_dir=profile_dir,
+                account=entry.key,
+                subsystem=profile_subsystem,
+                mode=profile_mode,
+                reason_code="browser_close_failed",
+                pid=os.getpid(),
+                owner_token=owner_token,
+                payload={
+                    "error": str(exc) or type(exc).__name__,
+                    "error_type": type(exc).__name__,
+                },
+                callsite_skip=2,
+            )
+            mark_profile_unclean_shutdown(
+                account=entry.key,
+                profile_dir=profile_dir,
+                subsystem=profile_subsystem,
+                mode=profile_mode,
+                pid=os.getpid(),
+                owner_token=owner_token,
+                reason_code="browser_close_failed",
+                payload={
+                    "error": str(exc) or type(exc).__name__,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._log_event(
+                "SESSION_CONTEXT_CLOSE_FAILED",
+                key=entry.key,
+                error=str(exc) or type(exc).__name__,
+                error_type=type(exc).__name__,
+                subsystem=self._subsystem,
+            )
+        try:
+            if entry.svc is not None:
+                await entry.svc.close()
+        except Exception as exc:
+            self._log_event(
+                "SESSION_SERVICE_CLOSE_FAILED",
+                key=entry.key,
+                error=str(exc) or type(exc).__name__,
+                error_type=type(exc).__name__,
+                subsystem=self._subsystem,
+            )
+=======
         try:
             if entry.ctx is not None:
                 await entry.ctx.close()
@@ -444,6 +1087,7 @@ class SessionManager:
                 await entry.svc.close()
         except Exception:
             pass
+>>>>>>> origin/main
 
     def _publish_open_failure(self, pool_key: str, error: BaseException) -> None:
         with self._GLOBAL_LOCK:
@@ -451,8 +1095,12 @@ class SessionManager:
             if state is None:
                 state = _OpenState(proxy_key="")
                 self._OPENING[pool_key] = state
+<<<<<<< HEAD
+        self._signal_open_state(state, error)
+=======
             state.error = error
             state.event.set()
+>>>>>>> origin/main
 
     def _resolve_open_timeout(self, *, deadline: float | None) -> float | None:
         if deadline is None:
@@ -491,6 +1139,10 @@ class SyncSessionRuntime:
         self._open_timeout_seconds = max(5.0, float(open_timeout_seconds or 5.0))
         self._session_lock = threading.RLock()
         self._session: ManagedSession | None = None
+<<<<<<< HEAD
+        self._navigation_local = threading.local()
+=======
+>>>>>>> origin/main
 
     def run_async(self, coro: Any, *, timeout: float | None = None) -> Any:
         return run_coroutine_sync(coro, timeout=self._resolve_timeout(timeout))
@@ -508,6 +1160,44 @@ class SyncSessionRuntime:
                 pass
             return page
 
+<<<<<<< HEAD
+    def acquire_navigation(self, owner: str, *, timeout: float | None = None) -> dict[str, Any]:
+        with self._session_lock:
+            session = self._ensure_session_locked(timeout=timeout)
+        return session.acquire_navigation(str(owner or ""), self._resolve_timeout(timeout))
+
+    def release_navigation(self, owner: str) -> None:
+        with self._session_lock:
+            session = self._session
+        if session is None:
+            return
+        session.release_navigation(str(owner or ""))
+
+    @contextmanager
+    def navigation_scope(self, owner: str, *, timeout: float | None = None):
+        stack = getattr(self._navigation_local, "stack", None)
+        if stack is None:
+            stack = []
+            self._navigation_local.stack = stack
+        page = self.open_page(self._account, timeout=timeout)
+        if stack:
+            stack.append(str(stack[-1]))
+            try:
+                yield page
+            finally:
+                stack.pop()
+            return
+        clean_owner = str(owner or "").strip()
+        self.acquire_navigation(clean_owner, timeout=timeout)
+        stack.append(clean_owner)
+        try:
+            yield page
+        finally:
+            stack.pop()
+            self.release_navigation(clean_owner)
+
+=======
+>>>>>>> origin/main
     def close_page(self, page: Any, *, timeout: float | None = None) -> None:
         with self._session_lock:
             session = self._session

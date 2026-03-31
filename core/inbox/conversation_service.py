@@ -24,7 +24,11 @@ class ConversationService:
     def __init__(self, root_dir: Path, *, notifier) -> None:
         self._store = ConversationStore(root_dir)
         self._notifier = notifier
+<<<<<<< HEAD
+        self._browser_pool = BrowserPool(self._get_account, diagnostics_store=self._store)
+=======
         self._browser_pool = BrowserPool(self._get_account)
+>>>>>>> origin/main
         self._reader = ConversationReader(
             self._store,
             accounts_provider=self._active_accounts,
@@ -314,13 +318,24 @@ class ConversationService:
     def _active_accounts() -> list[dict[str, Any]]:
         rows = []
         seen: set[str] = set()
+<<<<<<< HEAD
+        operational_resolver = getattr(accounts_module, "is_account_enabled_for_operation", None)
+=======
+>>>>>>> origin/main
         for raw in accounts_module.list_all():
             if not isinstance(raw, dict):
                 continue
             username = str(raw.get("username") or "").strip().lstrip("@").lower()
             if not username or username in seen:
                 continue
+<<<<<<< HEAD
+            if callable(operational_resolver):
+                if not bool(operational_resolver(raw)):
+                    continue
+            elif not bool(raw.get("active", True)):
+=======
             if not bool(raw.get("active", True)):
+>>>>>>> origin/main
                 continue
             if not bool(raw.get("connected", False)):
                 profile_ready = accounts_module.has_playwright_storage_state(username)

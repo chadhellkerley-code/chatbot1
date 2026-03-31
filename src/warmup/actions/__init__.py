@@ -32,6 +32,10 @@ class WarmupActionContext:
     payload: dict[str, Any]
     base_profiles: Path = Path(BASE_PROFILES)
     headless: bool = True
+<<<<<<< HEAD
+    action_type: str = ""
+=======
+>>>>>>> origin/main
 
     @property
     def username(self) -> str:
@@ -104,6 +108,10 @@ def _session_manager_for(headless: bool) -> SessionManager:
             profiles_root=str(BASE_PROFILES),
             normalize_username=lambda value: str(value or "").strip().lstrip("@"),
             log_event=lambda *_args, **_kwargs: None,
+<<<<<<< HEAD
+            subsystem="warmup",
+=======
+>>>>>>> origin/main
         )
         _SESSION_MANAGERS[key] = manager
     return manager
@@ -124,6 +132,11 @@ async def account_page(context: WarmupActionContext) -> AsyncIterator[tuple[Play
     proxy_payload = build_proxy(proxy_input) if proxy_input else None
     session_manager = _session_manager_for(bool(context.headless))
     session: ManagedSession | None = None
+<<<<<<< HEAD
+    navigation_owner = f"warmup:{str(context.action_type or 'action').strip().lower() or 'action'}"
+    navigation_acquired = False
+=======
+>>>>>>> origin/main
     try:
         log_browser_stage(
             component="warmup_action",
@@ -138,6 +151,12 @@ async def account_page(context: WarmupActionContext) -> AsyncIterator[tuple[Play
         )
         browser_context = session.ctx
         page = session.page
+<<<<<<< HEAD
+        if isinstance(session, ManagedSession):
+            await session_manager.acquire_navigation(session, navigation_owner, 45.0)
+            navigation_acquired = True
+=======
+>>>>>>> origin/main
         page.set_default_timeout(20_000)
         log_browser_stage(
             component="warmup_action",
@@ -157,6 +176,11 @@ async def account_page(context: WarmupActionContext) -> AsyncIterator[tuple[Play
     finally:
         current_url = ""
         if session is not None:
+<<<<<<< HEAD
+            if navigation_acquired:
+                await session.release_navigation_async(navigation_owner)
+=======
+>>>>>>> origin/main
             with contextlib.suppress(Exception):
                 await session_manager.save_storage_state(session, username)
             with contextlib.suppress(Exception):

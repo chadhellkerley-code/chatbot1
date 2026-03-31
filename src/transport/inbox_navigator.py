@@ -42,22 +42,51 @@ class InboxNavigator:
 
     async def ensure_inbox_surface(self, page: Page, *, deadline: float) -> bool:
         flow_hook = getattr(self._sender, "_active_flow_hook", None)
+<<<<<<< HEAD
+        stabilize_layout = getattr(self._sender, "_ensure_campaign_desktop_layout", None)
+        if callable(stabilize_layout):
+            try:
+                await stabilize_layout(page)
+            except Exception:
+                pass
+=======
+>>>>>>> origin/main
         if callable(flow_hook):
             flow_hook("open inbox", True)
         if self._sender._is_chrome_error_url(page):
             recovered = await self._sender._recover_inbox_after_chrome_error(page, deadline=deadline)
             if recovered:
+<<<<<<< HEAD
+                if callable(stabilize_layout):
+                    try:
+                        await stabilize_layout(page)
+                    except Exception:
+                        pass
+=======
+>>>>>>> origin/main
                 if callable(flow_hook):
                     flow_hook("inbox loaded", False)
                 return True
 
         current_url = (page.url or "").lower()
+<<<<<<< HEAD
+        if "/direct/inbox/" in current_url:
+=======
         if "/direct/inbox" in current_url:
+>>>>>>> origin/main
             quick_timeout = self._sender._remaining_ms(deadline, 3_500)
             if callable(flow_hook):
                 flow_hook("waiting inbox load", True)
             if quick_timeout > 0 and await self.wait_inbox_ready(page, quick_timeout):
                 self._log_event("INBOX_REUSE", url=page.url if page else "")
+<<<<<<< HEAD
+                if callable(stabilize_layout):
+                    try:
+                        await stabilize_layout(page)
+                    except Exception:
+                        pass
+=======
+>>>>>>> origin/main
                 if callable(flow_hook):
                     flow_hook("inbox loaded", False)
                 return True
@@ -71,10 +100,26 @@ class InboxNavigator:
             self._log_event("INBOX_GOTO_TIMEOUT", timeout_ms=nav_timeout)
         except Exception as exc:
             self._log_event("INBOX_GOTO_FAIL", error=repr(exc))
+<<<<<<< HEAD
+        if callable(stabilize_layout):
+            try:
+                await stabilize_layout(page)
+            except Exception:
+                pass
+=======
+>>>>>>> origin/main
 
         if self._sender._is_chrome_error_url(page):
             recovered = await self._sender._recover_inbox_after_chrome_error(page, deadline=deadline)
             if recovered:
+<<<<<<< HEAD
+                if callable(stabilize_layout):
+                    try:
+                        await stabilize_layout(page)
+                    except Exception:
+                        pass
+=======
+>>>>>>> origin/main
                 if callable(flow_hook):
                     flow_hook("inbox loaded", False)
                 return True
@@ -88,6 +133,14 @@ class InboxNavigator:
             ok=inbox_ready,
             url=page.url if page else "",
         )
+<<<<<<< HEAD
+        if inbox_ready and callable(stabilize_layout):
+            try:
+                await stabilize_layout(page)
+            except Exception:
+                pass
+=======
+>>>>>>> origin/main
         if inbox_ready and callable(flow_hook):
             flow_hook("inbox loaded", False)
         return inbox_ready

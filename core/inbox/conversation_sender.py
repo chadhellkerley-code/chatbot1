@@ -6,7 +6,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+<<<<<<< HEAD
+from core import accounts as accounts_module
 from core import responder as responder_module
+from src.browser_telemetry import log_browser_stage
+from src.inbox_diagnostics import normalize_reason_code, record_inbox_diagnostic
+=======
+from core import responder as responder_module
+>>>>>>> origin/main
 from src.inbox.message_sender import build_conversation_text
 from src.runtime.ownership_router import OwnershipRouter
 from src.runtime.runtime_events import failed_thread_event, queued_thread_event, sent_thread_event
@@ -46,6 +53,126 @@ class ConversationSender:
         self._irreversible_send_threads: set[str] = set()
         self._router = OwnershipRouter()
 
+<<<<<<< HEAD
+    def _record_diagnostic(
+        self,
+        *,
+        thread: dict[str, Any] | None = None,
+        thread_key: str = "",
+        job_type: str = "",
+        event_type: str,
+        stage: str,
+        outcome: str,
+        reason: str = "",
+        reason_code: str = "",
+        exception: BaseException | None = None,
+        payload: dict[str, Any] | None = None,
+        created_at: float | None = None,
+    ) -> None:
+        row = dict(thread or {})
+        clean_thread_key = str(thread_key or row.get("thread_key") or "").strip()
+        if not row and clean_thread_key:
+            row = self._store.get_thread(clean_thread_key) or {}
+        record_inbox_diagnostic(
+            self._store,
+            event_type=event_type,
+            stage=stage,
+            outcome=outcome,
+            account_id=str(row.get("account_id") or "").strip(),
+            alias_id=str(row.get("alias_id") or row.get("account_alias") or "").strip(),
+            thread_key=clean_thread_key,
+            job_type=job_type,
+            reason=reason,
+            reason_code=reason_code,
+            exception=exception,
+            payload=payload,
+            created_at=created_at,
+            callsite_skip=2,
+        )
+
+    def _persist_last_send_attempt(
+        self,
+        *,
+        thread: dict[str, Any],
+        thread_key: str,
+        account_id: str,
+        job_id: int,
+        job_type: str,
+        attempted_at: float | None = None,
+        outcome: str = "",
+        reason_code: str = "",
+    ) -> None:
+        alias_id = str(thread.get("alias_id") or thread.get("account_alias") or "").strip()
+        if not alias_id:
+            return
+        updates: dict[str, Any] = {
+            "last_send_attempt_account_id": str(account_id or "").strip().lstrip("@").lower(),
+            "last_send_attempt_thread_key": str(thread_key or "").strip(),
+            "last_send_attempt_job_id": max(0, int(job_id or 0)),
+            "last_send_attempt_job_type": str(job_type or "").strip().lower(),
+        }
+        if attempted_at is not None:
+            updates["last_send_attempt_at"] = float(attempted_at)
+        if outcome:
+            updates["last_send_attempt_outcome"] = str(outcome or "").strip().lower()
+        if reason_code:
+            updates["last_send_attempt_reason_code"] = str(reason_code or "").strip().lower()
+        try:
+            self._store.upsert_runtime_alias_state(alias_id, updates)
+        except Exception:
+            return
+
+    def _persist_last_send_outcome(
+        self,
+        *,
+        thread: dict[str, Any],
+        thread_key: str,
+        account_id: str,
+        job_id: int,
+        job_type: str,
+        at: float | None = None,
+        outcome: str,
+        reason: str = "",
+        reason_code: str = "",
+        exception: BaseException | None = None,
+    ) -> None:
+        alias_id = str(thread.get("alias_id") or thread.get("account_alias") or "").strip()
+        if not alias_id:
+            return
+        clean_outcome = str(outcome or "").strip().lower()
+        if clean_outcome not in {"sent", "failed", "cancelled"}:
+            return
+        clean_reason = str(reason or "").strip()
+        clean_exception_type = type(exception).__name__ if exception is not None else ""
+        clean_exception_message = str(exception or "").strip() if exception is not None else ""
+        if len(clean_reason) > 500:
+            clean_reason = clean_reason[:500].rstrip() + "…"
+        if len(clean_exception_message) > 500:
+            clean_exception_message = clean_exception_message[:500].rstrip() + "…"
+        normalized_reason_code = normalize_reason_code(
+            str(reason_code or clean_reason or "").strip(),
+            exception=exception,
+        )
+        updates: dict[str, Any] = {
+            "last_send_outcome": clean_outcome,
+            "last_send_reason_code": str(normalized_reason_code or "").strip(),
+            "last_send_reason": clean_reason,
+            "last_send_account_id": str(account_id or "").strip().lstrip("@").lower(),
+            "last_send_thread_key": str(thread_key or "").strip(),
+            "last_send_job_id": max(0, int(job_id or 0)),
+            "last_send_job_type": str(job_type or "").strip().lower(),
+            "last_send_exception_type": clean_exception_type,
+            "last_send_exception_message": clean_exception_message,
+        }
+        if at is not None:
+            updates["last_send_at"] = float(at)
+        try:
+            self._store.upsert_runtime_alias_state(alias_id, updates)
+        except Exception:
+            return
+
+=======
+>>>>>>> origin/main
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
@@ -80,7 +207,10 @@ class ConversationSender:
         job_types: list[str] | None = None,
         reason: str = "runtime_stopped",
     ) -> int:
+<<<<<<< HEAD
+=======
         del reason
+>>>>>>> origin/main
         clean_alias = str(alias_id or "").strip().lower()
         normalized_job_types = {
             str(item or "").strip().lower()
@@ -90,7 +220,11 @@ class ConversationSender:
         if not clean_alias or not normalized_job_types:
             return 0
         retained: list[_SenderTask] = []
+<<<<<<< HEAD
+        cancelled_tasks: list[_SenderTask] = []
+=======
         cancelled = 0
+>>>>>>> origin/main
         with self._lock:
             while True:
                 try:
@@ -98,13 +232,33 @@ class ConversationSender:
                 except queue.Empty:
                     break
                 if self._matches_runtime_task(task, alias_id=clean_alias, job_types=normalized_job_types):
+<<<<<<< HEAD
+                    cancelled_tasks.append(task)
+=======
                     cancelled += 1
+>>>>>>> origin/main
                 else:
                     retained.append(task)
                 self._queue.task_done()
             for task in retained:
                 self._queue.put(task)
+<<<<<<< HEAD
+        for task in cancelled_tasks:
+            task_payload = dict(task.payload or {})
+            task_thread_key = str(task_payload.get("thread_key") or "").strip()
+            task_job_type = str(task_payload.get("job_type") or task.task_type or "").strip().lower()
+            self._cancel_send_job(
+                int(task_payload.get("job_id") or 0),
+                self._store.get_thread(task_thread_key) or {"thread_key": task_thread_key},
+                task_job_type,
+                reason=reason,
+                local_message_id=str(task_payload.get("local_message_id") or "").strip(),
+                pack_id=str(task_payload.get("pack_id") or "").strip(),
+            )
+        return len(cancelled_tasks)
+=======
         return cancelled
+>>>>>>> origin/main
 
     def begin_manual_takeover(self, thread_key: str) -> None:
         clean_key = str(thread_key or "").strip()
@@ -130,7 +284,10 @@ class ConversationSender:
         job_types: list[str] | None = None,
         reason: str = "manual_takeover",
     ) -> int:
+<<<<<<< HEAD
+=======
         del reason
+>>>>>>> origin/main
         clean_key = str(thread_key or "").strip()
         normalized_job_types = {
             str(item or "").strip().lower()
@@ -140,7 +297,11 @@ class ConversationSender:
         if not clean_key or not normalized_job_types:
             return 0
         retained: list[_SenderTask] = []
+<<<<<<< HEAD
+        cancelled_tasks: list[_SenderTask] = []
+=======
         cancelled = 0
+>>>>>>> origin/main
         with self._lock:
             while True:
                 try:
@@ -148,13 +309,32 @@ class ConversationSender:
                 except queue.Empty:
                     break
                 if self._matches_thread_task(task, thread_key=clean_key, job_types=normalized_job_types):
+<<<<<<< HEAD
+                    cancelled_tasks.append(task)
+=======
                     cancelled += 1
+>>>>>>> origin/main
                 else:
                     retained.append(task)
                 self._queue.task_done()
             for task in retained:
                 self._queue.put(task)
+<<<<<<< HEAD
+        for task in cancelled_tasks:
+            task_payload = dict(task.payload or {})
+            task_job_type = str(task_payload.get("job_type") or task.task_type or "").strip().lower()
+            self._cancel_send_job(
+                int(task_payload.get("job_id") or 0),
+                self._store.get_thread(clean_key) or {"thread_key": clean_key},
+                task_job_type,
+                reason=reason,
+                local_message_id=str(task_payload.get("local_message_id") or "").strip(),
+                pack_id=str(task_payload.get("pack_id") or "").strip(),
+            )
+        return len(cancelled_tasks)
+=======
         return cancelled
+>>>>>>> origin/main
 
     def prepare_thread(self, thread_key: str) -> bool:
         clean_key = str(thread_key or "").strip()
@@ -179,6 +359,35 @@ class ConversationSender:
         priority: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
+<<<<<<< HEAD
+        result = self.enqueue_message_job(
+            thread_key,
+            text,
+            job_type=job_type,
+            priority=priority,
+            dedupe_key=str(dict(metadata or {}).get("dedupe_key") or "").strip(),
+            metadata=metadata,
+        )
+        return str(result.get("local_message_id") or "").strip() if bool(result.get("ok")) else ""
+
+    def enqueue_message_job(
+        self,
+        thread_key: str,
+        text: str,
+        *,
+        job_type: str = "manual_reply",
+        priority: int | None = None,
+        dedupe_key: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_key = str(thread_key or "").strip()
+        content = str(text or "").strip()
+        if not clean_key or not content:
+            return {"ok": False, "job_id": 0, "created": False, "reused": False, "dedupe_key": str(dedupe_key or "").strip()}
+        thread = self._store.get_thread(clean_key)
+        if not isinstance(thread, dict):
+            return {"ok": False, "job_id": 0, "created": False, "reused": False, "dedupe_key": str(dedupe_key or "").strip()}
+=======
         clean_key = str(thread_key or "").strip()
         content = str(text or "").strip()
         if not clean_key or not content:
@@ -186,16 +395,81 @@ class ConversationSender:
         thread = self._store.get_thread(clean_key)
         if not isinstance(thread, dict):
             return ""
+>>>>>>> origin/main
         source = "manual"
         if str(job_type or "").strip().lower() == "auto_reply":
             source = "auto"
         elif str(job_type or "").strip().lower() == "followup":
             source = "followup"
+<<<<<<< HEAD
+        clean_metadata = dict(metadata or {})
+        clean_dedupe = str(dedupe_key or clean_metadata.get("dedupe_key") or "").strip()
+        local_id = f"local-{time.time_ns()}"
+        enqueue_result = self._store.enqueue_send_queue_job(
+            job_type,
+            thread_key=clean_key,
+            account_id=str(thread.get("account_id") or "").strip(),
+            payload={
+                "thread_key": clean_key,
+                "text": content,
+                "local_message_id": local_id,
+                **clean_metadata,
+            },
+            dedupe_key=clean_dedupe,
+            priority=priority,
+        )
+        job_id = int(enqueue_result.get("job_id") or 0)
+        if job_id <= 0:
+            return {
+                "ok": False,
+                "job_id": 0,
+                "created": False,
+                "reused": False,
+                "dedupe_key": clean_dedupe,
+            }
+        if bool(enqueue_result.get("reused")):
+            existing_payload = dict(enqueue_result.get("payload") or {})
+            return {
+                "ok": True,
+                "job_id": job_id,
+                "created": False,
+                "reused": True,
+                "dedupe_key": clean_dedupe,
+                "state": str(enqueue_result.get("state") or "queued").strip(),
+                "local_message_id": str(existing_payload.get("local_message_id") or "").strip(),
+            }
+        local_message = self._store.append_local_outbound_message(
+            clean_key,
+            content,
+            source=source,
+            local_message_id=local_id,
+        )
+        if not isinstance(local_message, dict):
+            failure_reason = "local_echo_not_created"
+            self._store.update_send_queue_job(
+                job_id,
+                state="cancelled",
+                error_message=failure_reason,
+                failure_reason=failure_reason,
+                finished_at=time.time(),
+            )
+            return {
+                "ok": False,
+                "job_id": job_id,
+                "created": True,
+                "reused": False,
+                "dedupe_key": clean_dedupe,
+                "state": "cancelled",
+                "local_message_id": local_id,
+            }
+        queued_at = local_message.get("timestamp")
+=======
         local_message = self._store.append_local_outbound_message(clean_key, content, source=source)
         local_id = str((local_message or {}).get("message_id") or "").strip()
         if not local_id:
             return ""
         queued_at = local_message.get("timestamp") if isinstance(local_message, dict) else None
+>>>>>>> origin/main
         self._store.update_thread_state(
             clean_key,
             {
@@ -207,6 +481,8 @@ class ConversationSender:
                 "ui_status": "active",
             },
         )
+<<<<<<< HEAD
+=======
         job_id = self._store.create_send_queue_job(
             job_type,
             thread_key=clean_key,
@@ -219,6 +495,7 @@ class ConversationSender:
             },
             priority=priority,
         )
+>>>>>>> origin/main
         self._enqueue(
             str(job_type or "manual_reply").strip(),
             {
@@ -227,6 +504,11 @@ class ConversationSender:
                 "text": content,
                 "local_message_id": local_id,
                 "job_type": str(job_type or "manual_reply").strip(),
+<<<<<<< HEAD
+                "dedupe_key": clean_dedupe,
+                **clean_metadata,
+=======
+>>>>>>> origin/main
             },
             priority=self._job_priority(job_type, override=priority),
         )
@@ -245,7 +527,19 @@ class ConversationSender:
             thread_keys=[clean_key],
             account_ids=[str(thread.get("account_id") or "").strip()],
         )
+<<<<<<< HEAD
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "created": True,
+            "reused": False,
+            "dedupe_key": clean_dedupe,
+            "state": "queued",
+            "local_message_id": local_id,
+        }
+=======
         return local_id
+>>>>>>> origin/main
 
     def queue_pack(
         self,
@@ -256,6 +550,66 @@ class ConversationSender:
         priority: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
+<<<<<<< HEAD
+        result = self.enqueue_pack_job(
+            thread_key,
+            pack_id,
+            job_type=job_type,
+            priority=priority,
+            dedupe_key=str(dict(metadata or {}).get("dedupe_key") or "").strip(),
+            metadata=metadata,
+        )
+        return bool(result.get("ok"))
+
+    def enqueue_pack_job(
+        self,
+        thread_key: str,
+        pack_id: str,
+        *,
+        job_type: str = "manual_pack",
+        priority: int | None = None,
+        dedupe_key: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_key = str(thread_key or "").strip()
+        clean_pack = str(pack_id or "").strip()
+        if not clean_key or not clean_pack:
+            return {"ok": False, "job_id": 0, "created": False, "reused": False, "dedupe_key": str(dedupe_key or "").strip()}
+        thread = self._store.get_thread(clean_key)
+        if not isinstance(thread, dict):
+            return {"ok": False, "job_id": 0, "created": False, "reused": False, "dedupe_key": str(dedupe_key or "").strip()}
+        pack = self._pack_by_id(clean_pack)
+        if not isinstance(pack, dict):
+            return {"ok": False, "job_id": 0, "created": False, "reused": False, "dedupe_key": str(dedupe_key or "").strip()}
+        clean_metadata = dict(metadata or {})
+        clean_dedupe = str(dedupe_key or clean_metadata.get("dedupe_key") or "").strip()
+        enqueue_result = self._store.enqueue_send_queue_job(
+            job_type,
+            thread_key=clean_key,
+            account_id=str(thread.get("account_id") or "").strip(),
+            payload={"thread_key": clean_key, "pack_id": clean_pack, **clean_metadata},
+            dedupe_key=clean_dedupe,
+            priority=priority,
+        )
+        job_id = int(enqueue_result.get("job_id") or 0)
+        if job_id <= 0:
+            return {
+                "ok": False,
+                "job_id": 0,
+                "created": False,
+                "reused": False,
+                "dedupe_key": clean_dedupe,
+            }
+        if bool(enqueue_result.get("reused")):
+            return {
+                "ok": True,
+                "job_id": job_id,
+                "created": False,
+                "reused": True,
+                "dedupe_key": clean_dedupe,
+                "state": str(enqueue_result.get("state") or "queued").strip(),
+            }
+=======
         clean_key = str(thread_key or "").strip()
         clean_pack = str(pack_id or "").strip()
         if not clean_key or not clean_pack:
@@ -266,6 +620,7 @@ class ConversationSender:
         pack = self._pack_by_id(clean_pack)
         if not isinstance(pack, dict):
             return False
+>>>>>>> origin/main
         self._store.ensure_conversation_from_pack(
             account={"username": str(thread.get("account_id") or "").strip()},
             thread_row=thread,
@@ -274,6 +629,12 @@ class ConversationSender:
         self._store.update_thread_state(
             clean_key,
             {
+<<<<<<< HEAD
+                "sender_status": "queued",
+                "sender_error": "",
+                "thread_error": "",
+=======
+>>>>>>> origin/main
                 "pack_status": "queued",
                 "pack_error": "",
                 "pack_id": clean_pack,
@@ -282,6 +643,18 @@ class ConversationSender:
                 "last_activity_timestamp": time.time(),
             },
         )
+<<<<<<< HEAD
+        self._enqueue(
+            str(job_type or "manual_pack").strip(),
+            {
+                "job_id": job_id,
+                "thread_key": clean_key,
+                "pack_id": clean_pack,
+                "job_type": str(job_type or "manual_pack").strip(),
+                "dedupe_key": clean_dedupe,
+                **clean_metadata,
+            },
+=======
         job_id = self._store.create_send_queue_job(
             job_type,
             thread_key=clean_key,
@@ -293,6 +666,7 @@ class ConversationSender:
         self._enqueue(
             str(job_type or "manual_pack").strip(),
             {"job_id": job_id, "thread_key": clean_key, "pack_id": clean_pack, "job_type": str(job_type or "manual_pack").strip()},
+>>>>>>> origin/main
             priority=self._job_priority(job_type, override=priority),
         )
         clean_job_type = str(job_type or "manual_pack").strip().lower() or "manual_pack"
@@ -309,22 +683,76 @@ class ConversationSender:
             thread_keys=[clean_key],
             account_ids=[str(thread.get("account_id") or "").strip()],
         )
+<<<<<<< HEAD
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "created": True,
+            "reused": False,
+            "dedupe_key": clean_dedupe,
+            "state": "queued",
+        }
+
+    @staticmethod
+    def _job_payload_content_kind(payload: dict[str, Any] | None) -> str:
+        clean_payload = dict(payload or {})
+        if str(clean_payload.get("pack_id") or "").strip():
+            return "pack"
+        if (
+            str(clean_payload.get("text") or "").strip()
+            or str(clean_payload.get("local_message_id") or "").strip()
+        ):
+            return "text"
+        return ""
+
+    @staticmethod
+    def _recovery_payload(job: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(job.get("payload") or {})
+        clean_thread_key = str(job.get("thread_key") or payload.get("thread_key") or "").strip()
+        clean_job_type = str(job.get("job_type") or job.get("task_type") or payload.get("job_type") or "").strip()
+        clean_dedupe = str(job.get("dedupe_key") or payload.get("dedupe_key") or "").strip()
+        recovered = {
+            **payload,
+            "job_id": int(job.get("id") or payload.get("job_id") or 0),
+            "thread_key": clean_thread_key,
+            "job_type": clean_job_type,
+        }
+        if clean_dedupe:
+            recovered["dedupe_key"] = clean_dedupe
+        return recovered
+=======
         return True
+>>>>>>> origin/main
 
     def queue_existing_job(self, job: dict[str, Any]) -> bool:
         if not isinstance(job, dict):
             return False
+<<<<<<< HEAD
+        job_type = str(job.get("job_type") or job.get("task_type") or "").strip()
+        payload = self._recovery_payload(job)
+        thread_key = str(payload.get("thread_key") or "").strip()
+        content_kind = self._job_payload_content_kind(payload)
+        if content_kind == "text" and job_type in {"manual_reply", "auto_reply", "followup"}:
+=======
         job_id = int(job.get("id") or 0)
         job_type = str(job.get("job_type") or job.get("task_type") or "").strip()
         payload = dict(job.get("payload") or {})
         thread_key = str(job.get("thread_key") or payload.get("thread_key") or "").strip()
         if job_type in {"manual_reply", "auto_reply", "followup"}:
+>>>>>>> origin/main
             text = str(payload.get("text") or "").strip()
             local_message_id = str(payload.get("local_message_id") or "").strip()
             if not thread_key or not text or not local_message_id:
                 return False
             self._enqueue(
                 job_type,
+<<<<<<< HEAD
+                payload,
+                priority=self._job_priority(job_type, override=job.get("priority")),
+            )
+            return True
+        if content_kind == "pack" and job_type in {"manual_pack", "auto_reply", "followup"}:
+=======
                 {
                     "job_id": job_id,
                     "thread_key": thread_key,
@@ -336,12 +764,17 @@ class ConversationSender:
             )
             return True
         if job_type in {"manual_pack", "followup"}:
+>>>>>>> origin/main
             pack_id = str(payload.get("pack_id") or "").strip()
             if not thread_key or not pack_id:
                 return False
             self._enqueue(
                 job_type,
+<<<<<<< HEAD
+                payload,
+=======
                 {"job_id": job_id, "thread_key": thread_key, "pack_id": pack_id, "job_type": job_type},
+>>>>>>> origin/main
                 priority=self._job_priority(job_type, override=job.get("priority")),
             )
             return True
@@ -352,19 +785,65 @@ class ConversationSender:
         for job in jobs:
             job_id = int(job.get("id") or 0)
             job_type = str(job.get("job_type") or job.get("task_type") or "").strip().lower()
+<<<<<<< HEAD
+            payload = self._recovery_payload(job)
+            thread_key = str(payload.get("thread_key") or "").strip()
+            local_message_id = str(payload.get("local_message_id") or "").strip()
+            content_kind = self._job_payload_content_kind(payload)
+            if content_kind == "text" and thread_key and local_message_id:
+                self._store.set_local_outbound_status(thread_key, local_message_id, status="pending")
+                self._store.update_thread_state(
+                    thread_key,
+                    {
+                        "sender_status": "queued",
+                        "sender_error": "",
+                        "thread_error": "",
+                    },
+                )
+            elif content_kind == "pack" and thread_key:
+                self._store.update_thread_state(
+                    thread_key,
+                    {
+                        "sender_status": "queued",
+                        "sender_error": "",
+                        "thread_error": "",
+                        "pack_status": "queued",
+                        "pack_error": "",
+                    },
+                )
+=======
             payload = dict(job.get("payload") or {})
             thread_key = str(job.get("thread_key") or payload.get("thread_key") or "").strip()
             local_message_id = str(payload.get("local_message_id") or "").strip()
             if thread_key and local_message_id:
                 self._store.set_local_outbound_status(thread_key, local_message_id, status="pending")
+>>>>>>> origin/main
             self._store.update_send_queue_job(job_id, state="queued")
             if self.queue_existing_job(job) and thread_key:
                 thread = self._store.get_thread(thread_key) or {}
                 self._notifier(
+<<<<<<< HEAD
+                    reason="send_pack_requeued" if content_kind == "pack" else "send_message_requeued",
+                    thread_keys=[thread_key],
+                    account_ids=[str(thread.get("account_id") or "").strip()],
+                )
+                continue
+            failure_reason = "job_recovery_invalid_payload"
+            self._store.update_send_queue_job(
+                job_id,
+                state="failed",
+                error_message=failure_reason,
+                failure_reason=failure_reason,
+                finished_at=time.time(),
+            )
+            if thread_key:
+                self._store.reconcile_send_queue_thread_state(thread_key)
+=======
                     reason="send_message_requeued" if job_type in {"manual_reply", "auto_reply", "followup"} else "send_pack_requeued",
                     thread_keys=[thread_key],
                     account_ids=[str(thread.get("account_id") or "").strip()],
                 )
+>>>>>>> origin/main
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -385,6 +864,24 @@ class ConversationSender:
                     self._handle_send_message(task.payload)
                 elif task.task_type in {"manual_pack"}:
                     self._handle_send_pack(task.payload)
+<<<<<<< HEAD
+            except Exception as exc:
+                payload = dict(task.payload or {})
+                self._record_diagnostic(
+                    thread_key=str(payload.get("thread_key") or "").strip(),
+                    job_type=str(payload.get("job_type") or task.task_type or "").strip().lower(),
+                    event_type="sender_loop_task_failed",
+                    stage="sender_loop",
+                    outcome="fail",
+                    exception=exc,
+                    payload={
+                        "task_type": str(task.task_type or "").strip(),
+                        "job_id": int(payload.get("job_id") or 0),
+                    },
+                )
+                raise
+=======
+>>>>>>> origin/main
             finally:
                 self._active_task = ""
                 self._queue.task_done()
@@ -393,11 +890,45 @@ class ConversationSender:
         thread_key = str(payload.get("thread_key") or "").strip()
         generation = int(payload.get("generation") or 0)
         if not thread_key or self._is_stale_prepare(generation):
+<<<<<<< HEAD
+            self._record_diagnostic(
+                thread_key=thread_key,
+                event_type="thread_open_skipped",
+                stage="prepare",
+                outcome="skip",
+                reason="stale_prepare_generation" if thread_key else "invalid_thread",
+                payload={"generation": generation},
+            )
+            return
+        thread = self._store.get_thread(thread_key)
+        if not isinstance(thread, dict):
+            self._record_diagnostic(
+                thread_key=thread_key,
+                event_type="thread_open_skipped",
+                stage="prepare",
+                outcome="skip",
+                reason="thread_missing",
+                payload={"generation": generation},
+            )
+            return
+        account_id = str(thread.get("account_id") or "").strip()
+        self._record_diagnostic(
+            thread=thread,
+            thread_key=thread_key,
+            event_type="thread_open_started",
+            stage="prepare",
+            outcome="attempt",
+            reason="thread_open_started",
+            reason_code="thread_open_started",
+            payload={"generation": generation},
+        )
+=======
             return
         thread = self._store.get_thread(thread_key)
         if not isinstance(thread, dict):
             return
         account_id = str(thread.get("account_id") or "").strip()
+>>>>>>> origin/main
         self._store.update_thread_state(
             thread_key,
             {
@@ -408,9 +939,36 @@ class ConversationSender:
             },
         )
         self._notifier(reason="prepare_thread_started", thread_keys=[thread_key], account_ids=[account_id])
+<<<<<<< HEAD
+        try:
+            result = self._browser_pool.prepare(thread)
+        except Exception as exc:
+            self._record_diagnostic(
+                thread=thread,
+                thread_key=thread_key,
+                event_type="thread_open_failed",
+                stage="prepare",
+                outcome="fail",
+                exception=exc,
+                payload={"generation": generation},
+            )
+            raise
+        if self._is_stale_prepare(generation):
+            self._browser_pool.cancel()
+            self._record_diagnostic(
+                thread=thread,
+                thread_key=thread_key,
+                event_type="thread_open_skipped",
+                stage="prepare",
+                outcome="skip",
+                reason="stale_prepare_generation",
+                payload={"generation": generation, "cancelled_browser_pool": True},
+            )
+=======
         result = self._browser_pool.prepare(thread)
         if self._is_stale_prepare(generation):
             self._browser_pool.cancel()
+>>>>>>> origin/main
             return
         if bool(result.get("ok", False)):
             self._store.update_thread_state(
@@ -426,6 +984,18 @@ class ConversationSender:
             self._notifier(reason="prepare_thread_ready", thread_keys=[thread_key], account_ids=[account_id])
             return
         reason = str(result.get("reason") or "prepare_failed").strip()
+<<<<<<< HEAD
+        self._record_diagnostic(
+            thread=thread,
+            thread_key=thread_key,
+            event_type="thread_open_failed",
+            stage="prepare",
+            outcome="fail",
+            reason=reason,
+            payload={"generation": generation},
+        )
+=======
+>>>>>>> origin/main
         self._store.update_thread_state(
             thread_key,
             {
@@ -447,8 +1017,53 @@ class ConversationSender:
         post_send_state_updates = dict(payload.get("post_send_state_updates") or {})
         thread = self._store.get_thread(thread_key)
         if not isinstance(thread, dict) or not text or not local_message_id:
+<<<<<<< HEAD
+            failure_reason = "invalid_send_payload"
+            finished_at = time.time()
+            if thread_key and local_message_id:
+                self._store.resolve_local_outbound(thread_key, local_message_id, error_message=failure_reason)
+            if int(job_id or 0) > 0:
+                self._store.update_send_queue_job(
+                    job_id,
+                    state="failed",
+                    error_message=failure_reason,
+                    failure_reason=failure_reason,
+                    finished_at=finished_at,
+                )
+            if thread_key:
+                self._cleanup_auto_reply_pending_state(
+                    thread_key,
+                    job_type=job_type,
+                    inbound_id_hint=self._pending_inbound_id_hint(payload),
+                )
+                self._store.reconcile_send_queue_thread_state(thread_key)
+            self._record_diagnostic(
+                thread_key=thread_key,
+                job_type=job_type,
+                event_type="send_skipped",
+                stage="send",
+                outcome="skip",
+                reason=failure_reason,
+                payload={"job_id": job_id, "local_message_id": local_message_id},
+            )
+            if thread_key:
+                self._notifier(reason="send_message_failed", thread_keys=[thread_key], account_ids=[])
             return
         account_id = str(thread.get("account_id") or "").strip()
+        log_browser_stage(
+            component="inbox_message_sender",
+            stage="sender_job_received",
+            status="started",
+            account=account_id,
+            thread_id=str(thread.get("thread_id") or "").strip(),
+            thread_key=thread_key,
+            job_id=job_id,
+            job_type=job_type,
+        )
+=======
+            return
+        account_id = str(thread.get("account_id") or "").strip()
+>>>>>>> origin/main
         can_send, _cancel_reason = self._validate_job_sendability(
             job_id,
             thread,
@@ -505,14 +1120,70 @@ class ConversationSender:
             )
             self._notifier(reason="send_message_cancelled", thread_keys=[thread_key], account_ids=[account_id])
             return
+<<<<<<< HEAD
+        attempted_at = time.time()
+        self._persist_last_send_attempt(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=account_id,
+            job_id=job_id,
+            job_type=job_type,
+            attempted_at=attempted_at,
+            outcome="attempt",
+            reason_code="send_attempt",
+        )
+        self._record_diagnostic(
+            thread=thread,
+            thread_key=thread_key,
+            job_type=job_type,
+            event_type="send_attempt",
+            stage="send",
+            outcome="attempt",
+            reason="send_attempt",
+            reason_code="send_attempt",
+            payload={"job_id": job_id, "local_message_id": local_message_id},
+        )
+        send_exception: BaseException | None = None
+        try:
+            try:
+                try:
+                    result = self._browser_pool.send_text(thread, text, job_type=job_type)
+                except TypeError:
+                    result = self._browser_pool.send_text(thread, text)
+            except Exception as exc:
+                send_exception = exc
+                self._record_diagnostic(
+                    thread=thread,
+                    thread_key=thread_key,
+                    job_type=job_type,
+                    event_type="send_failed",
+                    stage="send",
+                    outcome="fail",
+                    exception=exc,
+                    payload={"job_id": job_id, "local_message_id": local_message_id},
+                )
+=======
         try:
             try:
                 result = self._browser_pool.send_text(thread, text)
             except Exception as exc:
+>>>>>>> origin/main
                 result = {"ok": False, "reason": str(exc or "send_failed").strip() or "send_failed"}
         finally:
             self._leave_irreversible_send_window(thread_key, job_type)
         if bool(result.get("ok", False)):
+<<<<<<< HEAD
+            self._persist_last_send_attempt(
+                thread=thread,
+                thread_key=thread_key,
+                account_id=account_id,
+                job_id=job_id,
+                job_type=job_type,
+                outcome="success",
+                reason_code=normalize_reason_code(str(result.get("reason") or "success").strip()),
+            )
+=======
+>>>>>>> origin/main
             message_id = str(result.get("item_id") or "").strip()
             sent_timestamp = float(result.get("timestamp") or time.time())
             self._store.resolve_local_outbound(
@@ -522,6 +1193,19 @@ class ConversationSender:
                 sent_timestamp=sent_timestamp,
             )
             self._store.update_send_queue_job(job_id, state="confirmed", finished_at=sent_timestamp)
+<<<<<<< HEAD
+            self._persist_last_send_outcome(
+                thread=thread,
+                thread_key=thread_key,
+                account_id=account_id,
+                job_id=job_id,
+                job_type=job_type,
+                at=sent_timestamp,
+                outcome="sent",
+                reason=str(result.get("reason") or "success").strip() or "success",
+            )
+=======
+>>>>>>> origin/main
             action_type = {
                 "manual_reply": "manual_reply_sent",
                 "auto_reply": "auto_reply_sent",
@@ -582,11 +1266,49 @@ class ConversationSender:
             self._notifier(reason="send_message_success", thread_keys=[thread_key], account_ids=[account_id])
             return
         reason = str(result.get("reason") or "send_failed").strip()
+<<<<<<< HEAD
+        self._persist_last_send_attempt(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=account_id,
+            job_id=job_id,
+            job_type=job_type,
+            outcome="fail",
+            reason_code=normalize_reason_code(reason),
+        )
+        finished_at = time.time()
+        self._persist_last_send_outcome(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=account_id,
+            job_id=job_id,
+            job_type=job_type,
+            at=finished_at,
+            outcome="failed",
+            reason=reason,
+            exception=send_exception,
+        )
+        self._record_diagnostic(
+            thread=thread,
+            thread_key=thread_key,
+            job_type=job_type,
+            event_type="send_failed",
+            stage="send",
+            outcome="fail",
+            reason=reason,
+            payload={"job_id": job_id, "local_message_id": local_message_id},
+        )
+=======
+>>>>>>> origin/main
         health_state, health_reason = self._classify_health_from_error(reason)
         if health_state != "unknown":
             self._store.set_account_health(account_id, health_state, reason=health_reason)
         self._store.resolve_local_outbound(thread_key, local_message_id, error_message=reason)
+<<<<<<< HEAD
+        self._store.update_send_queue_job(job_id, state="failed", error_message=reason, failure_reason=reason, finished_at=finished_at)
+=======
         self._store.update_send_queue_job(job_id, state="failed", error_message=reason, failure_reason=reason, finished_at=time.time())
+>>>>>>> origin/main
         self._store.update_thread_state(
             thread_key,
             {
@@ -629,8 +1351,52 @@ class ConversationSender:
         thread = self._store.get_thread(thread_key)
         pack = self._pack_by_id(pack_id)
         if not isinstance(thread, dict) or not isinstance(pack, dict):
+<<<<<<< HEAD
+            failure_reason = "invalid_pack_payload"
+            finished_at = time.time()
+            if int(job_id or 0) > 0:
+                self._store.update_send_queue_job(
+                    job_id,
+                    state="failed",
+                    error_message=failure_reason,
+                    failure_reason=failure_reason,
+                    finished_at=finished_at,
+                )
+            if thread_key:
+                self._cleanup_auto_reply_pending_state(
+                    thread_key,
+                    job_type=job_type,
+                    inbound_id_hint=self._pending_inbound_id_hint(payload),
+                )
+                self._store.reconcile_send_queue_thread_state(thread_key)
+            self._record_diagnostic(
+                thread_key=thread_key,
+                job_type=job_type,
+                event_type="send_skipped",
+                stage="send",
+                outcome="skip",
+                reason=failure_reason,
+                payload={"job_id": job_id, "pack_id": pack_id},
+            )
+            if thread_key:
+                self._notifier(reason="send_pack_failed", thread_keys=[thread_key], account_ids=[])
             return
         account_id = str(thread.get("account_id") or "").strip()
+        log_browser_stage(
+            component="inbox_message_sender",
+            stage="sender_job_received",
+            status="started",
+            account=account_id,
+            thread_id=str(thread.get("thread_id") or "").strip(),
+            thread_key=thread_key,
+            job_id=job_id,
+            job_type=job_type,
+            content_kind="pack",
+        )
+=======
+            return
+        account_id = str(thread.get("account_id") or "").strip()
+>>>>>>> origin/main
         can_send, _cancel_reason = self._validate_job_sendability(job_id, thread, job_type, pack_id=pack_id)
         if not can_send:
             self._notifier(reason="send_pack_cancelled", thread_keys=[thread_key], account_ids=[account_id])
@@ -682,6 +1448,60 @@ class ConversationSender:
             )
             self._notifier(reason="send_pack_cancelled", thread_keys=[thread_key], account_ids=[account_id])
             return
+<<<<<<< HEAD
+        attempted_at = time.time()
+        self._persist_last_send_attempt(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=account_id,
+            job_id=job_id,
+            job_type=job_type,
+            attempted_at=attempted_at,
+            outcome="attempt",
+            reason_code="send_attempt",
+        )
+        self._record_diagnostic(
+            thread=thread,
+            thread_key=thread_key,
+            job_type=job_type,
+            event_type="send_attempt",
+            stage="send",
+            outcome="attempt",
+            reason="send_attempt",
+            reason_code="send_attempt",
+            payload={"job_id": job_id, "pack_id": pack_id, "content_kind": "pack"},
+        )
+        send_exception: BaseException | None = None
+        try:
+            try:
+                try:
+                    result = self._browser_pool.send_pack(
+                        thread,
+                        pack,
+                        conversation_text=build_conversation_text(list(thread.get("messages") or []), limit=12),
+                        flow_config=responder_module._flow_config_for_account(account_id),
+                        job_type=job_type,
+                    )
+                except TypeError:
+                    result = self._browser_pool.send_pack(
+                        thread,
+                        pack,
+                        conversation_text=build_conversation_text(list(thread.get("messages") or []), limit=12),
+                        flow_config=responder_module._flow_config_for_account(account_id),
+                    )
+            except Exception as exc:
+                send_exception = exc
+                self._record_diagnostic(
+                    thread=thread,
+                    thread_key=thread_key,
+                    job_type=job_type,
+                    event_type="send_failed",
+                    stage="send",
+                    outcome="fail",
+                    exception=exc,
+                    payload={"job_id": job_id, "pack_id": pack_id, "content_kind": "pack"},
+                )
+=======
         try:
             try:
                 result = self._browser_pool.send_pack(
@@ -691,14 +1511,40 @@ class ConversationSender:
                     flow_config=responder_module._flow_config_for_account(account_id),
                 )
             except Exception as exc:
+>>>>>>> origin/main
                 result = {"ok": False, "reason": str(exc or "pack_failed").strip() or "pack_failed"}
         finally:
             self._leave_irreversible_send_window(thread_key, job_type)
         if bool(result.get("ok", False)):
+<<<<<<< HEAD
+            self._persist_last_send_attempt(
+                thread=thread,
+                thread_key=thread_key,
+                account_id=account_id,
+                job_id=job_id,
+                job_type=job_type,
+                outcome="success",
+                reason_code=normalize_reason_code(str(result.get("reason") or "success").strip()),
+            )
+=======
+>>>>>>> origin/main
             sent_at = float(result.get("timestamp") or time.time())
             confirmed_message_id = str(result.get("item_id") or "").strip() or f"thread-read-confirmed-{time.time_ns()}"
             pack_preview_text = str(pack.get("name") or pack_id).strip()
             self._store.update_send_queue_job(job_id, state="confirmed", finished_at=sent_at)
+<<<<<<< HEAD
+            self._persist_last_send_outcome(
+                thread=thread,
+                thread_key=thread_key,
+                account_id=account_id,
+                job_id=job_id,
+                job_type=job_type,
+                at=sent_at,
+                outcome="sent",
+                reason=str(result.get("reason") or "success").strip() or "success",
+            )
+=======
+>>>>>>> origin/main
             action_type = "followup_sent" if job_type == "followup" else "manual_pack_sent"
             self._store.update_thread_state(
                 thread_key,
@@ -759,10 +1605,48 @@ class ConversationSender:
             self._notifier(reason="send_pack_success", thread_keys=[thread_key], account_ids=[account_id])
             return
         reason = str(result.get("reason") or result.get("error") or "pack_failed").strip()
+<<<<<<< HEAD
+        self._persist_last_send_attempt(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=account_id,
+            job_id=job_id,
+            job_type=job_type,
+            outcome="fail",
+            reason_code=normalize_reason_code(reason),
+        )
+        finished_at = time.time()
+        self._persist_last_send_outcome(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=account_id,
+            job_id=job_id,
+            job_type=job_type,
+            at=finished_at,
+            outcome="failed",
+            reason=reason,
+            exception=send_exception,
+        )
+        self._record_diagnostic(
+            thread=thread,
+            thread_key=thread_key,
+            job_type=job_type,
+            event_type="send_failed",
+            stage="send",
+            outcome="fail",
+            reason=reason,
+            payload={"job_id": job_id, "pack_id": pack_id, "content_kind": "pack"},
+        )
+        health_state, health_reason = self._classify_health_from_error(reason)
+        if health_state != "unknown":
+            self._store.set_account_health(account_id, health_state, reason=health_reason)
+        self._store.update_send_queue_job(job_id, state="failed", error_message=reason, failure_reason=reason, finished_at=finished_at)
+=======
         health_state, health_reason = self._classify_health_from_error(reason)
         if health_state != "unknown":
             self._store.set_account_health(account_id, health_state, reason=health_reason)
         self._store.update_send_queue_job(job_id, state="failed", error_message=reason, failure_reason=reason, finished_at=time.time())
+>>>>>>> origin/main
         self._store.update_thread_state(
             thread_key,
             {
@@ -857,6 +1741,17 @@ class ConversationSender:
     ) -> str:
         clean_job_type = str(job_type or "").strip().lower() or "manual_reply"
         if clean_job_type in {"auto_reply", "followup"}:
+<<<<<<< HEAD
+            account_id = str(thread.get("account_id") or "").strip().lstrip("@")
+            if account_id:
+                get_account = getattr(accounts_module, "get_account", None)
+                operational_resolver = getattr(accounts_module, "is_account_enabled_for_operation", None)
+                if callable(get_account) and callable(operational_resolver):
+                    account = get_account(account_id)
+                    if isinstance(account, dict) and not bool(operational_resolver(account)):
+                        return "account_not_operational"
+=======
+>>>>>>> origin/main
             if not runtime_active:
                 return "runtime_inactive"
             if not self._router.can_automation_touch(thread):
@@ -927,6 +1822,19 @@ class ConversationSender:
             failure_reason=clean_reason,
             finished_at=finished_at,
         )
+<<<<<<< HEAD
+        self._persist_last_send_outcome(
+            thread=thread,
+            thread_key=thread_key,
+            account_id=str(thread.get("account_id") or "").strip(),
+            job_id=job_id,
+            job_type=clean_job_type,
+            at=finished_at,
+            outcome="cancelled",
+            reason=clean_reason,
+        )
+=======
+>>>>>>> origin/main
         if thread_key and local_message_id:
             self._store.resolve_local_outbound(thread_key, local_message_id, error_message=clean_reason)
         self._cleanup_auto_reply_pending_state(
@@ -935,6 +1843,32 @@ class ConversationSender:
             inbound_id_hint=self._pending_inbound_id_hint(job_payload),
         )
         if thread_key:
+<<<<<<< HEAD
+            self._store.reconcile_send_queue_thread_state(thread_key)
+        if thread_key:
+            event_type = "job_cancelled"
+            if normalize_reason_code(clean_reason) == "job_cancelled_by_takeover":
+                event_type = "job_cancelled_by_takeover"
+            elif normalize_reason_code(clean_reason) == "job_cancelled_by_runtime_stop":
+                event_type = "job_cancelled_by_runtime_stop"
+            self._record_diagnostic(
+                thread=thread,
+                thread_key=thread_key,
+                job_type=clean_job_type,
+                event_type=event_type,
+                stage="job_cancel",
+                outcome="cancel",
+                reason=clean_reason,
+                payload={
+                    "job_id": int(job_id or 0),
+                    "local_message_id": local_message_id,
+                    "pack_id": str(pack_id or "").strip(),
+                    "cancelled_by": "conversation_sender._cancel_send_job",
+                },
+                created_at=finished_at,
+            )
+=======
+>>>>>>> origin/main
             self._store.add_thread_event(
                 thread_key,
                 failed_thread_event(clean_job_type, is_pack=bool(str(pack_id or "").strip())),

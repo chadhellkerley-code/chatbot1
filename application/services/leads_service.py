@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+<<<<<<< HEAD
+import json
+=======
+>>>>>>> origin/main
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -19,7 +23,11 @@ from core.leads_store import (
     LeadListStore,
     LeadListStoreError,
 )
+<<<<<<< HEAD
+from core.storage_atomic import atomic_append_jsonl, atomic_write_text, path_lock
+=======
 from core.storage_atomic import atomic_append_jsonl, path_lock
+>>>>>>> origin/main
 from core.templates_store import (
     TemplateStore,
     load_template_state_file,
@@ -382,6 +390,123 @@ class LeadsService:
     def _legacy_storage_root(self) -> Path:
         return storage_root(Path(self.context.root_dir), scoped=False, honor_env=False)
 
+<<<<<<< HEAD
+    @staticmethod
+    def _normalized_list_key(name: object) -> str:
+        return str(name or "").strip().casefold()
+
+    def _lead_list_storage_roots(self) -> list[Path]:
+        candidates = [
+            self.context.leads_path(),
+            self._legacy_leads_path(),
+        ]
+        roots: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                key = str(candidate.resolve())
+            except Exception:
+                key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            roots.append(candidate)
+        return roots
+
+    @staticmethod
+    def _serialize_jsonl_entries(entries: list[dict[str, Any]]) -> str:
+        payload = "\n".join(
+            json.dumps(entry, ensure_ascii=False)
+            for entry in entries
+            if isinstance(entry, dict)
+        )
+        if payload:
+            payload += "\n"
+        return payload
+
+    @staticmethod
+    def _safe_snapshot_path(raw_path: object, *, snapshots_dir: Path) -> Path | None:
+        candidate_raw = str(raw_path or "").strip()
+        if not candidate_raw:
+            return None
+        candidate = Path(candidate_raw)
+        try:
+            candidate_resolved = candidate.resolve()
+            snapshots_resolved = snapshots_dir.resolve()
+        except Exception:
+            return None
+        if candidate_resolved.parent != snapshots_resolved:
+            return None
+        return candidate_resolved
+
+    def _purge_import_state_for_list(self, list_name: str) -> None:
+        import_root = self.context.storage_path("lead_imports")
+        audit_path = import_root / "audit.jsonl"
+        snapshots_dir = import_root / "snapshots"
+        list_key = self._normalized_list_key(list_name)
+        snapshot_paths: set[Path] = set()
+
+        if audit_path.exists():
+            with path_lock(audit_path):
+                entries = self.context.read_jsonl(audit_path)
+                kept_entries: list[dict[str, Any]] = []
+                for entry in entries:
+                    entry_list_key = self._normalized_list_key(entry.get("list_name"))
+                    if entry_list_key != list_key:
+                        kept_entries.append(entry)
+                        continue
+                    safe_snapshot = self._safe_snapshot_path(entry.get("snapshot_path"), snapshots_dir=snapshots_dir)
+                    if safe_snapshot is not None:
+                        snapshot_paths.add(safe_snapshot)
+                    if snapshots_dir.exists():
+                        for key in ("import_id", "rolled_back_import_id"):
+                            import_id = str(entry.get(key) or "").strip()
+                            if import_id:
+                                snapshot_paths.add((snapshots_dir / f"{import_id}.json").resolve())
+                if kept_entries:
+                    atomic_write_text(audit_path, self._serialize_jsonl_entries(kept_entries))
+                else:
+                    audit_path.unlink(missing_ok=True)
+
+        if snapshots_dir.exists():
+            for snapshot_path in snapshots_dir.glob("*.json"):
+                payload = self.context.read_json(snapshot_path, {})
+                if self._normalized_list_key(payload.get("list_name")) == list_key:
+                    snapshot_paths.add(snapshot_path.resolve())
+            snapshots_dir_resolved = snapshots_dir.resolve()
+            for snapshot_path in snapshot_paths:
+                try:
+                    if snapshot_path.parent != snapshots_dir_resolved:
+                        continue
+                    snapshot_path.unlink(missing_ok=True)
+                except OSError:
+                    raise
+            try:
+                next(snapshots_dir.iterdir())
+            except StopIteration:
+                snapshots_dir.rmdir()
+            except FileNotFoundError:
+                pass
+
+    def _purge_deleted_backups_for_list(self, list_name: str) -> None:
+        clean_name = self._require_list_name(list_name)
+        pattern = f"{clean_name}.txt.deleted.*.bak"
+        for root in self._lead_list_storage_roots():
+            deleted_dir = root / "_deleted"
+            if not deleted_dir.exists():
+                continue
+            for backup_path in deleted_dir.glob(pattern):
+                backup_path.unlink(missing_ok=True)
+
+    def _delete_list_everywhere(self, list_name: str) -> None:
+        clean_name = self._require_list_name(list_name)
+        for root in self._lead_list_storage_roots():
+            LeadListStore(root).delete(clean_name)
+        self._purge_deleted_backups_for_list(clean_name)
+        self._purge_import_state_for_list(clean_name)
+
+=======
+>>>>>>> origin/main
     def _template_storage_roots(self) -> list[Path]:
         candidates = [
             self.context.storage_path(),
@@ -596,7 +721,11 @@ class LeadsService:
     def delete_list(self, name: str) -> None:
         clean_name = self._require_list_name(name)
         try:
+<<<<<<< HEAD
+            self._delete_list_everywhere(clean_name)
+=======
             self._list_store.delete(clean_name)
+>>>>>>> origin/main
         except OSError as exc:
             raise self._storage_error("No se pudo eliminar la lista de leads.", exc) from exc
 

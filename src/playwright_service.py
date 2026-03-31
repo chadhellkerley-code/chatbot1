@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+<<<<<<< HEAD
+import hashlib
+=======
+>>>>>>> origin/main
 import json
 import logging
 import math
@@ -17,6 +21,11 @@ from paths import browser_profiles_root, runtime_base
 from typing import Any, Mapping, Optional, Tuple, Union
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright
+<<<<<<< HEAD
+from src.browser_profile_lifecycle import emit_profile_lifecycle_diagnostic
+from src.browser_profile_paths import browser_profile_dir
+=======
+>>>>>>> origin/main
 from src.runtime.playwright_resolver import (
     ensure_local_playwright_browsers_env,
     resolve_google_chrome_executable,
@@ -29,6 +38,10 @@ from src.runtime.playwright_runtime import (
     PLAYWRIGHT_BROWSER_MODE_MANAGED,
     PlaywrightRuntime,
     is_driver_crash_error,
+<<<<<<< HEAD
+    normalize_browser_mode,
+=======
+>>>>>>> origin/main
 )
 from runtime.runtime_parity import resolve_profiles_dir
 
@@ -138,11 +151,19 @@ def _env_int(name: str, default: int, *, minimum: int) -> int:
         return default
 
 
+<<<<<<< HEAD
+_WORK_AREA_FALLBACK_VIEWPORT = {
+=======
 DEFAULT_VIEWPORT = {
+>>>>>>> origin/main
     "width": _env_int("PLAYWRIGHT_VIEWPORT_WIDTH", 1920, minimum=800),
     "height": _env_int("PLAYWRIGHT_VIEWPORT_HEIGHT", 1080, minimum=600),
 }
 HEADFUL_ADAPTIVE_VIEWPORT = _env_flag("PLAYWRIGHT_HEADFUL_ADAPTIVE_VIEWPORT", True)
+<<<<<<< HEAD
+DEFAULT_VIEWPORT = dict(_WORK_AREA_FALLBACK_VIEWPORT)
+=======
+>>>>>>> origin/main
 DEFAULT_USER_AGENT = (os.getenv("HUMAN_USER_AGENT") or "").strip()
 DEFAULT_LOCALE = (os.getenv("HUMAN_LOCALE") or "").strip()
 DEFAULT_TIMEZONE = (os.getenv("HUMAN_TZ") or "").strip()
@@ -156,6 +177,75 @@ _LOGIN_SYNC_BLOCK_PATTERNS = (
     "**://*.facebook.com/instagram/login_sync/*",
 )
 
+<<<<<<< HEAD
+_ACCOUNT_FINGERPRINT_LOCALES = (
+    "es-AR",
+    "es-MX",
+    "es-ES",
+    "en-US",
+)
+_ACCOUNT_FINGERPRINT_TIMEZONES = {
+    "es-AR": "America/Argentina/Buenos_Aires",
+    "es-MX": "America/Mexico_City",
+    "es-ES": "Europe/Madrid",
+    "en-US": "America/New_York",
+}
+_ACCOUNT_FINGERPRINT_USER_AGENTS = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/134.0.6998.89 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/134.0.6998.89 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/135.0.7049.84 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_7_4) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/135.0.7049.95 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Arm Mac OS X 14_4_0) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/136.0.7103.49 Safari/537.36",
+)
+_ACCOUNT_VIEWPORT_WIDTH_RANGE = (1280, 1920)
+_ACCOUNT_VIEWPORT_HEIGHT_RANGE = (768, 1080)
+
+
+def _timezone_for_locale(locale: str, *, fallback: str = "America/New_York") -> str:
+    normalized_locale = str(locale or "").strip()
+    return _ACCOUNT_FINGERPRINT_TIMEZONES.get(normalized_locale, fallback)
+
+
+def _hash_range_value(seed: bytes, start: int, length: int, *, minimum: int, maximum: int) -> int:
+    span = max(1, int(maximum) - int(minimum) + 1)
+    value = int.from_bytes(seed[start : start + length], "big")
+    return int(minimum) + (value % span)
+
+
+def get_account_fingerprint(username: str) -> dict[str, Any]:
+    normalized_username = str(username or "").strip() or "account"
+    digest = hashlib.sha256(normalized_username.encode("utf-8")).digest()
+    locale = _ACCOUNT_FINGERPRINT_LOCALES[digest[0] % len(_ACCOUNT_FINGERPRINT_LOCALES)]
+    return {
+        "viewport": {
+            "width": _hash_range_value(
+                digest,
+                1,
+                4,
+                minimum=_ACCOUNT_VIEWPORT_WIDTH_RANGE[0],
+                maximum=_ACCOUNT_VIEWPORT_WIDTH_RANGE[1],
+            ),
+            "height": _hash_range_value(
+                digest,
+                5,
+                4,
+                minimum=_ACCOUNT_VIEWPORT_HEIGHT_RANGE[0],
+                maximum=_ACCOUNT_VIEWPORT_HEIGHT_RANGE[1],
+            ),
+        },
+        "device_scale_factor": 1 if digest[9] % 2 == 0 else 2,
+        "locale": locale,
+        "timezone_id": _timezone_for_locale(locale),
+        "user_agent": _ACCOUNT_FINGERPRINT_USER_AGENTS[digest[10] % len(_ACCOUNT_FINGERPRINT_USER_AGENTS)],
+    }
+
+=======
+>>>>>>> origin/main
 
 @dataclass(frozen=True)
 class _WorkAreaRect:
@@ -179,6 +269,11 @@ class _VisibleCampaignWindow:
     page: Page
     target_count: int
     sequence: int
+<<<<<<< HEAD
+    window_width: int = 0
+    window_height: int = 0
+=======
+>>>>>>> origin/main
 
 
 @dataclass
@@ -221,7 +316,16 @@ def _read_primary_work_area() -> _WorkAreaRect:
         finally:
             root.destroy()
         return _WorkAreaRect(left=0, top=0, width=width, height=height)
+<<<<<<< HEAD
+    return _WorkAreaRect(
+        left=0,
+        top=0,
+        width=_WORK_AREA_FALLBACK_VIEWPORT["width"],
+        height=_WORK_AREA_FALLBACK_VIEWPORT["height"],
+    )
+=======
     return _WorkAreaRect(left=0, top=0, width=DEFAULT_VIEWPORT["width"], height=DEFAULT_VIEWPORT["height"])
+>>>>>>> origin/main
 
 
 def _visible_grid(window_count: int) -> tuple[int, int]:
@@ -249,6 +353,17 @@ def _compute_compact_grid_window_rects(
     usable_height: int,
 ) -> list[_WindowRect]:
     rows, cols = _visible_grid(total)
+<<<<<<< HEAD
+    cell_width = max(380, (usable_width - (gap * (cols - 1))) // cols)
+    cell_height = max(280, (usable_height - (gap * (rows - 1))) // rows)
+    max_width = min(
+        usable_width,
+        _clamp(int(area.width * (0.56 if total == 1 else 0.58)), 620, 960),
+    )
+    max_height = min(
+        usable_height,
+        _clamp(int(area.height * (0.80 if total <= 2 else 0.84)), 500, 820),
+=======
     cell_width = max(320, (usable_width - (gap * (cols - 1))) // cols)
     cell_height = max(240, (usable_height - (gap * (rows - 1))) // rows)
     max_width = min(
@@ -258,6 +373,7 @@ def _compute_compact_grid_window_rects(
     max_height = min(
         usable_height,
         _clamp(int(area.height * (0.76 if total <= 2 else 0.82)), 420, 760),
+>>>>>>> origin/main
     )
     tile_width = min(cell_width, max_width)
     tile_height = min(cell_height, max_height)
@@ -291,8 +407,13 @@ def _compute_compact_cascade_window_rects(
     usable_width: int,
     usable_height: int,
 ) -> list[_WindowRect]:
+<<<<<<< HEAD
+    base_width = min(usable_width, _clamp(int(area.width * 0.36), 420, 620))
+    base_height = min(usable_height, _clamp(int(area.height * 0.60), 320, 540))
+=======
     base_width = min(usable_width, _clamp(int(area.width * 0.32), 360, 520))
     base_height = min(usable_height, _clamp(int(area.height * 0.56), 280, 460))
+>>>>>>> origin/main
     offset_x = _clamp(int(base_width * 0.14), 26, 48)
     offset_y = _clamp(int(base_height * 0.12), 20, 40)
     cascade_span_x = max(0, usable_width - base_width)
@@ -348,6 +469,50 @@ def _compute_visible_window_rects(window_count: int, work_area: Optional[_WorkAr
     )
 
 
+<<<<<<< HEAD
+def _normalize_campaign_desktop_layout(config: Mapping[str, Any] | None) -> dict[str, int] | None:
+    if not isinstance(config, Mapping):
+        return None
+    has_width = (
+        ("width" in config and config.get("width") not in (None, ""))
+        or ("window_width" in config and config.get("window_width") not in (None, ""))
+    )
+    has_height = (
+        ("height" in config and config.get("height") not in (None, ""))
+        or ("window_height" in config and config.get("window_height") not in (None, ""))
+    )
+    if not has_width and not has_height:
+        return None
+    try:
+        width = max(1280, int(config.get("width") or config.get("window_width") or 1366))
+        height = max(800, int(config.get("height") or config.get("window_height") or 900))
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"width": width, "height": height}
+
+
+def _fixed_window_rect(
+    rect: _WindowRect,
+    *,
+    width: int,
+    height: int,
+    work_area: Optional[_WorkAreaRect] = None,
+) -> _WindowRect:
+    area = work_area or _read_primary_work_area()
+    max_left = area.left + max(0, area.width - int(width))
+    max_top = area.top + max(0, area.height - int(height))
+    return _WindowRect(
+        left=_clamp(int(rect.left), area.left, max_left),
+        top=_clamp(int(rect.top), area.top, max_top),
+        width=int(width),
+        height=int(height),
+    )
+
+
+=======
+>>>>>>> origin/main
 class _VisibleCampaignLayoutManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -360,6 +525,10 @@ class _VisibleCampaignLayoutManager:
         scope = str(config.get("scope") or "").strip()
         if not scope:
             return None
+<<<<<<< HEAD
+        desktop_layout = _normalize_campaign_desktop_layout(config)
+=======
+>>>>>>> origin/main
         target_count = max(1, int(config.get("target_count") or 1))
         stagger_min_ms = max(300, int(config.get("stagger_min_ms") or 300))
         stagger_max_ms = max(stagger_min_ms, int(config.get("stagger_max_ms") or 800))
@@ -371,6 +540,11 @@ class _VisibleCampaignLayoutManager:
             "stagger_min_ms": stagger_min_ms,
             "stagger_max_ms": stagger_max_ms,
             "stagger_step_ms": stagger_step_ms,
+<<<<<<< HEAD
+            "window_width": int((desktop_layout or {}).get("width") or 0),
+            "window_height": int((desktop_layout or {}).get("height") or 0),
+=======
+>>>>>>> origin/main
         }
 
     async def before_context_launch(self, config: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -396,9 +570,24 @@ class _VisibleCampaignLayoutManager:
                 state.last_launch_deadline = scheduled_at
             else:
                 state.last_launch_deadline = time.monotonic()
+<<<<<<< HEAD
+        normalized["launch_index"] = launch_index
+        work_area = _read_primary_work_area()
+        launch_rects = _compute_visible_window_rects(normalized["target_count"], work_area=work_area)
+        initial_rect = launch_rects[min(launch_index, len(launch_rects) - 1)]
+        if normalized["window_width"] > 0 and normalized["window_height"] > 0:
+            initial_rect = _fixed_window_rect(
+                initial_rect,
+                width=int(normalized["window_width"]),
+                height=int(normalized["window_height"]),
+                work_area=work_area,
+            )
+        normalized["initial_rect"] = initial_rect
+=======
         launch_rects = _compute_visible_window_rects(normalized["target_count"])
         normalized["launch_index"] = launch_index
         normalized["initial_rect"] = launch_rects[min(launch_index, len(launch_rects) - 1)]
+>>>>>>> origin/main
         if wait_ms > 0:
             await asyncio.sleep(wait_ms / 1000.0)
         return normalized
@@ -418,11 +607,21 @@ class _VisibleCampaignLayoutManager:
                     page=page,
                     target_count=int(normalized["target_count"]),
                     sequence=len(state.windows),
+<<<<<<< HEAD
+                    window_width=int(normalized["window_width"] or 0),
+                    window_height=int(normalized["window_height"] or 0),
+=======
+>>>>>>> origin/main
                 )
                 state.windows[key] = existing
             else:
                 existing.page = page
                 existing.target_count = int(normalized["target_count"])
+<<<<<<< HEAD
+                existing.window_width = int(normalized["window_width"] or 0)
+                existing.window_height = int(normalized["window_height"] or 0)
+=======
+>>>>>>> origin/main
         await self._retile_scope(scope)
 
     async def release_context(self, config: Mapping[str, Any] | None, *, ctx: BrowserContext) -> None:
@@ -460,8 +659,21 @@ class _VisibleCampaignLayoutManager:
                 self._scopes.pop(scope, None)
                 return
             planned_count = max(max(handle.target_count for handle in handles), len(handles))
+<<<<<<< HEAD
+        work_area = _read_primary_work_area()
+        rects = _compute_visible_window_rects(planned_count, work_area=work_area)
+        for handle, rect in zip(handles, rects):
+            if handle.window_width > 0 and handle.window_height > 0:
+                rect = _fixed_window_rect(
+                    rect,
+                    width=handle.window_width,
+                    height=handle.window_height,
+                    work_area=work_area,
+                )
+=======
         rects = _compute_visible_window_rects(planned_count)
         for handle, rect in zip(handles, rects):
+>>>>>>> origin/main
             await self._apply_window_rect(handle.page, rect)
 
     @staticmethod
@@ -596,10 +808,69 @@ def build_launch_args(
     return args
 
 
+<<<<<<< HEAD
+def context_viewport_kwargs(
+    *,
+    headless: bool,
+    initial_window_rect: Optional[_WindowRect] = None,
+    fingerprint: Optional[Mapping[str, Any]] = None,
+    viewport_override: Optional[Mapping[str, Any]] = None,
+) -> dict:
+    if not headless and (HEADFUL_ADAPTIVE_VIEWPORT or initial_window_rect is not None):
+        return {"no_viewport": True}
+    viewport_payload = dict(_WORK_AREA_FALLBACK_VIEWPORT)
+    override = _normalize_campaign_desktop_layout(viewport_override)
+    if override is not None:
+        viewport_payload = {
+            "width": int(override["width"]),
+            "height": int(override["height"]),
+        }
+    device_scale_factor = 1
+    if override is None and isinstance(fingerprint, Mapping):
+        raw_viewport = fingerprint.get("viewport")
+        if isinstance(raw_viewport, Mapping):
+            try:
+                viewport_payload = {
+                    "width": int(raw_viewport.get("width") or viewport_payload["width"]),
+                    "height": int(raw_viewport.get("height") or viewport_payload["height"]),
+                }
+            except Exception:
+                viewport_payload = dict(_WORK_AREA_FALLBACK_VIEWPORT)
+        try:
+            device_scale_factor = 2 if int(fingerprint.get("device_scale_factor") or 1) == 2 else 1
+        except Exception:
+            device_scale_factor = 1
+    return {
+        "viewport": viewport_payload,
+        "device_scale_factor": device_scale_factor,
+    }
+
+
+async def ensure_page_campaign_desktop_layout(
+    page: Page,
+    layout: Mapping[str, Any] | None,
+) -> bool:
+    desktop_layout = _normalize_campaign_desktop_layout(layout)
+    if desktop_layout is None:
+        return False
+    rect = _fixed_window_rect(
+        _WindowRect(
+            left=0,
+            top=0,
+            width=desktop_layout["width"],
+            height=desktop_layout["height"],
+        ),
+        width=desktop_layout["width"],
+        height=desktop_layout["height"],
+    )
+    await _VisibleCampaignLayoutManager._apply_window_rect(page, rect)
+    return True
+=======
 def context_viewport_kwargs(*, headless: bool, initial_window_rect: Optional[_WindowRect] = None) -> dict:
     if not headless and (HEADFUL_ADAPTIVE_VIEWPORT or initial_window_rect is not None):
         return {"no_viewport": True}
     return {"viewport": dict(DEFAULT_VIEWPORT)}
+>>>>>>> origin/main
 
 
 def _load_storage_state_payload(storage_state: Optional[Union[str, Path]]) -> dict[str, Any]:
@@ -739,10 +1010,18 @@ class PlaywrightService:
         base_profiles: Optional[Path] = None,
         prefer_persistent: bool = False,
         browser_mode: str = PLAYWRIGHT_BROWSER_MODE_DEFAULT,
+<<<<<<< HEAD
+        subsystem: str = "default",
+=======
+>>>>>>> origin/main
     ) -> None:
         self._headless = headless
         self._base_profiles = Path(base_profiles) if base_profiles is not None else _base_profiles_path()
         self._prefer_persistent = bool(prefer_persistent)
+<<<<<<< HEAD
+        self._subsystem = str(subsystem or "").strip().lower() or "default"
+        normalized_browser_mode = normalize_browser_mode(browser_mode)
+=======
         normalized_browser_mode = str(browser_mode or PLAYWRIGHT_BROWSER_MODE_DEFAULT).strip().lower()
         if normalized_browser_mode not in {
             PLAYWRIGHT_BROWSER_MODE_DEFAULT,
@@ -750,6 +1029,7 @@ class PlaywrightService:
             PLAYWRIGHT_BROWSER_MODE_MANAGED,
         }:
             normalized_browser_mode = PLAYWRIGHT_BROWSER_MODE_DEFAULT
+>>>>>>> origin/main
         self._browser_mode = normalized_browser_mode
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
@@ -815,7 +1095,11 @@ class PlaywrightService:
         await self._runtime.start(
             launch_proxy=proxy_payload,
             executable_path=executable,
+<<<<<<< HEAD
+            launch_args=build_launch_args(headless=self._headless),
+=======
             launch_args=build_launch_args(headless=self._headless, locale=DEFAULT_LOCALE),
+>>>>>>> origin/main
             safe_mode=safe_mode,
             launch_browser=should_launch_browser,
             force_headless=True if safe_mode else self._headless,
@@ -831,14 +1115,28 @@ class PlaywrightService:
         storage_state: Optional[Union[str, Path]] = None,
         proxy: Optional[dict] = None,
         *,
+<<<<<<< HEAD
+        timezone_id: Optional[str] = None,
         safe_mode: bool = False,
         visible_browser_layout: Mapping[str, Any] | None = None,
+        campaign_desktop_layout: Mapping[str, Any] | None = None,
+=======
+        safe_mode: bool = False,
+        visible_browser_layout: Mapping[str, Any] | None = None,
+>>>>>>> origin/main
     ) -> BrowserContext:
         use_persistent_profile = self._use_persistent_profile(safe_mode=safe_mode)
 
         profile_path = Path(profile_dir)
         _migrate_legacy_profile_dir(profile_path)
         profile_path.mkdir(parents=True, exist_ok=True)
+<<<<<<< HEAD
+        account_name = str(profile_path.name or "account")
+        fingerprint = get_account_fingerprint(account_name)
+        resolved_timezone_id = str(timezone_id or "").strip() or str(fingerprint["timezone_id"])
+        desktop_layout = _normalize_campaign_desktop_layout(campaign_desktop_layout)
+=======
+>>>>>>> origin/main
         layout_config: dict[str, Any] | None = None
         initial_window_rect: _WindowRect | None = None
         if use_persistent_profile and not self._headless and not safe_mode:
@@ -856,15 +1154,33 @@ class PlaywrightService:
                     )
                 except Exception:
                     initial_window_rect = None
+<<<<<<< HEAD
+            if initial_window_rect is None and desktop_layout is not None:
+                initial_window_rect = _fixed_window_rect(
+                    _WindowRect(left=0, top=0, width=desktop_layout["width"], height=desktop_layout["height"]),
+                    width=desktop_layout["width"],
+                    height=desktop_layout["height"],
+                )
+
+        launch_args = build_launch_args(
+            headless=self._headless,
+            locale=str(fingerprint["locale"]),
+=======
 
         launch_args = build_launch_args(
             headless=self._headless,
             locale=DEFAULT_LOCALE,
+>>>>>>> origin/main
             initial_window_rect=initial_window_rect,
         )
         viewport_kwargs = context_viewport_kwargs(
             headless=self._headless,
             initial_window_rect=initial_window_rect,
+<<<<<<< HEAD
+            fingerprint=fingerprint,
+            viewport_override=desktop_layout,
+=======
+>>>>>>> origin/main
         )
 
         storage_state_path: Optional[str] = None
@@ -878,22 +1194,36 @@ class PlaywrightService:
             context_proxy = self._launch_proxy_payload(proxy)
 
         context_kwargs = {
+<<<<<<< HEAD
+            "account": account_name,
+=======
             "account": str(profile_path.name or "account"),
+>>>>>>> origin/main
             "profile_dir": profile_path,
             "storage_state": storage_state_path,
             "proxy": context_proxy,
             "mode": "persistent" if use_persistent_profile else "shared",
             "executable_path": self._resolve_launch_executable(),
             "launch_args": launch_args,
+<<<<<<< HEAD
+            "user_agent": str(fingerprint["user_agent"]),
+            "locale": str(fingerprint["locale"]),
+            "timezone_id": resolved_timezone_id,
+=======
             "user_agent": DEFAULT_USER_AGENT,
             "locale": DEFAULT_LOCALE,
             "timezone_id": DEFAULT_TIMEZONE,
+>>>>>>> origin/main
             "viewport_kwargs": viewport_kwargs,
             "permissions": [],
             "launch_proxy": None if safe_mode else (None if use_persistent_profile else self._launch_proxy),
             "force_headless": True if safe_mode else self._headless,
             "safe_mode": safe_mode,
             "browser_mode": self._browser_mode,
+<<<<<<< HEAD
+            "subsystem": self._subsystem,
+=======
+>>>>>>> origin/main
         }
         ctx = await self._runtime.get_context(**context_kwargs)
         # Runtime start is handled inside get_context; mirror live handles here.
@@ -922,6 +1252,14 @@ class PlaywrightService:
                     pass
             else:
                 page = ctx.pages[0]
+<<<<<<< HEAD
+            if desktop_layout is not None:
+                with contextlib.suppress(Exception):
+                    setattr(ctx, "_campaign_desktop_layout", dict(desktop_layout))
+                with contextlib.suppress(Exception):
+                    setattr(page, "_campaign_desktop_layout", dict(desktop_layout))
+=======
+>>>>>>> origin/main
             if layout_config is not None:
                 await _VISIBLE_CAMPAIGN_LAYOUT_MANAGER.attach_context(layout_config, ctx=ctx, page=page)
                 self._bind_visible_browser_layout_cleanup(ctx, layout_config)
@@ -1021,7 +1359,41 @@ class PlaywrightService:
     ) -> Path:
         dest = Path(destination)
         dest.parent.mkdir(parents=True, exist_ok=True)
+<<<<<<< HEAD
+        mode = "headless" if (self._headless or self._safe_mode) else "headful"
+        try:
+            await ctx.storage_state(path=str(dest))
+        except Exception as exc:
+            emit_profile_lifecycle_diagnostic(
+                event_type="storage_state_save_failed",
+                profile_dir=dest.parent,
+                account=dest.parent.name,
+                subsystem=self._subsystem,
+                mode=mode,
+                reason_code="storage_state_save_failed",
+                pid=os.getpid(),
+                payload={
+                    "error": str(exc) or type(exc).__name__,
+                    "error_type": type(exc).__name__,
+                    "storage_state_path": str(dest),
+                },
+                callsite_skip=2,
+            )
+            raise
+        emit_profile_lifecycle_diagnostic(
+            event_type="storage_state_saved",
+            profile_dir=dest.parent,
+            account=dest.parent.name,
+            subsystem=self._subsystem,
+            mode=mode,
+            reason_code="storage_state_saved",
+            pid=os.getpid(),
+            payload={"storage_state_path": str(dest)},
+            callsite_skip=2,
+        )
+=======
         await ctx.storage_state(path=str(dest))
+>>>>>>> origin/main
         return dest
 
     async def close(self) -> None:
@@ -1044,7 +1416,11 @@ async def launch_persistent(
     """
     base_profiles = _base_profiles_path()
     base_profiles.mkdir(exist_ok=True)
+<<<<<<< HEAD
+    user_data_dir = browser_profile_dir(account_id, profiles_root=base_profiles)
+=======
     user_data_dir = base_profiles / account_id
+>>>>>>> origin/main
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
     if headful is None:
@@ -1052,6 +1428,10 @@ async def launch_persistent(
 
     runtime = PlaywrightRuntime(headless=not headful, owner_module=__name__)
     executable = resolve_playwright_executable(headless=not headful)
+<<<<<<< HEAD
+    fingerprint = get_account_fingerprint(account_id)
+=======
+>>>>>>> origin/main
     storage_state_path: Optional[str] = None
     if storage_state:
         candidate = Path(storage_state)
@@ -1061,7 +1441,11 @@ async def launch_persistent(
     if not storage_state_path and default_storage_state.exists():
         storage_state_path = str(default_storage_state)
     proxy_payload = proxy or None
+<<<<<<< HEAD
+    recovery_dir = browser_profile_dir(f"{account_id}__recovery", profiles_root=base_profiles)
+=======
     recovery_dir = base_profiles / f"{account_id}__recovery"
+>>>>>>> origin/main
 
     attempts: list[tuple[str, Path, Optional[dict]]] = [
         ("primary", user_data_dir, proxy_payload),
@@ -1083,11 +1467,19 @@ async def launch_persistent(
                 proxy=target_proxy,
                 mode="persistent",
                 executable_path=executable,
+<<<<<<< HEAD
+                launch_args=build_launch_args(headless=not headful, locale=str(fingerprint["locale"])),
+                user_agent=str(fingerprint["user_agent"]),
+                locale=str(fingerprint["locale"]),
+                timezone_id=str(fingerprint["timezone_id"]),
+                viewport_kwargs=context_viewport_kwargs(headless=not headful, fingerprint=fingerprint),
+=======
                 launch_args=build_launch_args(headless=not headful, locale=DEFAULT_LOCALE),
                 user_agent=DEFAULT_USER_AGENT,
                 locale=DEFAULT_LOCALE,
                 timezone_id=DEFAULT_TIMEZONE,
                 viewport_kwargs=context_viewport_kwargs(headless=not headful),
+>>>>>>> origin/main
                 permissions=[],
                 launch_proxy=target_proxy,
                 force_headless=not headful,
@@ -1128,11 +1520,19 @@ async def launch_persistent(
                             proxy=target_proxy,
                             mode="shared",
                             executable_path=executable,
+<<<<<<< HEAD
+                            launch_args=build_launch_args(headless=not headful, locale=str(fingerprint["locale"])),
+                            user_agent=str(fingerprint["user_agent"]),
+                            locale=str(fingerprint["locale"]),
+                            timezone_id=str(fingerprint["timezone_id"]),
+                            viewport_kwargs=context_viewport_kwargs(headless=not headful, fingerprint=fingerprint),
+=======
                             launch_args=build_launch_args(headless=not headful, locale=DEFAULT_LOCALE),
                             user_agent=DEFAULT_USER_AGENT,
                             locale=DEFAULT_LOCALE,
                             timezone_id=DEFAULT_TIMEZONE,
                             viewport_kwargs=context_viewport_kwargs(headless=not headful),
+>>>>>>> origin/main
                             permissions=[],
                             launch_proxy=target_proxy,
                             force_headless=not headful,
@@ -1191,11 +1591,21 @@ async def ensure_context(
     """
     runtime = PlaywrightRuntime(headless=not headful, owner_module=__name__)
     base_profiles = _base_profiles_path()
+<<<<<<< HEAD
+    profile_dir = browser_profile_dir(account, profiles_root=base_profiles)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    storage_state_path = profile_dir / "storage_state.json"
+
+    fingerprint = get_account_fingerprint(account)
+    locale = (lang or str(fingerprint["locale"]) or "").strip()
+    timezone_id = _timezone_for_locale(locale, fallback=str(fingerprint["timezone_id"]))
+=======
     profile_dir = base_profiles / account
     profile_dir.mkdir(parents=True, exist_ok=True)
     storage_state_path = profile_dir / "storage_state.json"
 
     locale = (lang or DEFAULT_LOCALE or "").strip()
+>>>>>>> origin/main
     args = build_launch_args(headless=not headful, locale=locale)
 
     executable = resolve_playwright_executable(headless=not headful)
@@ -1218,10 +1628,17 @@ async def ensure_context(
                 mode="persistent",
                 executable_path=executable,
                 launch_args=args,
+<<<<<<< HEAD
+                user_agent=str(fingerprint["user_agent"]),
+                locale=locale,
+                timezone_id=timezone_id,
+                viewport_kwargs=context_viewport_kwargs(headless=not headful, fingerprint=fingerprint),
+=======
                 user_agent=DEFAULT_USER_AGENT,
                 locale=locale,
                 timezone_id=DEFAULT_TIMEZONE,
                 viewport_kwargs=context_viewport_kwargs(headless=not headful),
+>>>>>>> origin/main
                 permissions=[],
                 launch_proxy=proxy,
                 force_headless=not headful,
@@ -1243,10 +1660,17 @@ async def ensure_context(
         mode=normalized_mode,
         executable_path=executable,
         launch_args=args,
+<<<<<<< HEAD
+        user_agent=str(fingerprint["user_agent"]),
+        locale=locale,
+        timezone_id=timezone_id,
+        viewport_kwargs=context_viewport_kwargs(headless=not headful, fingerprint=fingerprint),
+=======
         user_agent=DEFAULT_USER_AGENT,
         locale=locale,
         timezone_id=DEFAULT_TIMEZONE,
         viewport_kwargs=context_viewport_kwargs(headless=not headful),
+>>>>>>> origin/main
         permissions=[],
         launch_proxy=proxy,
         force_headless=not headful,
@@ -1281,10 +1705,17 @@ async def ensure_context(
                 mode="shared",
                 executable_path=executable,
                 launch_args=args,
+<<<<<<< HEAD
+                user_agent=str(fingerprint["user_agent"]),
+                locale=locale,
+                timezone_id=timezone_id,
+                viewport_kwargs=context_viewport_kwargs(headless=not headful, fingerprint=fingerprint),
+=======
                 user_agent=DEFAULT_USER_AGENT,
                 locale=locale,
                 timezone_id=DEFAULT_TIMEZONE,
                 viewport_kwargs=context_viewport_kwargs(headless=not headful),
+>>>>>>> origin/main
                 permissions=[],
                 launch_proxy=proxy,
                 force_headless=not headful,

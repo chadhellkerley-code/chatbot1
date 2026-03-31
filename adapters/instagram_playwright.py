@@ -58,7 +58,7 @@ class InstagramPlaywrightClient(BaseInstagramClient):
         acct = dict(self.account or {})
         if self._username and not acct.get("username"):
             acct["username"] = self._username
-        sender = HumanInstagramSender(headless=True)
+        sender = HumanInstagramSender(headless=False)
         return bool(sender.send_message_like_human_sync(acct, target_username, message))
 
     def reply_to_unread(self, *, limit: int = 10, strategy: Optional[dict] = None) -> List[Dict[str, Any]]:

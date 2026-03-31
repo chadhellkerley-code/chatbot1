@@ -216,14 +216,44 @@ def test_campaign_loader_reads_clean_unique_usernames(tmp_path: Path, monkeypatc
     assert load_leads("demo") == ["uno", "dos"]
 
 
+<<<<<<< HEAD
+def test_delete_list_removes_file_permanently(tmp_path: Path) -> None:
+=======
 def test_delete_list_moves_file_to_backup(tmp_path: Path) -> None:
+>>>>>>> origin/main
     service = _service(tmp_path)
     service.save_list("demo", ["uno"])
 
     service.delete_list("demo")
 
     assert service.list_lists() == []
+<<<<<<< HEAD
+    assert not service.context.leads_path("demo.txt").exists()
+    assert not list(service.context.leads_path("_deleted").glob("demo.txt.deleted.*.bak"))
+
+
+def test_delete_list_cleans_import_audit_and_snapshots_for_same_name(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    csv_path = tmp_path / "seed.csv"
+    csv_path.write_text("username\nuno\ndos\n", encoding="utf-8")
+
+    service.import_csv(csv_path, "demo")
+
+    audit_path = service.context.storage_path("lead_imports", "audit.jsonl")
+    snapshots_dir = service.context.storage_path("lead_imports", "snapshots")
+    assert service.context.read_jsonl(audit_path)
+    assert list(snapshots_dir.glob("*.json"))
+
+    service.delete_list("demo")
+
+    assert service.context.read_jsonl(audit_path) == []
+    assert not list(snapshots_dir.glob("*.json"))
+
+    preview = service.preview_csv(csv_path, "demo")
+    assert preview["same_file_import_count"] == 0
+=======
     assert list(service.context.leads_path("_deleted").glob("demo.txt.deleted.*.bak"))
+>>>>>>> origin/main
 
 
 def test_list_summaries_reuse_persisted_counts_until_file_changes(

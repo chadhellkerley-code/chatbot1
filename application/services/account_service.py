@@ -62,6 +62,11 @@ _ALIAS_REGISTRY_SCHEMA_VERSION = 2
 _IG_EDIT_PROFILE_URL = "https://www.instagram.com/accounts/edit/"
 
 
+def _instagram_profile_url(username: str) -> str:
+    clean_username = str(username or "").strip().lstrip("@")
+    return f"https://www.instagram.com/{clean_username}/"
+
+
 def assign_proxy_to_account(username: str, proxy_id: str | None) -> bool:
     from core.accounts import update_account
 
@@ -215,7 +220,18 @@ class AccountService:
     def _raw_account_records(self) -> list[dict[str, Any]]:
         return [dict(item) for item in accounts_module.list_all() if isinstance(item, dict)]
 
+    def _default_alias_in_use(self, *, raw_accounts: list[dict[str, Any]] | None = None) -> bool:
+        accounts = raw_accounts if raw_accounts is not None else self._raw_account_records()
+        for item in accounts:
+            if not isinstance(item, dict):
+                continue
+            alias_id = normalize_alias_id(item.get("alias_id") or item.get("alias"), default=DEFAULT_ALIAS_ID)
+            if alias_id == DEFAULT_ALIAS_ID:
+                return True
+        return False
+
     def _alias_registry(self, *, raw_accounts: list[dict[str, Any]] | None = None) -> dict[str, AliasRecord]:
+        account_rows = raw_accounts if raw_accounts is not None else self._raw_account_records()
         payload = self.context.read_json(
             self._alias_registry_path(),
             {"schema_version": _ALIAS_REGISTRY_SCHEMA_VERSION, "aliases": []},
@@ -234,7 +250,7 @@ class AccountService:
                 continue
             records.setdefault(record.alias_id, record)
 
-        for item in raw_accounts or self._raw_account_records():
+        for item in account_rows:
             raw_alias = normalize_alias_display(
                 item.get("alias_display_name") or item.get("alias"),
                 default=DEFAULT_ALIAS_ID,
@@ -245,7 +261,10 @@ class AccountService:
                 continue
             records.setdefault(record.alias_id, record)
 
-        records.setdefault(DEFAULT_ALIAS_ID, default_alias_record())
+        if self._default_alias_in_use(raw_accounts=account_rows):
+            records.setdefault(DEFAULT_ALIAS_ID, default_alias_record())
+        else:
+            records.pop(DEFAULT_ALIAS_ID, None)
         return records
 
     def _decorate_account_record(
@@ -276,7 +295,7 @@ class AccountService:
         ]
 
     def _sorted_alias_records(self, records: dict[str, AliasRecord] | None = None) -> list[AliasRecord]:
-        source = records or self._alias_registry()
+        source = self._alias_registry() if records is None else records
         return sorted(
             source.values(),
             key=lambda record: (
@@ -319,7 +338,10 @@ class AccountService:
                 cleaned[record.alias_id] = record
             record_map = cleaned
 
-        record_map.setdefault(DEFAULT_ALIAS_ID, default_alias_record())
+        if self._default_alias_in_use():
+            record_map.setdefault(DEFAULT_ALIAS_ID, default_alias_record())
+        else:
+            record_map.pop(DEFAULT_ALIAS_ID, None)
         payload = {
             "schema_version": _ALIAS_REGISTRY_SCHEMA_VERSION,
             "aliases": [record.to_payload() for record in self._sorted_alias_records(record_map)],
@@ -422,6 +444,35 @@ class AccountService:
 
     def _record_alias_id(self, record: dict[str, Any]) -> str:
         return normalize_alias_id(record.get("alias_id") or record.get("alias"), default=DEFAULT_ALIAS_ID)
+
+    @staticmethod
+    def normalize_usage_state(value: Any) -> str:
+        normalizer = getattr(accounts_module, "normalize_account_usage_state", None)
+        if callable(normalizer):
+            return str(normalizer(value) or "active").strip() or "active"
+        normalized = str(value or "").strip().lower()
+        return normalized if normalized in {"active", "deactivated"} else "active"
+
+    def usage_state_for_account(self, record: dict[str, Any]) -> str:
+        resolver = getattr(accounts_module, "account_usage_state", None)
+        if callable(resolver):
+            try:
+                return str(resolver(record) or "active").strip() or "active"
+            except Exception:
+                pass
+        return self.normalize_usage_state(record.get("usage_state"))
+
+    def usage_state_label(self, record: dict[str, Any]) -> str:
+        return "Desactivada" if self.usage_state_for_account(record) == "deactivated" else "Activa"
+
+    def operationally_enabled(self, record: dict[str, Any]) -> bool:
+        resolver = getattr(accounts_module, "is_account_enabled_for_operation", None)
+        if callable(resolver):
+            try:
+                return bool(resolver(record))
+            except Exception:
+                pass
+        return bool(record.get("active", True)) and self.usage_state_for_account(record) == "active"
 
     def list_accounts(self, alias: str | None = None) -> list[dict[str, Any]]:
         records = self._account_records()
@@ -617,8 +668,13 @@ class AccountService:
         active = bool(record.get("active", True))
         connected = bool(record.get("connected")) if "connected" in record else self.connected_status(record)
         badge = str(record.get("health_badge") or self.health_badge(record) or "").strip().upper()
-        allowed = active and connected and badge == health_store.HEALTH_STATE_ALIVE
-        message = "" if allowed else "Necesitas re-login en esta cuenta"
+        allowed = active and connected
+        if allowed:
+            message = ""
+        elif not active:
+            message = "La cuenta esta desactivada para esta accion."
+        else:
+            message = "La cuenta no esta conectada."
         return {
             "allowed": allowed,
             "connected": connected,
@@ -844,7 +900,7 @@ class AccountService:
             if self.manual_action_eligibility(record).get("allowed")
         ]
         if not eligible_records:
-            raise ServiceError("Las cuentas seleccionadas requieren re-login antes de usar esta accion.")
+            raise ServiceError("Las cuentas seleccionadas deben estar conectadas para usar esta accion.")
         records = eligible_records
 
         opener = getattr(accounts_module, "_open_playwright_manual_session", None)
@@ -959,6 +1015,80 @@ class AccountService:
             max_minutes=max_minutes,
         )
 
+    def open_account_profiles(
+        self,
+        alias: str,
+        usernames: list[str],
+        *,
+        action_label: str = "Abrir cuenta",
+        max_minutes: int = 0,
+    ) -> dict[str, Any]:
+        clean_alias, records = self._resolve_selected_records(
+            alias,
+            usernames,
+            active_only=True,
+        )
+        if not records:
+            raise ServiceError("No hay cuentas activas seleccionadas para esta accion.")
+
+        eligible_records = [
+            record
+            for record in records
+            if self.manual_action_eligibility(record).get("allowed")
+        ]
+        if not eligible_records:
+            raise ServiceError("Las cuentas seleccionadas deben estar conectadas para usar esta accion.")
+
+        opener = getattr(accounts_module, "_open_playwright_manual_session", None)
+        if not callable(opener):
+            raise ServiceError("Las sesiones manuales de Playwright no estan disponibles.")
+
+        clear_close_request = getattr(accounts_module, "clear_manual_playwright_session_close_request", None)
+        opened: list[str] = []
+        max_seconds = max(0, int(max_minutes or 0)) * 60 or None
+        for record in eligible_records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            if not username:
+                continue
+            if callable(clear_close_request):
+                clear_close_request(username)
+            logger.info(
+                "Opening account profile for @%s (%s, %s)",
+                username,
+                clean_alias,
+                action_label,
+            )
+            try:
+                launch_result = opener(
+                    record,
+                    start_url=_instagram_profile_url(username),
+                    action_label=action_label,
+                    max_seconds=max_seconds,
+                    restore_page_if_closed=False,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Account profile open failed for @%s (%s, %s)",
+                    username,
+                    clean_alias,
+                    action_label,
+                )
+                raise ServiceError(f"Failed to open manual browser for @{username}: {exc}") from exc
+            if not bool(dict(launch_result or {}).get("opened")):
+                raise ServiceError(
+                    f"Failed to open manual browser for @{username}: launcher did not confirm browser open."
+                )
+            opened.append(username)
+
+        if not opened:
+            raise ServiceError("No se pudo abrir ninguna cuenta seleccionada.")
+        return {
+            "alias": clean_alias,
+            "action": action_label,
+            "opened": opened,
+            "count": len(opened),
+        }
+
     def rename_account_username(self, old_username: str, new_username: str) -> str:
         old_clean = str(old_username or "").strip().lstrip("@")
         new_clean = str(new_username or "").strip().lstrip("@")
@@ -1000,6 +1130,7 @@ class AccountService:
         *,
         minutes: int = 10,
         likes_target: int = 0,
+        follows_target: int = 0,
     ) -> list[dict[str, Any]]:
         clean_alias, records = self._resolve_selected_records(
             alias,
@@ -1016,6 +1147,7 @@ class AccountService:
 
         minutes = max(1, int(minutes or 1))
         likes_target = max(0, int(likes_target or 0))
+        follows_target = max(0, int(follows_target or 0))
 
         interactions_module.ensure_logging(
             quiet=interactions_module.SETTINGS.quiet,
@@ -1041,7 +1173,7 @@ class AccountService:
                 ) from exc
 
             base_profiles = interactions_module._profiles_root()
-            session_manager = interactions_module._reels_session_manager(True)
+            session_manager = interactions_module._reels_session_manager(False)
             summaries: list[Any] = []
             for record in records:
                 if interactions_module.STOP_EVENT.is_set():
@@ -1105,6 +1237,7 @@ class AccountService:
                         summary=summary,
                         duration_s=minutes * 60,
                         likes_target=likes_target,
+                        follows_target=follows_target,
                     )
                 except Exception as exc:
                     await session_manager.discard_if_unhealthy(
@@ -1144,6 +1277,7 @@ class AccountService:
                     "username": str(getattr(summary, "username", "") or ""),
                     "viewed": int(getattr(summary, "viewed", 0) or 0),
                     "liked": int(getattr(summary, "liked", 0) or 0),
+                    "followed": int(getattr(summary, "followed", 0) or 0),
                     "errors": int(getattr(summary, "errors", 0) or 0),
                     "messages": list(getattr(summary, "messages", []) or []),
                 }
@@ -1443,6 +1577,14 @@ class AccountService:
                 updated += 1
         return updated
 
+    def set_usage_state(self, usernames: list[str], usage_state: str) -> int:
+        normalized = self.normalize_usage_state(usage_state)
+        updated = 0
+        for username in dedupe_usernames(usernames):
+            if accounts_module.update_account(username, {"usage_state": normalized}):
+                updated += 1
+        return updated
+
     def _proxy_status(self, proxy_id: str) -> dict[str, Any]:
         return proxy_reference_status(proxy_id, path=self._proxy_path())
 
@@ -1634,6 +1776,12 @@ class AccountService:
                     "server": server,
                     "user": str(row.get("user") or row.get("username") or "").strip(),
                     "pass": str(row.get("pass") or row.get("password") or "").strip(),
+                    "timezone_id": str(
+                        row.get("timezone_id")
+                        or row.get("timezone")
+                        or row.get("tz")
+                        or ""
+                    ).strip(),
                     "active": active_raw not in {"0", "false", "no", "off"},
                 }
                 proxy_payloads.append(payload)
@@ -1948,6 +2096,8 @@ class AccountService:
                     "connected": self.connected_status(account),
                     "health_badge": self.health_badge(account),
                     "active": bool(account.get("active", True)),
+                    "usage_state": self.usage_state_for_account(account),
+                    "usage_state_label": self.usage_state_label(account),
                     "last_updated": datetime.utcnow().isoformat(timespec="seconds") + "Z",
                 }
             )

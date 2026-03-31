@@ -9,7 +9,11 @@ from typing import Any
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+<<<<<<< HEAD
+from PySide6.QtCore import QItemSelectionModel, Qt
+=======
 from PySide6.QtCore import Qt
+>>>>>>> origin/main
 from PySide6.QtWidgets import QApplication, QDialog, QPushButton
 
 from gui.page_base import GuiState, PageContext
@@ -80,11 +84,37 @@ class _FakeAccountsService:
     def __init__(self) -> None:
         self.rows_by_alias: dict[str, list[dict[str, Any]]] = {
             "default": [
+<<<<<<< HEAD
+                {
+                    "username": "uno",
+                    "assigned_proxy_id": "px-1",
+                    "messages_per_account": 20,
+                    "alias": "default",
+                    "usage_state": "active",
+                },
+                {
+                    "username": "dos",
+                    "assigned_proxy_id": "",
+                    "messages_per_account": 15,
+                    "alias": "default",
+                    "usage_state": "active",
+                },
+            ],
+            "matias": [
+                {
+                    "username": "matias_a",
+                    "assigned_proxy_id": "px-2",
+                    "messages_per_account": 10,
+                    "alias": "matias",
+                    "usage_state": "active",
+                },
+=======
                 {"username": "uno", "assigned_proxy_id": "px-1", "messages_per_account": 20, "alias": "default"},
                 {"username": "dos", "assigned_proxy_id": "", "messages_per_account": 15, "alias": "default"},
             ],
             "matias": [
                 {"username": "matias_a", "assigned_proxy_id": "px-2", "messages_per_account": 10, "alias": "matias"},
+>>>>>>> origin/main
             ],
         }
         self.proxies = [
@@ -177,7 +207,11 @@ class _FakeAccountsService:
             "allowed": connected,
             "connected": connected,
             "badge": self.health_badge(record),
+<<<<<<< HEAD
+            "message": "" if connected else "La cuenta no esta conectada.",
+=======
             "message": "" if connected else "Necesitas re-login en esta cuenta",
+>>>>>>> origin/main
         }
 
     def remove_accounts(self, usernames: list[str]) -> int:
@@ -193,6 +227,34 @@ class _FakeAccountsService:
             self.rows_by_alias[alias] = kept
         return removed
 
+<<<<<<< HEAD
+    def move_accounts(self, usernames: list[str], target_alias: str) -> int:
+        selected = {str(item or "").strip().lower() for item in usernames if str(item or "").strip()}
+        clean_target = str(target_alias or "").strip()
+        if not clean_target:
+            return 0
+        self.rows_by_alias.setdefault(clean_target, [])
+        moved_rows: list[dict[str, Any]] = []
+        moved = 0
+        for alias, rows in list(self.rows_by_alias.items()):
+            if alias == clean_target:
+                continue
+            kept: list[dict[str, Any]] = []
+            for row in rows:
+                username = str(row.get("username") or "").strip().lower()
+                if username in selected:
+                    moved += 1
+                    updated = dict(row)
+                    updated["alias"] = clean_target
+                    moved_rows.append(updated)
+                    continue
+                kept.append(row)
+            self.rows_by_alias[alias] = kept
+        self.rows_by_alias[clean_target].extend(moved_rows)
+        return moved
+
+=======
+>>>>>>> origin/main
     def set_message_limit(self, usernames: list[str], limit: int) -> int:
         selected = {str(item or "").strip().lower() for item in usernames}
         updated = 0
@@ -203,6 +265,26 @@ class _FakeAccountsService:
                     updated += 1
         return updated
 
+<<<<<<< HEAD
+    def usage_state_for_account(self, record: dict[str, Any]) -> str:
+        return str(record.get("usage_state") or "active").strip().lower() or "active"
+
+    def usage_state_label(self, record: dict[str, Any]) -> str:
+        return "Desactivada" if self.usage_state_for_account(record) == "deactivated" else "Activa"
+
+    def set_usage_state(self, usernames: list[str], usage_state: str) -> int:
+        selected = {str(item or "").strip().lower() for item in usernames}
+        updated = 0
+        normalized = str(usage_state or "active").strip().lower() or "active"
+        for rows in self.rows_by_alias.values():
+            for row in rows:
+                if str(row.get("username") or "").strip().lower() in selected:
+                    row["usage_state"] = normalized
+                    updated += 1
+        return updated
+
+=======
+>>>>>>> origin/main
     def login(
         self,
         alias: str,
@@ -356,6 +438,29 @@ class _FakeAccountsService:
             self._manual_session_released.wait(timeout=2.0)
         return payload
 
+<<<<<<< HEAD
+    def open_account_profiles(
+        self,
+        alias: str,
+        usernames: list[str],
+        *,
+        action_label: str = "Abrir cuenta",
+        max_minutes: int = 0,
+    ) -> dict[str, Any]:
+        time.sleep(0.03)
+        payload = {
+            "alias": alias,
+            "usernames": list(usernames),
+            "action_label": action_label,
+            "max_minutes": max_minutes,
+        }
+        self.profile_open_calls.append(payload)
+        if self._block_manual_session:
+            self._manual_session_released.wait(timeout=2.0)
+        return payload
+
+=======
+>>>>>>> origin/main
     def clear_manual_session_close_request(self, username: str) -> None:
         del username
 
@@ -387,6 +492,10 @@ class _FakeAccountsService:
         *,
         minutes: int = 10,
         likes_target: int = 0,
+<<<<<<< HEAD
+        follows_target: int = 0,
+=======
+>>>>>>> origin/main
     ) -> list[dict[str, Any]]:
         selected = list(usernames)
         self.reels_runs.append(
@@ -395,22 +504,40 @@ class _FakeAccountsService:
                 "usernames": selected,
                 "minutes": minutes,
                 "likes_target": likes_target,
+<<<<<<< HEAD
+                "follows_target": follows_target,
+=======
+>>>>>>> origin/main
             }
         )
         viewed = 0
         liked = 0
+<<<<<<< HEAD
+        followed = 0
+=======
+>>>>>>> origin/main
         while viewed < 6 and not STOP_EVENT.is_set():
             viewed += 1
             print(f"{selected[0]} viendo reel")
             if likes_target > liked:
                 liked += 1
                 print(f"{selected[0]} dio like")
+<<<<<<< HEAD
+            elif follows_target > followed:
+                followed += 1
+                print(f"{selected[0]} siguio perfil")
+=======
+>>>>>>> origin/main
             time.sleep(0.04)
         return [
             {
                 "username": selected[0],
                 "viewed": viewed,
                 "liked": liked,
+<<<<<<< HEAD
+                "followed": followed,
+=======
+>>>>>>> origin/main
                 "errors": 0,
                 "messages": [],
             }
@@ -807,6 +934,113 @@ def test_accounts_page_refresh_button_rehydrates_health_badge_after_refresh() ->
         tasks.shutdown("test cleanup")
 
 
+<<<<<<< HEAD
+def test_accounts_page_updates_usage_state_and_renders_operational_status_column() -> None:
+    _app()
+    services, logs, tasks, queries, ctx = _build_ctx()
+    page = AccountsPage(ctx)
+    try:
+        page.on_navigate_to()
+
+        def _row_value(username: str, column: int) -> str:
+            for row in range(page._table.rowCount()):
+                user_item = page._table.item(row, 0)
+                if user_item is None or user_item.text() != f"@{username}":
+                    continue
+                value_item = page._table.item(row, column)
+                return value_item.text() if value_item is not None else ""
+            return ""
+
+        assert _wait_until(lambda: page._table.rowCount() == 2 and _row_value("uno", 4) == "Activa")
+
+        headers = [
+            str(page._table.horizontalHeaderItem(index).text())
+            for index in range(page._table.columnCount())
+        ]
+        assert headers == ["Username", "Conectada", "Health", "Proxy", "Estado de uso", "Limite"]
+
+        page._apply_usage_state("deactivated", ["uno", "dos"])
+
+        assert _wait_until(lambda: _row_value("uno", 4) == "Desactivada" and _row_value("dos", 4) == "Desactivada")
+        assert services.accounts.rows_by_alias["default"][0]["usage_state"] == "deactivated"
+        assert services.accounts.rows_by_alias["default"][1]["usage_state"] == "deactivated"
+    finally:
+        queries.shutdown()
+        tasks.shutdown("test cleanup")
+
+
+def test_accounts_page_moves_selected_accounts_to_target_alias(monkeypatch) -> None:
+    _app()
+    services, logs, tasks, queries, ctx = _build_ctx()
+    page = AccountsPage(ctx)
+    dialog_state: dict[str, Any] = {}
+
+    class _FakeDialog:
+        def __init__(self, *_args, **_kwargs) -> None:
+            return None
+
+        def refresh(
+            self,
+            *,
+            alias: str,
+            target_aliases: list[str],
+            records: list[dict[str, Any]],
+            selected_usernames: list[str] | None = None,
+        ) -> None:
+            dialog_state["alias"] = alias
+            dialog_state["target_aliases"] = list(target_aliases)
+            dialog_state["records"] = [dict(item) for item in records]
+            dialog_state["selected_usernames"] = list(selected_usernames or [])
+
+        def exec(self) -> int:
+            return QDialog.Accepted
+
+        def selected_usernames(self) -> list[str]:
+            return ["uno"]
+
+        def target_alias(self) -> str:
+            return "matias"
+
+    try:
+        monkeypatch.setattr(pages_accounts_module, "AccountAliasChangeDialog", _FakeDialog)
+        page.on_navigate_to()
+        assert _wait_until(lambda: page._table.rowCount() == 2)
+
+        selection_model = page._table.selectionModel()
+        assert selection_model is not None
+        username_row = next(
+            (
+                row
+                for row in range(page._table.rowCount())
+                if page._table.item(row, 0) is not None and page._table.item(row, 0).text() == "@uno"
+            ),
+            -1,
+        )
+        assert username_row >= 0
+        target_index = page._table.model().index(username_row, 0)
+        selection_model.select(target_index, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        _pump_events()
+
+        page._open_alias_change_dialog()
+
+        assert _wait_until(
+            lambda: page._table.rowCount() == 1
+            and page._table.item(0, 0) is not None
+            and page._table.item(0, 0).text() == "@dos"
+        )
+        assert dialog_state["alias"] == "default"
+        assert dialog_state["target_aliases"] == ["matias"]
+        assert dialog_state["selected_usernames"] == ["uno"]
+        assert [row["username"] for row in services.accounts.rows_by_alias["default"]] == ["dos"]
+        assert {row["username"] for row in services.accounts.rows_by_alias["matias"]} == {"matias_a", "uno"}
+        assert page._status_label.text() == "Cambio de alias aplicado: 1/1 cuenta(s) movidas a matias."
+    finally:
+        queries.shutdown()
+        tasks.shutdown("test cleanup")
+
+
+=======
+>>>>>>> origin/main
 def test_accounts_page_rejects_manual_add_without_password(monkeypatch) -> None:
     _app()
     services, logs, tasks, queries, ctx = _build_ctx()
@@ -868,6 +1102,69 @@ def test_accounts_page_summarizes_login_completion_with_invalid_accounts() -> No
         tasks.shutdown("test cleanup")
 
 
+<<<<<<< HEAD
+def test_accounts_page_open_account_requires_selection(monkeypatch) -> None:
+    _app()
+    services, logs, tasks, queries, ctx = _build_ctx()
+    page = AccountsPage(ctx)
+    modal_calls: list[tuple[str, str]] = []
+    try:
+        page._show_modal_message = lambda title, message, **kwargs: modal_calls.append((title, message)) or True  # type: ignore[method-assign]
+        page.on_navigate_to()
+        assert _wait_until(lambda: page._table.rowCount() == 2)
+
+        page._open_selected_accounts()
+
+        assert services.accounts.profile_open_calls == []
+        assert page._status_label.text() == "No se selecciono ninguna cuenta. Selecciona una cuenta para abrir."
+        assert modal_calls == [("Informacion", "No se selecciono ninguna cuenta. Selecciona una cuenta para abrir.")]
+    finally:
+        queries.shutdown()
+        tasks.shutdown("test cleanup")
+
+
+def test_accounts_page_open_account_uses_selected_rows() -> None:
+    _app()
+    services, logs, tasks, queries, ctx = _build_ctx()
+    page = AccountsPage(ctx)
+    try:
+        page.on_navigate_to()
+        assert _wait_until(lambda: page._table.rowCount() == 2)
+
+        selection_model = page._table.selectionModel()
+        assert selection_model is not None
+        username_row = next(
+            (
+                row
+                for row in range(page._table.rowCount())
+                if page._table.item(row, 0) is not None and page._table.item(row, 0).text() == "@uno"
+            ),
+            -1,
+        )
+        assert username_row >= 0
+        target_index = page._table.model().index(username_row, 0)
+        selection_model.select(target_index, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        _pump_events()
+
+        page._open_selected_accounts()
+
+        assert _wait_until(
+            lambda: len(services.accounts.profile_open_calls) == 1
+            and not tasks.is_running(page.OPEN_ACCOUNT_TASK)
+        )
+        assert services.accounts.profile_open_calls[0] == {
+            "alias": "default",
+            "usernames": ["uno"],
+            "action_label": "Abrir cuenta",
+            "max_minutes": 0,
+        }
+    finally:
+        queries.shutdown()
+        tasks.shutdown("test cleanup")
+
+
+=======
+>>>>>>> origin/main
 def test_accounts_actions_manual_username_flow_updates_internal_record() -> None:
     _app()
     services, logs, tasks, queries, ctx = _build_ctx()
@@ -914,7 +1211,11 @@ def test_account_selection_dialog_blocks_non_operable_manual_accounts() -> None:
 
         dialog._mark_all()
 
+<<<<<<< HEAD
+        assert "La cuenta no esta conectada." in disabled_items[0].text()
+=======
         assert "Necesitas re-login en esta cuenta" in disabled_items[0].text()
+>>>>>>> origin/main
         assert enabled_items[0].checkState() == Qt.Checked
         assert disabled_items[0].checkState() == Qt.Unchecked
     finally:
@@ -968,6 +1269,11 @@ def test_accounts_actions_view_content_streams_logs_and_stops_cleanly() -> None:
         page.on_navigate_to()
         assert _wait_until(lambda: len(page._records) == 2)
         page._show_accounts_module("view_content")
+<<<<<<< HEAD
+        page._likes_target.setValue(2)
+        page._follows_target.setValue(1)
+=======
+>>>>>>> origin/main
 
         page._open_account_selector = lambda **kwargs: {  # type: ignore[method-assign]
             "alias": "matias",
@@ -981,6 +1287,11 @@ def test_accounts_actions_view_content_streams_logs_and_stops_cleanly() -> None:
         assert _wait_until(lambda: not tasks.is_running("accounts_view_content"), timeout=2.5)
         assert _wait_until(lambda: page._view_stop_button.isEnabled() is False)
         assert services.accounts.reels_runs[0]["alias"] == "matias"
+<<<<<<< HEAD
+        assert services.accounts.reels_runs[0]["likes_target"] == 2
+        assert services.accounts.reels_runs[0]["follows_target"] == 1
+=======
+>>>>>>> origin/main
         assert _wait_until(lambda: "Resumen @matias_a" in page._view_log.toPlainText(), timeout=2.5)
     finally:
         queries.shutdown()

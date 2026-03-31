@@ -126,6 +126,50 @@ def test_inbox_storage_resolve_local_outbound_without_sent_timestamp_keeps_origi
         storage.shutdown()
 
 
+<<<<<<< HEAD
+def test_inbox_storage_trim_global_threads_does_not_drop_threads_with_pending_work(tmp_path: Path) -> None:
+    original_limit = InboxStorage._MAX_ACTIVE_THREADS
+    InboxStorage._MAX_ACTIVE_THREADS = 3
+    storage = InboxStorage(tmp_path)
+    try:
+        storage.upsert_threads(
+            [
+                _thread_row("acc1", "thread-old", timestamp=800.0, direction="inbound", unread_count=1),
+                _thread_row("acc1", "thread-pending", timestamp=10.0, direction="inbound", unread_count=1),
+                _thread_row("acc1", "thread-very-old", timestamp=1.0, direction="inbound", unread_count=1),
+            ]
+        )
+        pending_key = "acc1:thread-pending"
+        storage.update_thread_state(pending_key, {"sender_status": "sending", "sender_error": ""})
+
+        storage.upsert_threads(
+            [
+                _thread_row("acc1", "thread-new-1", timestamp=1000.0, direction="inbound", unread_count=1),
+                _thread_row("acc1", "thread-new-2", timestamp=900.0, direction="inbound", unread_count=1),
+            ]
+        )
+
+        thread_keys = {row["thread_key"] for row in storage.get_threads("all")}
+        assert thread_keys == {
+            "acc1:thread-new-1",
+            "acc1:thread-new-2",
+            "acc1:thread-pending",
+        }
+        assert storage.get_thread(pending_key) is not None
+        storage.update_thread_state(pending_key, {"sender_status": "failed", "sender_error": "quota"})
+        refreshed = storage.get_thread(pending_key)
+        assert refreshed is not None
+        assert refreshed["sender_status"] == "failed"
+
+        fk_issues = storage._conn.execute("PRAGMA foreign_key_check").fetchall()
+        assert fk_issues == []
+    finally:
+        storage.shutdown()
+        InboxStorage._MAX_ACTIVE_THREADS = original_limit
+
+
+=======
+>>>>>>> origin/main
 def test_inbox_storage_persists_outbound_source_by_job_type(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -198,6 +242,54 @@ def test_inbox_storage_reconciles_synthetic_confirmation_with_remote_message_wit
                 storage.shutdown()
 
 
+<<<<<<< HEAD
+def test_enqueue_send_queue_job_reuses_dedupe_without_losing_metadata_or_local_message_id(tmp_path: Path) -> None:
+    storage = InboxStorage(tmp_path)
+    try:
+        thread_key = "acc1:thread-a"
+        storage.upsert_threads([_thread_row("acc1", "thread-a", timestamp=100.0)])
+
+        first = storage.enqueue_send_queue_job(
+            "auto_reply",
+            thread_key=thread_key,
+            account_id="acc1",
+            payload={
+                "thread_key": thread_key,
+                "text": "hola",
+                "local_message_id": "local-1",
+                "post_send_thread_updates": {"stage_id": "stage_2"},
+            },
+            dedupe_key="auto_reply:acc1:thread-a:text:in-1",
+        )
+        reused = storage.enqueue_send_queue_job(
+            "auto_reply",
+            thread_key=thread_key,
+            account_id="acc1",
+            payload={
+                "thread_key": thread_key,
+                "text": "hola",
+                "local_message_id": "local-2",
+                "post_send_state_updates": {"last_inbound_id_seen": "in-1"},
+            },
+            dedupe_key="auto_reply:acc1:thread-a:text:in-1",
+        )
+        job = storage.get_send_queue_job(int(first.get("job_id") or 0))
+
+        assert first["created"] is True
+        assert reused["reused"] is True
+        assert job is not None
+        assert job["dedupe_key"] == "auto_reply:acc1:thread-a:text:in-1"
+        assert job["payload"]["local_message_id"] == "local-1"
+        assert job["payload"]["post_send_thread_updates"] == {"stage_id": "stage_2"}
+        assert job["payload"]["post_send_state_updates"] == {"last_inbound_id_seen": "in-1"}
+        assert job["payload"]["dedupe_key"] == "auto_reply:acc1:thread-a:text:in-1"
+        assert job["payload"]["job_type"] == "auto_reply"
+    finally:
+        storage.shutdown()
+
+
+=======
+>>>>>>> origin/main
 def test_inbox_storage_keeps_synced_activity_even_if_it_predates_session_start(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:

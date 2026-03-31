@@ -1,46 +1,61 @@
-# InstaCRM
+﻿# Instagram Automation Tool
 
-Snapshot base del proyecto para desarrollo local, sin cuentas, sesiones ni datos personales.
+Sistema de automatizaciÃ³n para Instagram con gestiÃ³n de cuentas, leads, mensajerÃ­a y auto-responder con IA.
 
-## Inicio rapido
+## ðŸš€ Inicio RÃ¡pido
 
 ```powershell
-python -m venv .venv
+# 1. Activar entorno virtual
 .\.venv\Scripts\Activate.ps1
+
+# 2. Instalar dependencias
 pip install -r requirements.txt
-python run_owner_dev.py
+
+# Solo para generar el ejecutable en tu PC (no usar en Railway)
+pip install -r requirements_build.txt
+
+# 3. Ejecutar aplicaciÃ³n
+python app.py
 ```
 
-`run_owner_dev.py` inicia la version owner para desarrollo y evita el bloqueo de licencia de distribucion. La app crea sus carpetas locales (`storage/`, `runtime/`, `sessions/`, `data/`) al arrancar.
+## ðŸ“ Estructura del Proyecto
 
-## Configuracion opcional
+- **Core Modules (raÃ­z):** MÃ³dulos principales de la aplicaciÃ³n
+- **src/:** CÃ³digo fuente organizado y refactorizado
+- **backend/:** Backend FastAPI para sistema de licencias
+- **scripts/:** Scripts de utilidad y herramientas
+- **docs/:** DocumentaciÃ³n completa del proyecto
+- **_archive/:** Archivos obsoletos (no usar)
 
-- `.env.example` incluye variables opcionales como `OPENAI_API_KEY`.
-- `app/config.example.json` muestra el formato de configuracion local de Supabase si mas adelante queres conectar licencias o telemetria.
-- No se incluyen cuentas, sesiones, logs ni claves reales en este repo.
+## ðŸ“š DocumentaciÃ³n
 
-## Archivos locales que no se deben commitear
+Ver la carpeta `docs/` para documentaciÃ³n completa:
 
-- `.env.local`
-- `app/config.json`
-- `.session_key`
-- `storage/`
-- `data/`
-- `sessions/`
-- `runtime/`
+- **docs/ESTRUCTURA.md** - Estructura detallada del proyecto
+- **docs/LICENCIAS.md** - Sistema de licencias
+- **docs/OPTIN.md** - Modo opt-in
+- **docs/MAC_SETUP.md** - ConfiguraciÃ³n para macOS
 
-## Estructura principal
+## ðŸ”§ ConfiguraciÃ³n
 
-- `gui/` interfaz de escritorio
-- `application/` servicios de aplicacion
-- `core/` almacenamiento y flujos legacy
-- `src/` runtime y modulos refactorizados
-- `backend/` backend FastAPI
-- `tests/` pruebas automatizadas
+1. Copiar `.env.example` a `.env`
+2. Configurar variables de entorno necesarias
+3. Ver `docs/` para guÃ­as detalladas
 
-## Documentacion
+## ðŸŽ¯ Funcionalidades
 
-- `docs/ESTRUCTURA.md`
-- `docs/LICENCIAS.md`
-- `docs/OPTIN.md`
-- `docs/MAC_SETUP.md`
+- âœ… GestiÃ³n de mÃºltiples cuentas de Instagram
+- âœ… GestiÃ³n de leads y contactos
+- âœ… EnvÃ­o de mensajes con rotaciÃ³n de cuentas
+- âœ… Auto-responder con OpenAI
+- âœ… Sistema de licencias
+- âœ… IntegraciÃ³n con WhatsApp
+- âœ… Modo opt-in con navegador
+
+## ðŸ“ Licencia
+
+Ver `docs/LICENCIAS.md` para informaciÃ³n sobre el sistema de licencias.
+
+---
+
+**Ãšltima actualizaciÃ³n:** 2025-12-24

@@ -23,6 +23,24 @@ _GLOBAL_CONTACTS_KEY = "global_contacted_leads"
 logger = logging.getLogger(__name__)
 
 
+<<<<<<< HEAD
+def refresh_runtime_paths(base: Path | None = None) -> dict[str, Path]:
+    global _STORAGE, _FILE
+
+    resolved_base = Path(base) if base is not None else Path(__file__).resolve().parent.parent.parent
+    _STORAGE = storage_root(resolved_base)
+    _FILE = _STORAGE / "lead_status.json"
+    with _LOCK:
+        _PREFILTER_SNAPSHOT_CACHE.clear()
+    return {
+        "storage_root": _STORAGE,
+        "lead_status": _FILE,
+        "sent_log": _STORAGE / "sent_log.jsonl",
+    }
+
+
+=======
+>>>>>>> origin/main
 def _normalize_lead(value: Any) -> str:
     return str(value or "").strip().lstrip("@").lower()
 
@@ -150,11 +168,20 @@ def _build_global_contact_entry(
     return entry
 
 
+<<<<<<< HEAD
+def _sent_log_contact_entry(record: Any) -> Optional[tuple[str, Dict[str, Any]]]:
+=======
 def _sent_log_confirmed_contact_entry(record: Any) -> Optional[tuple[str, Dict[str, Any]]]:
+>>>>>>> origin/main
     if not isinstance(record, dict):
         return None
     if bool(record.get("cancelled")) or bool(record.get("skipped")) or record.get("skip_reason"):
         return None
+<<<<<<< HEAD
+    if not bool(record.get("ok")):
+        return None
+    campaign_alias = _normalize_alias(record.get("campaign_alias"))
+=======
     if not bool(record.get("ok")) or bool(record.get("sent_unverified")):
         return None
     source_engine = str(record.get("source_engine") or "").strip().lower()
@@ -163,6 +190,7 @@ def _sent_log_confirmed_contact_entry(record: Any) -> Optional[tuple[str, Dict[s
         return None
     if not source_engine and not campaign_alias:
         return None
+>>>>>>> origin/main
     lead = _normalize_lead(record.get("to"))
     if not lead:
         return None
@@ -236,7 +264,11 @@ def _bootstrap_global_contacts_unlocked(payload: Dict[str, Any]) -> bool:
     sent_log_path = _STORAGE / "sent_log.jsonl"
     if sent_log_path.exists():
         for record in load_jsonl_entries(sent_log_path, label="dm_campaign.lead_status.sent_log_bootstrap"):
+<<<<<<< HEAD
+            parsed = _sent_log_contact_entry(record)
+=======
             parsed = _sent_log_confirmed_contact_entry(record)
+>>>>>>> origin/main
             if parsed is None:
                 continue
             lead, entry = parsed
@@ -468,7 +500,11 @@ def get_prefilter_snapshot(alias: str) -> tuple[Dict[str, Dict[str, Any]], Dict[
                 if not isinstance(entry, dict):
                     continue
                 status = str(entry.get("status") or "").strip().lower()
+<<<<<<< HEAD
+                if status in {"pending", "sent", "skipped"}:
+=======
                 if status in {"sent", "skipped"}:
+>>>>>>> origin/main
                     alias_status_map[str(lead_key)] = dict(entry)
         global_contacts = payload.get(_GLOBAL_CONTACTS_KEY) or {}
         global_contact_map = {
@@ -502,8 +538,14 @@ def is_terminal_lead_status(lead: Any, *, alias: str = "") -> bool:
     return status in {"sent", "skipped"}
 
 
+<<<<<<< HEAD
+def mark_leads_pending(leads: Iterable[Any], *, alias: str = "", run_id: str = "") -> int:
+    normalized_alias = _normalize_alias(alias)
+    normalized_run_id = str(run_id or "").strip()
+=======
 def mark_leads_pending(leads: Iterable[Any], *, alias: str = "") -> int:
     normalized_alias = _normalize_alias(alias)
+>>>>>>> origin/main
     if not normalized_alias:
         return 0
     normalized_leads: list[str] = []
@@ -535,6 +577,14 @@ def mark_leads_pending(leads: Iterable[Any], *, alias: str = "") -> int:
             current["status"] = "pending"
             current["updated_at"] = now
             current["last_alias"] = normalized_alias
+<<<<<<< HEAD
+            current["pending_selected_at"] = now
+            if normalized_run_id:
+                current["pending_run_id"] = normalized_run_id
+            else:
+                current.pop("pending_run_id", None)
+=======
+>>>>>>> origin/main
             leads[normalized_lead] = current
             updated = True
             marked += 1

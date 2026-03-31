@@ -67,7 +67,7 @@ class AliasLifecycleService:
         active_alias = str(self.state_store.get_active_alias() or "").strip()
         if active_alias:
             active_alias_id = normalize_alias_id(active_alias, default="")
-            if active_alias_id and active_alias_id not in registered_alias_ids:
+            if active_alias_id and active_alias_id != DEFAULT_ALIAS_ID and active_alias_id not in registered_alias_ids:
                 issues.append(
                     {
                         "type": "invalid_active_alias",
@@ -207,6 +207,7 @@ class AliasLifecycleService:
                 for item in self.accounts.rebuild_alias_registry()
                 if isinstance(item, dict) and str(item.get("alias_id") or "").strip()
             }
+            valid_alias_ids.add(DEFAULT_ALIAS_ID)
             if active_alias_id and active_alias_id not in valid_alias_ids:
                 self.set_active_alias(DEFAULT_ALIAS_DISPLAY_NAME)
                 active_reset = True

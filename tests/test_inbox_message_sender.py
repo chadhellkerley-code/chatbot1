@@ -40,7 +40,24 @@ class _FakeLocator:
 
 
 class _FakeKeyboard:
+<<<<<<< HEAD
+    def __init__(self) -> None:
+        self.pressed: list[str] = []
+        self.inserted: list[str] = []
+
     async def press(self, _key: str) -> None:
+        self.pressed.append(str(_key))
+        return None
+
+    async def insert_text(self, text: str) -> None:
+        self.inserted.append(str(text))
+        return None
+
+    async def type(self, text: str) -> None:
+        self.inserted.append(str(text))
+=======
+    async def press(self, _key: str) -> None:
+>>>>>>> origin/main
         return None
 
 
@@ -48,6 +65,41 @@ class _FakeComposer:
     def __init__(self) -> None:
         self.filled: list[str] = []
         self.pressed: list[str] = []
+<<<<<<< HEAD
+        self.clicked = 0
+        self.focused = 0
+        self.fail_click = False
+        self.fail_fill = False
+        self.fail_press = False
+
+    async def click(self, *args, **kwargs) -> None:
+        del args, kwargs
+        self.clicked += 1
+        if self.fail_click:
+            raise RuntimeError("click blocked")
+        return None
+
+    async def fill(self, text: str, *args, **kwargs) -> None:
+        del args, kwargs
+        if self.fail_fill:
+            raise RuntimeError("fill blocked")
+        self.filled.append(str(text))
+
+    async def press(self, key: str, *args, **kwargs) -> None:
+        del args, kwargs
+        if self.fail_press:
+            raise RuntimeError("press blocked")
+        self.pressed.append(str(key))
+
+    async def focus(self, *args, **kwargs) -> None:
+        del args, kwargs
+        self.focused += 1
+
+    async def scroll_into_view_if_needed(self, *args, **kwargs) -> None:
+        del args, kwargs
+        return None
+
+=======
 
     async def click(self) -> None:
         return None
@@ -58,6 +110,7 @@ class _FakeComposer:
     async def press(self, key: str) -> None:
         self.pressed.append(str(key))
 
+>>>>>>> origin/main
 
 class _FakePage:
     def __init__(self, sequences: dict[str, list[list[bool]]], *, url: str = "https://www.instagram.com/direct/t/123/") -> None:
@@ -77,7 +130,12 @@ class _FakeRuntime:
     def __init__(self, page: _FakePage) -> None:
         self._page = page
 
+<<<<<<< HEAD
+    def run_async(self, coro, *, timeout=None):
+        del timeout
+=======
     def run_async(self, coro):
+>>>>>>> origin/main
         return asyncio.run(coro)
 
     def open_page(self, _account):
@@ -244,6 +302,54 @@ def test_task_direct_client_reconciles_send_via_thread_read_after_refresh(monkey
     assert call_order == ["confirm", "refresh", "confirm", "thread_read"]
 
 
+<<<<<<< HEAD
+def test_task_direct_client_send_text_with_ack_uses_keyboard_and_button_fallbacks(monkeypatch) -> None:
+    page = _FakePage({})
+    runtime = _FakeRuntime(page)
+    client = TaskDirectClient(
+        runtime,
+        {"username": "matidiazlife", "messages_per_account": 20},
+        thread_id="123",
+        thread_href="https://www.instagram.com/direct/t/123/",
+    )
+    composer = _FakeComposer()
+    composer.fail_fill = True
+    composer.fail_press = True
+
+    monkeypatch.setattr(
+        "src.inbox.message_sender.can_send_message_for_account",
+        lambda **_kwargs: (True, 0, 20),
+    )
+    monkeypatch.setattr(client, "ensure_thread_ready_strict", lambda *_args, **_kwargs: (True, "ok"))
+    monkeypatch.setattr(
+        client,
+        "get_outbound_baseline",
+        lambda *_args, **_kwargs: {"ok": True, "item_id": "", "timestamp": None, "reason": "baseline_empty"},
+    )
+
+    async def _fake_wait_for_visible(*_args, **_kwargs):
+        return composer
+
+    async def _fake_find_button(*_args, **_kwargs):
+        return composer
+
+    monkeypatch.setattr("src.inbox.message_sender._wait_for_visible_locator_async", _fake_wait_for_visible)
+    monkeypatch.setattr("src.inbox.message_sender._find_visible_locator_async", _fake_find_button)
+    monkeypatch.setattr(
+        client,
+        "confirm_new_outbound_after_baseline",
+        lambda *_args, **_kwargs: {"ok": True, "item_id": "msg-1", "reason": "dom_confirmed"},
+    )
+
+    result = client.send_text_with_ack("123", "hola")
+
+    assert result == {"ok": True, "item_id": "msg-1", "reason": "dom_confirmed"}
+    assert page.keyboard.inserted == ["hola"]
+    assert composer.focused >= 1
+
+
+=======
+>>>>>>> origin/main
 def test_send_pack_messages_aborts_before_opening_client_when_quota_cannot_cover_pack(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.inbox.message_sender.can_send_message_for_account",

@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+<<<<<<< HEAD
+from datetime import datetime
+=======
+>>>>>>> origin/main
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -221,6 +225,30 @@ def test_inbox_runtime_status_invalidates_stale_alias_without_active_accounts(tm
         store.shutdown()
 
 
+<<<<<<< HEAD
+def test_inbox_runtime_list_alias_accounts_excludes_usage_deactivated_accounts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.runtime.inbox_automation_runtime.accounts_module.list_all",
+        lambda: [
+            {"username": "acc1", "alias": "ventas", "active": True, "usage_state": "active"},
+            {"username": "acc2", "alias": "ventas", "active": True, "usage_state": "deactivated"},
+            {"username": "acc3", "alias": "soporte", "active": True, "usage_state": "active"},
+        ],
+    )
+
+    runtime = InboxAutomationRuntime(
+        store=SimpleNamespace(),
+        sender=SimpleNamespace(),
+        ensure_backend_started=lambda: None,
+    )
+
+    rows = runtime.list_alias_accounts("ventas")
+
+    assert [str(row.get("username") or "") for row in rows] == ["acc1"]
+
+
+=======
+>>>>>>> origin/main
 def test_manual_takeover_cancels_queued_auto_jobs(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -422,6 +450,231 @@ def test_manual_takeover_cancels_processing_auto_job_before_send(tmp_path: Path,
         store.shutdown()
 
 
+<<<<<<< HEAD
+def test_sender_persists_last_send_attempt_into_runtime_alias_state(tmp_path: Path) -> None:
+    class _FakeBrowserPool:
+        def shutdown(self) -> None:
+            return None
+
+        def send_text(self, _thread, _text):
+            return {"ok": True, "item_id": "msg-1"}
+
+    store = ConversationStore(tmp_path)
+    try:
+        store.upsert_threads(
+            [
+                {
+                    "thread_key": "acc1:thread-a",
+                    "thread_id": "thread-a",
+                    "account_id": "acc1",
+                    "alias_id": "ventas",
+                    "account_alias": "ventas",
+                    "recipient_username": "cliente_a",
+                    "display_name": "Cliente A",
+                    "owner": "auto",
+                    "bucket": "all",
+                    "status": "open",
+                    "stage_id": "initial",
+                    "last_message_text": "Hola",
+                    "last_message_timestamp": 120.0,
+                    "last_message_direction": "inbound",
+                    "unread_count": 1,
+                }
+            ]
+        )
+        store.upsert_runtime_alias_state("ventas", {"is_running": True})
+        local = store.append_local_outbound_message("acc1:thread-a", "respuesta", source="auto")
+        assert local is not None
+        job_id = store.create_send_queue_job(
+            "auto_reply",
+            thread_key="acc1:thread-a",
+            account_id="acc1",
+            payload={
+                "thread_key": "acc1:thread-a",
+                "text": "respuesta",
+                "local_message_id": str(local["message_id"]),
+            },
+            dedupe_key="auto:acc1:thread-a:last_attempt",
+        )
+        sender = ConversationSender(store, _FakeBrowserPool(), notifier=lambda **_kwargs: None)
+
+        sender._handle_send_message(
+            {
+                "job_id": job_id,
+                "thread_key": "acc1:thread-a",
+                "text": "respuesta",
+                "local_message_id": str(local["message_id"]),
+                "job_type": "auto_reply",
+            }
+        )
+
+        state = store.get_runtime_alias_state("ventas")
+        assert state.get("last_send_attempt_account_id") == "acc1"
+        assert state.get("last_send_attempt_thread_key") == "acc1:thread-a"
+        assert int(state.get("last_send_attempt_job_id") or 0) == job_id
+        assert state.get("last_send_attempt_job_type") == "auto_reply"
+        assert state.get("last_send_attempt_outcome") == "success"
+        assert state.get("last_send_attempt_reason_code") == "success"
+        assert isinstance(state.get("last_send_attempt_at"), (int, float))
+        assert float(state.get("last_send_attempt_at") or 0) > 0
+
+        assert state.get("last_send_outcome") == "sent"
+        assert state.get("last_send_reason_code") == "success"
+        assert state.get("last_send_reason") == "success"
+        assert state.get("last_send_account_id") == "acc1"
+        assert state.get("last_send_thread_key") == "acc1:thread-a"
+        assert int(state.get("last_send_job_id") or 0) == job_id
+        assert state.get("last_send_job_type") == "auto_reply"
+        assert isinstance(state.get("last_send_at"), (int, float))
+        assert float(state.get("last_send_at") or 0) > 0
+    finally:
+        store.shutdown()
+
+
+def test_sender_persists_last_send_failed_outcome_into_runtime_alias_state(tmp_path: Path) -> None:
+    class _FakeBrowserPool:
+        def shutdown(self) -> None:
+            return None
+
+        def send_text(self, _thread, _text):
+            return {"ok": False, "reason": "composer_not_found"}
+
+    store = ConversationStore(tmp_path)
+    try:
+        store.upsert_threads(
+            [
+                {
+                    "thread_key": "acc1:thread-a",
+                    "thread_id": "thread-a",
+                    "account_id": "acc1",
+                    "alias_id": "ventas",
+                    "account_alias": "ventas",
+                    "recipient_username": "cliente_a",
+                    "display_name": "Cliente A",
+                    "owner": "auto",
+                    "bucket": "all",
+                    "status": "open",
+                    "stage_id": "initial",
+                    "last_message_text": "Hola",
+                    "last_message_timestamp": 120.0,
+                    "last_message_direction": "inbound",
+                    "unread_count": 1,
+                }
+            ]
+        )
+        store.upsert_runtime_alias_state("ventas", {"is_running": True})
+        local = store.append_local_outbound_message("acc1:thread-a", "respuesta", source="auto")
+        assert local is not None
+        job_id = store.create_send_queue_job(
+            "auto_reply",
+            thread_key="acc1:thread-a",
+            account_id="acc1",
+            payload={
+                "thread_key": "acc1:thread-a",
+                "text": "respuesta",
+                "local_message_id": str(local["message_id"]),
+            },
+            dedupe_key="auto:acc1:thread-a:last_attempt",
+        )
+        sender = ConversationSender(store, _FakeBrowserPool(), notifier=lambda **_kwargs: None)
+
+        sender._handle_send_message(
+            {
+                "job_id": job_id,
+                "thread_key": "acc1:thread-a",
+                "text": "respuesta",
+                "local_message_id": str(local["message_id"]),
+                "job_type": "auto_reply",
+            }
+        )
+
+        state = store.get_runtime_alias_state("ventas")
+        assert state.get("last_send_outcome") == "failed"
+        assert state.get("last_send_reason_code") == "composer_not_found"
+        assert state.get("last_send_reason") == "composer_not_found"
+        assert state.get("last_send_account_id") == "acc1"
+        assert state.get("last_send_thread_key") == "acc1:thread-a"
+        assert int(state.get("last_send_job_id") or 0) == job_id
+        assert state.get("last_send_job_type") == "auto_reply"
+        assert isinstance(state.get("last_send_at"), (int, float))
+        assert float(state.get("last_send_at") or 0) > 0
+    finally:
+        store.shutdown()
+
+
+def test_sender_persists_last_send_cancelled_outcome_into_runtime_alias_state(tmp_path: Path) -> None:
+    class _FakeBrowserPool:
+        def shutdown(self) -> None:
+            return None
+
+        def send_text(self, _thread, _text):
+            raise AssertionError("send_text should not be called for cancelled jobs")
+
+    store = ConversationStore(tmp_path)
+    try:
+        store.upsert_threads(
+            [
+                {
+                    "thread_key": "acc1:thread-a",
+                    "thread_id": "thread-a",
+                    "account_id": "acc1",
+                    "alias_id": "ventas",
+                    "account_alias": "ventas",
+                    "recipient_username": "cliente_a",
+                    "display_name": "Cliente A",
+                    "owner": "auto",
+                    "bucket": "all",
+                    "status": "open",
+                    "stage_id": "initial",
+                    "last_message_text": "Hola",
+                    "last_message_timestamp": 120.0,
+                    "last_message_direction": "inbound",
+                    "unread_count": 1,
+                }
+            ]
+        )
+        store.upsert_runtime_alias_state("ventas", {"is_running": False})
+        local = store.append_local_outbound_message("acc1:thread-a", "respuesta", source="auto")
+        assert local is not None
+        job_id = store.create_send_queue_job(
+            "auto_reply",
+            thread_key="acc1:thread-a",
+            account_id="acc1",
+            payload={
+                "thread_key": "acc1:thread-a",
+                "text": "respuesta",
+                "local_message_id": str(local["message_id"]),
+            },
+            dedupe_key="auto:acc1:thread-a:last_attempt",
+        )
+        sender = ConversationSender(store, _FakeBrowserPool(), notifier=lambda **_kwargs: None)
+
+        sender._handle_send_message(
+            {
+                "job_id": job_id,
+                "thread_key": "acc1:thread-a",
+                "text": "respuesta",
+                "local_message_id": str(local["message_id"]),
+                "job_type": "auto_reply",
+            }
+        )
+
+        state = store.get_runtime_alias_state("ventas")
+        assert state.get("last_send_outcome") == "cancelled"
+        assert state.get("last_send_reason_code") == "job_cancelled_by_runtime_stop"
+        assert state.get("last_send_reason") == "runtime_inactive"
+        assert state.get("last_send_account_id") == "acc1"
+        assert state.get("last_send_thread_key") == "acc1:thread-a"
+        assert int(state.get("last_send_job_id") or 0) == job_id
+        assert state.get("last_send_job_type") == "auto_reply"
+        assert isinstance(state.get("last_send_at"), (int, float))
+        assert float(state.get("last_send_at") or 0) > 0
+    finally:
+        store.shutdown()
+
+
+=======
+>>>>>>> origin/main
 def test_manual_takeover_keeps_manual_thread_and_cancels_auto_jobs(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -1334,6 +1587,198 @@ def test_thread_events_record_queued_then_sent_auto_reply_without_legacy_duplica
         store.shutdown()
 
 
+<<<<<<< HEAD
+def test_runtime_persists_evaluation_and_enqueue_trace_per_thread(tmp_path: Path, monkeypatch) -> None:
+    class _FakeQueueSender:
+        def __init__(self) -> None:
+            self.enqueue_message_calls: list[dict[str, object]] = []
+
+        def enqueue_message_job(self, thread_key, text, *, job_type, dedupe_key, metadata):
+            self.enqueue_message_calls.append(
+                {
+                    "thread_key": thread_key,
+                    "text": text,
+                    "job_type": job_type,
+                    "dedupe_key": dedupe_key,
+                    "metadata": dict(metadata or {}),
+                }
+            )
+            return {
+                "ok": True,
+                "job_id": 41,
+                "created": True,
+                "reused": False,
+                "dedupe_key": str(dedupe_key or "").strip(),
+                "state": "queued",
+                "local_message_id": "queued-local-1",
+            }
+
+    store = ConversationStore(tmp_path)
+    try:
+        _seed_runtime_thread(store)
+        sender = _FakeQueueSender()
+        runtime = InboxAutomationRuntime(store=store, sender=sender, ensure_backend_started=lambda: None)
+        account = {"username": "acc1", "alias": "ventas"}
+
+        monkeypatch.setattr(
+            "src.runtime.inbox_automation_runtime.sync_account_threads_from_storage",
+            lambda *_args, **_kwargs: [],
+        )
+        runtime._store.prepare_account_session = lambda *_args, **_kwargs: None
+        runtime._store.apply_endpoint_threads = lambda *_args, **_kwargs: ["acc1:thread-a"]
+        runtime._connector.start = lambda *_args, **_kwargs: None
+        runtime._connector.is_ready = lambda *_args, **_kwargs: True
+        runtime._connector.heartbeat = lambda *_args, **_kwargs: None
+        monkeypatch.setattr(
+            runtime._engine,
+            "evaluate_thread",
+            lambda *, account, thread, mode: {
+                "actions": [{"type": "send_text", "job_type": "auto_reply", "text": "respuesta automatica"}],
+                "thread_updates": {},
+                "state_updates": {},
+                "decision": {"decision": "reply", "reason": "keyword_match"},
+            },
+        )
+
+        result = runtime.process_account_turn(account, mode="auto")
+        events = store.list_thread_events("acc1:thread-a", limit=10)
+        started_event = next(event for event in events if event["event_type"] == "automation_evaluate_started")
+        completed_event = next(event for event in events if event["event_type"] == "automation_evaluate_completed")
+        enqueue_attempt = next(event for event in events if event["event_type"] == "automation_enqueue_attempt")
+        enqueue_result = next(event for event in events if event["event_type"] == "automation_enqueue_result")
+
+        assert result["queued_jobs"] == 1
+        assert sender.enqueue_message_calls[0]["job_type"] == "auto_reply"
+        assert sender.enqueue_message_calls[0]["dedupe_key"].startswith("auto_reply:acc1:thread-a:")
+        assert started_event["payload"] == {
+            "thread_id": "thread-a",
+            "stage_id": "initial",
+            "owner": "auto",
+            "bucket": "all",
+        }
+        assert completed_event["payload"] == {
+            "decision": "reply",
+            "reason": "keyword_match",
+            "actions_count": 1,
+            "action_types": ["send_text"],
+        }
+        assert enqueue_attempt["payload"]["action_type"] == "send_text"
+        assert enqueue_result["payload"]["attempted"] is True
+        assert enqueue_result["payload"]["success"] is True
+        assert enqueue_result["payload"]["job_id"] == 41
+        assert enqueue_result["payload"]["created"] is True
+        assert enqueue_result["payload"]["reused"] is False
+    finally:
+        store.shutdown()
+
+
+def test_runtime_does_not_persist_pending_reply_when_enqueue_returns_no_job(tmp_path: Path, monkeypatch) -> None:
+    class _RejectingQueueSender:
+        def enqueue_message_job(self, thread_key, text, *, job_type, dedupe_key, metadata):
+            return {
+                "ok": False,
+                "job_id": 0,
+                "created": False,
+                "reused": False,
+                "dedupe_key": str(dedupe_key or "").strip(),
+                "state": "",
+            }
+
+    store = ConversationStore(tmp_path)
+    try:
+        _seed_runtime_thread(store)
+        runtime = InboxAutomationRuntime(store=store, sender=_RejectingQueueSender(), ensure_backend_started=lambda: None)
+        account = {"username": "acc1", "alias": "ventas"}
+
+        monkeypatch.setattr(
+            "src.runtime.inbox_automation_runtime.sync_account_threads_from_storage",
+            lambda *_args, **_kwargs: [],
+        )
+        runtime._store.prepare_account_session = lambda *_args, **_kwargs: None
+        runtime._store.apply_endpoint_threads = lambda *_args, **_kwargs: ["acc1:thread-a"]
+        runtime._connector.start = lambda *_args, **_kwargs: None
+        runtime._connector.is_ready = lambda *_args, **_kwargs: True
+        runtime._connector.heartbeat = lambda *_args, **_kwargs: None
+
+        result = runtime.process_account_turn(account, mode="auto")
+        thread = store.get_thread("acc1:thread-a") or {}
+
+        assert result["queued_jobs"] == 0
+        assert bool(thread.get("pending_reply")) is False
+        assert thread.get("pending_inbound_id") in {None, ""}
+        assert store.list_send_queue_jobs(states=["queued", "processing"], limit=10) == []
+    finally:
+        store.shutdown()
+
+
+def test_runtime_defers_pack_enqueue_when_remaining_quota_cannot_cover_pack(tmp_path: Path, monkeypatch) -> None:
+    class _UnexpectedPackQueueSender:
+        def enqueue_pack_job(self, *_args, **_kwargs):
+            raise AssertionError("pack should not be enqueued when remaining quota cannot cover the full pack")
+
+    store = ConversationStore(tmp_path)
+    try:
+        _seed_runtime_thread(store)
+        runtime = InboxAutomationRuntime(store=store, sender=_UnexpectedPackQueueSender(), ensure_backend_started=lambda: None)
+        monkeypatch.setattr(
+            "src.runtime.inbox_automation_runtime.can_send_message_for_account",
+            lambda **_kwargs: (True, 5, 6),
+        )
+        monkeypatch.setattr(
+            "src.runtime.inbox_automation_runtime.datetime",
+            type(
+                "_FrozenDateTime",
+                (),
+                {
+                    "now": staticmethod(lambda tz=None: datetime(2026, 3, 27, 22, 15, 0, tzinfo=tz)),
+                },
+            ),
+        )
+
+        result = runtime._apply_actions(
+            account={"username": "acc1", "alias": "ventas", "messages_per_account": 6},
+            thread=store.get_thread("acc1:thread-a") or {},
+            actions=[
+                {
+                    "type": "send_pack",
+                    "job_type": "auto_reply",
+                    "pack_id": "pack-1",
+                    "pack_sendable_actions": 3,
+                    "latest_inbound_id": "in-1",
+                }
+            ],
+        )
+
+        thread = store.get_thread("acc1:thread-a") or {}
+        deferral = dict(thread.get("pack_quota_deferral") or {})
+        enqueue_result = next(
+            event
+            for event in store.list_thread_events("acc1:thread-a", limit=10)
+            if event["event_type"] == "automation_enqueue_result"
+        )
+
+        assert result["queued_jobs"] == 0
+        assert store.list_send_queue_jobs(states=["queued", "processing"], limit=10) == []
+        assert bool(thread.get("pending_reply")) is False
+        assert thread.get("pending_inbound_id") in {None, ""}
+        assert deferral["reason"] == "pack_quota_insufficient:5/6:need=3"
+        assert deferral["pack_id"] == "pack-1"
+        assert deferral["job_type"] == "auto_reply"
+        assert deferral["inbound_id"] == "in-1"
+        assert deferral["sendable_actions"] == 3
+        assert deferral["sent_today"] == 5
+        assert deferral["limit"] == 6
+        assert deferral["remaining"] == 1
+        assert deferral["retry_after_ts"] > deferral["deferred_at"]
+        assert enqueue_result["payload"]["attempted"] is False
+        assert enqueue_result["payload"]["success"] is False
+        assert enqueue_result["payload"]["reason"] == "pack_quota_insufficient:5/6:need=3"
+    finally:
+        store.shutdown()
+
+
+=======
+>>>>>>> origin/main
 def test_thread_events_record_queued_then_failed_auto_reply_without_legacy_duplicates(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("core.responder._record_message_sent", lambda *_args, **_kwargs: None)
     store = ConversationStore(tmp_path)
@@ -1436,6 +1881,45 @@ def test_runtime_does_not_enqueue_followup_for_qualified_manual_or_closed_thread
         store.shutdown()
 
 
+<<<<<<< HEAD
+def test_runtime_records_enqueue_trace_when_send_action_is_not_attempted(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path)
+    try:
+        _seed_runtime_thread(store)
+        runtime = InboxAutomationRuntime(store=store, sender=SimpleNamespace(), ensure_backend_started=lambda: None)
+        thread_key = "acc1:thread-a"
+        store.update_thread_record(
+            thread_key,
+            {
+                "owner": "manual",
+                "bucket": "qualified",
+                "status": "open",
+                "manual_lock": True,
+                "manual_assignee": "operator-1",
+            },
+        )
+
+        result = runtime._apply_actions(
+            account={"username": "acc1", "alias": "ventas"},
+            thread=store.get_thread(thread_key) or {},
+            actions=[{"type": "send_text", "job_type": "followup", "text": "seguimiento"}],
+        )
+
+        events = store.list_thread_events(thread_key, limit=10)
+        enqueue_result = next(event for event in events if event["event_type"] == "automation_enqueue_result")
+
+        assert result["queued_jobs"] == 0
+        assert not any(event["event_type"] == "automation_enqueue_attempt" for event in events)
+        assert enqueue_result["payload"]["action_type"] == "send_text"
+        assert enqueue_result["payload"]["attempted"] is False
+        assert enqueue_result["payload"]["success"] is False
+        assert enqueue_result["payload"]["reason"] == "followup_not_allowed"
+    finally:
+        store.shutdown()
+
+
+=======
+>>>>>>> origin/main
 def test_sender_cancels_followup_when_thread_becomes_qualified_before_send(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("core.responder._record_message_sent", lambda *_args, **_kwargs: None)
     store = ConversationStore(tmp_path)
@@ -1469,6 +1953,84 @@ def test_sender_cancels_followup_when_thread_becomes_qualified_before_send(tmp_p
         store.shutdown()
 
 
+<<<<<<< HEAD
+def test_sender_recovery_requeues_followup_pack_with_full_durable_payload(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path)
+    try:
+        _seed_runtime_thread(store)
+        thread_key = "acc1:thread-a"
+        dedupe_key = "followup:acc1:thread-a:pack:initial:level:0"
+        store.create_send_queue_job(
+            "followup",
+            thread_key=thread_key,
+            account_id="acc1",
+            payload={
+                "thread_key": thread_key,
+                "pack_id": "pack-1",
+                "job_type": "followup",
+                "post_send_thread_updates": {"stage_id": "initial", "followup_level": 1},
+                "post_send_state_updates": {"last_inbound_id_seen": "in-1"},
+            },
+            dedupe_key=dedupe_key,
+        )
+        sender = ConversationSender(store, _FakeDeliveryBrowserPool(), notifier=lambda **_kwargs: None)
+
+        sender._recover_jobs()
+        task = sender._queue.get_nowait()
+        thread = store.get_thread(thread_key)
+
+        assert task.task_type == "followup"
+        assert task.payload["pack_id"] == "pack-1"
+        assert task.payload["dedupe_key"] == dedupe_key
+        assert task.payload["post_send_thread_updates"] == {"stage_id": "initial", "followup_level": 1}
+        assert task.payload["post_send_state_updates"] == {"last_inbound_id_seen": "in-1"}
+        assert thread is not None
+        assert thread["sender_status"] == "queued"
+        assert thread["pack_status"] == "queued"
+        sender._queue.task_done()
+    finally:
+        store.shutdown()
+
+
+def test_cancel_send_queue_jobs_clears_stale_pack_queue_state_when_last_job_is_cancelled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("core.responder._list_packs", lambda: [{"id": "pack-1", "name": "Pack Uno"}])
+    store = ConversationStore(tmp_path)
+    try:
+        _seed_runtime_thread(store)
+        thread_key = "acc1:thread-a"
+        sender = ConversationSender(store, _FakeDeliveryBrowserPool(), notifier=lambda **_kwargs: None)
+
+        result = sender.enqueue_pack_job(
+            thread_key,
+            "pack-1",
+            job_type="followup",
+            dedupe_key="followup:acc1:thread-a:pack:initial:level:0",
+            metadata={"post_send_thread_updates": {"stage_id": "initial", "followup_level": 1}},
+        )
+        queued_before_cancel = store.get_thread(thread_key)
+        cancelled = store.cancel_send_queue_jobs(
+            thread_key=thread_key,
+            job_types=["followup"],
+            states=["queued"],
+            reason="manual_takeover",
+        )
+        thread = store.get_thread(thread_key)
+
+        assert result["ok"] is True
+        assert queued_before_cancel is not None
+        assert queued_before_cancel["sender_status"] == "queued"
+        assert queued_before_cancel["pack_status"] == "queued"
+        assert cancelled == 1
+        assert thread is not None
+        assert thread["sender_status"] == "ready"
+        assert thread.get("pack_status") in {None, ""}
+        assert thread.get("pack_error") in {None, ""}
+    finally:
+        store.shutdown()
+
+
+=======
+>>>>>>> origin/main
 def test_thread_events_record_pack_with_explicit_queue_and_send_names(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("core.responder._list_packs", lambda: [{"id": "pack-1", "name": "Pack Uno"}])
     monkeypatch.setattr("core.responder._flow_config_for_account", lambda _account_id: {})

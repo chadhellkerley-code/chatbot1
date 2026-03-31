@@ -299,13 +299,17 @@ class AutomationService:
     def _active_alias_records(self, alias: str) -> list[dict[str, Any]]:
         clean_alias = str(alias or "").strip().lower()
         rows: list[dict[str, Any]] = []
+        operational_resolver = getattr(accounts_module, "is_account_enabled_for_operation", None)
         for record in self._all_account_records():
             username = self._account_username(record.get("username"))
             if not username:
                 continue
             if self._account_alias(record.get("alias")).lower() != clean_alias:
                 continue
-            if not bool(record.get("active", True)):
+            if callable(operational_resolver):
+                if not bool(operational_resolver(record)):
+                    continue
+            elif not bool(record.get("active", True)):
                 continue
             rows.append(record)
         return rows
@@ -985,7 +989,7 @@ class AutomationService:
         return dict(responder_module._normalize_flow_config(raw_flow))
 
     def save_flow_config(self, alias: str, flow_config: dict[str, Any]) -> dict[str, Any]:
-        normalized = responder_module._normalize_flow_config(dict(flow_config or {}))
+        normalized = responder_module._validate_and_normalize_flow_config(dict(flow_config or {}))
         responder_module._set_prompt_entry(
             str(alias or "").strip(),
             {"flow_config": normalized},

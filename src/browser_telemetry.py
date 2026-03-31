@@ -13,6 +13,27 @@ _ALLOWED_STAGES = {
     "session_open_start",
     "session_open_end",
     "browser_open",
+<<<<<<< HEAD
+    "sender_job_received",
+    "page_attached",
+    "workspace_ready",
+    "inbox_ready",
+    "thread_open_start",
+    "thread_open",
+    "thread_open_ok",
+    "composer_wait_start",
+    "composer_ready",
+    "type_start",
+    "typing_started",
+    "send_triggered",
+    "send_attempt",
+    "confirm_start",
+    "confirm_ok",
+    "timezone_resolved",
+    "send_success",
+    "send_fail",
+    "exact_fail_reason",
+=======
     "workspace_ready",
     "inbox_ready",
     "thread_open",
@@ -20,6 +41,7 @@ _ALLOWED_STAGES = {
     "send_attempt",
     "send_success",
     "send_fail",
+>>>>>>> origin/main
     "session_recovery",
 }
 

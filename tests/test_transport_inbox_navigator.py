@@ -23,6 +23,10 @@ class _SenderStub:
     def __init__(self, visible_sequence: list[object | None]) -> None:
         self._visible_sequence = list(visible_sequence)
         self._first_visible_calls = 0
+<<<<<<< HEAD
+        self.layout_calls = 0
+=======
+>>>>>>> origin/main
 
     async def _first_visible(self, page, selectors, *, max_scan_per_selector: int = 4):
         if self._first_visible_calls < len(self._visible_sequence):
@@ -41,6 +45,13 @@ class _SenderStub:
     def _remaining_ms(self, deadline: float, cap_ms: int) -> int:
         return cap_ms
 
+<<<<<<< HEAD
+    async def _ensure_campaign_desktop_layout(self, page) -> bool:
+        self.layout_calls += 1
+        return True
+
+=======
+>>>>>>> origin/main
 
 def test_wait_inbox_ready_retries_until_panel_is_visible() -> None:
     sender = _SenderStub([None, object()])
@@ -95,3 +106,7 @@ def test_ensure_inbox_surface_navigates_away_from_thread_page_before_search() ->
     assert ready is True
     assert page.goto_calls == [("https://www.instagram.com/direct/inbox/", "domcontentloaded", 45000)]
     assert events == [("INBOX_READY", {"ok": True, "url": "https://www.instagram.com/direct/inbox/"})]
+<<<<<<< HEAD
+    assert sender.layout_calls == 3
+=======
+>>>>>>> origin/main

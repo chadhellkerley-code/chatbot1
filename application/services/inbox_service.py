@@ -87,10 +87,18 @@ class InboxService:
             local_id = str(self._engine.send_message(clean_key, text) or "").strip()
             self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
             return local_id
+<<<<<<< HEAD
+        thread, takeover_applied = self._prepare_thread_for_manual_send(clean_key, thread)
+        if not isinstance(thread, dict):
+            if takeover_applied:
+                self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
+            return ""
+=======
         if not self._automation.manual_send_allowed(thread):
             return ""
         if str(thread.get("owner") or "").strip().lower() != "manual":
             self._automation.manual_takeover(clean_key, operator_id="inbox_ui")
+>>>>>>> origin/main
         local_id = str(self._engine._sender.queue_message(clean_key, text, job_type="manual_reply") or "").strip()
         self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
         return local_id
@@ -109,10 +117,18 @@ class InboxService:
             if queued:
                 self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
             return queued
+<<<<<<< HEAD
+        thread, takeover_applied = self._prepare_thread_for_manual_send(clean_key, thread)
+        if not isinstance(thread, dict):
+            if takeover_applied:
+                self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
+            return False
+=======
         if not self._automation.manual_send_allowed(thread):
             return False
         if str(thread.get("owner") or "").strip().lower() != "manual":
             self._automation.manual_takeover(clean_key, operator_id="inbox_ui")
+>>>>>>> origin/main
         queued = bool(self._engine._sender.queue_pack(clean_key, pack_id, job_type="manual_pack"))
         if queued:
             self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
@@ -249,7 +265,51 @@ class InboxService:
         return self._automation.list_aliases() if self._automation is not None else []
 
     def alias_runtime_status(self, alias_id: str) -> dict[str, Any]:
+<<<<<<< HEAD
+        if self._automation is None:
+            return {}
+        scheduler_state = self._automation.status(alias_id)
+        if not scheduler_state:
+            return {}
+        payload: dict[str, Any] = dict(scheduler_state or {})
+
+        # Scheduler state: keep existing ambiguous names for compatibility, but also expose explicit keys.
+        payload.setdefault("scheduler_current_account_id", str(payload.get("current_account_id") or "").strip())
+        payload.setdefault("scheduler_next_account_id", str(payload.get("next_account_id") or "").strip())
+
+        # Sender/browser state: derive from the real browser pool attachment (global, not alias-scoped).
+        engine_diag: dict[str, Any] = {}
+        try:
+            if hasattr(self._engine, "diagnostics"):
+                engine_diag = dict(self._engine.diagnostics() or {})
+        except Exception:
+            engine_diag = {}
+
+        payload.setdefault("sender_attached_account_id", str(engine_diag.get("active_account_id") or "").strip())
+        payload.setdefault("sender_attached_thread_key", str(engine_diag.get("active_thread_key") or "").strip())
+
+        payload.setdefault("last_send_attempt_account_id", str(payload.get("last_send_attempt_account_id") or "").strip())
+        payload.setdefault("last_send_attempt_thread_key", str(payload.get("last_send_attempt_thread_key") or "").strip())
+        payload.setdefault("last_send_attempt_job_id", int(payload.get("last_send_attempt_job_id") or 0))
+        payload.setdefault("last_send_attempt_job_type", str(payload.get("last_send_attempt_job_type") or "").strip())
+        payload.setdefault("last_send_attempt_at", payload.get("last_send_attempt_at"))
+        payload.setdefault("last_send_attempt_outcome", str(payload.get("last_send_attempt_outcome") or "").strip())
+        payload.setdefault("last_send_attempt_reason_code", str(payload.get("last_send_attempt_reason_code") or "").strip())
+
+        payload.setdefault("last_send_outcome", str(payload.get("last_send_outcome") or "").strip())
+        payload.setdefault("last_send_reason_code", str(payload.get("last_send_reason_code") or "").strip())
+        payload.setdefault("last_send_reason", str(payload.get("last_send_reason") or "").strip())
+        payload.setdefault("last_send_account_id", str(payload.get("last_send_account_id") or "").strip())
+        payload.setdefault("last_send_thread_key", str(payload.get("last_send_thread_key") or "").strip())
+        payload.setdefault("last_send_job_id", int(payload.get("last_send_job_id") or 0))
+        payload.setdefault("last_send_job_type", str(payload.get("last_send_job_type") or "").strip())
+        payload.setdefault("last_send_at", payload.get("last_send_at"))
+        payload.setdefault("last_send_exception_type", str(payload.get("last_send_exception_type") or "").strip())
+        payload.setdefault("last_send_exception_message", str(payload.get("last_send_exception_message") or "").strip())
+        return payload
+=======
         return self._automation.status(alias_id) if self._automation is not None else {}
+>>>>>>> origin/main
 
     def start_alias_runtime(self, alias_id: str, config: dict[str, Any]) -> dict[str, Any]:
         self.ensure_started()
@@ -257,3 +317,29 @@ class InboxService:
 
     def stop_alias_runtime(self, alias_id: str) -> dict[str, Any]:
         return self._automation.stop_alias(alias_id) if self._automation is not None else {}
+<<<<<<< HEAD
+
+    def _prepare_thread_for_manual_send(
+        self,
+        thread_key: str,
+        thread: dict[str, Any] | None,
+        *,
+        operator_id: str = "inbox_ui",
+    ) -> tuple[dict[str, Any] | None, bool]:
+        if not isinstance(thread, dict) or self._automation is None:
+            return None, False
+        current = dict(thread)
+        takeover_applied = False
+        if str(current.get("owner") or "").strip().lower() != "manual":
+            if not self._automation.manual_takeover_allowed(current):
+                return None, False
+            updated = self._automation.manual_takeover(thread_key, operator_id=operator_id)
+            if not isinstance(updated, dict):
+                return None, False
+            current = updated
+            takeover_applied = True
+        if not self._automation.manual_send_allowed(current):
+            return None, takeover_applied
+        return current, takeover_applied
+=======
+>>>>>>> origin/main

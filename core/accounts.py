@@ -172,6 +172,16 @@ _SENT_LOG = storage_root(BASE) / "sent_log.jsonl"
 _ACTIVITY_CACHE_TTL = timedelta(minutes=5)
 _ACTIVITY_CACHE: Optional[Tuple[int, datetime, Dict[str, int]]] = None
 
+<<<<<<< HEAD
+ACCOUNT_USAGE_STATE_ACTIVE = "active"
+ACCOUNT_USAGE_STATE_DEACTIVATED = "deactivated"
+_ACCOUNT_USAGE_STATE_VALUES = {
+    ACCOUNT_USAGE_STATE_ACTIVE,
+    ACCOUNT_USAGE_STATE_DEACTIVATED,
+}
+
+=======
+>>>>>>> origin/main
 
 def _configure_password_backend() -> None:
     _configure_password_cache(_PASSWORD_FILE, login_failure_backoff=_LOGIN_FAILURE_BACKOFF)
@@ -208,6 +218,34 @@ def normalize_alias(value: str | None) -> str:
     return normalized if normalized else "default"
 
 
+<<<<<<< HEAD
+def normalize_account_usage_state(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in _ACCOUNT_USAGE_STATE_VALUES:
+        return normalized
+    if normalized in {"inactive", "disabled", "off", "paused"}:
+        return ACCOUNT_USAGE_STATE_DEACTIVATED
+    return ACCOUNT_USAGE_STATE_ACTIVE
+
+
+def account_usage_state(record: Dict[str, Any] | None) -> str:
+    if not isinstance(record, dict):
+        return ACCOUNT_USAGE_STATE_ACTIVE
+    return normalize_account_usage_state(record.get("usage_state"))
+
+
+def is_account_usage_active(record: Dict[str, Any] | None) -> bool:
+    return account_usage_state(record) == ACCOUNT_USAGE_STATE_ACTIVE
+
+
+def is_account_enabled_for_operation(record: Dict[str, Any] | None) -> bool:
+    if not isinstance(record, dict):
+        return False
+    return bool(record.get("active", True)) and is_account_usage_active(record)
+
+
+=======
+>>>>>>> origin/main
 def _parse_datetime(value: object) -> Optional[datetime]:
     if not value:
         return None
@@ -502,6 +540,10 @@ def _normalize_account(record: Dict) -> Dict:
     if not result.get("alias"):
         result["alias"] = alias_display_name
     result.setdefault("active", True)
+<<<<<<< HEAD
+    result["usage_state"] = normalize_account_usage_state(result.get("usage_state"))
+=======
+>>>>>>> origin/main
     result.setdefault("connected", False)
     result.setdefault("password", "")
     result.setdefault("assigned_proxy_id", None)
@@ -557,9 +599,14 @@ def _prepare_for_save(record: Dict) -> Dict:
     alias_id, alias_display_name = _account_alias_fields(stored)
     stored["alias_id"] = alias_id
     stored["alias_display_name"] = alias_display_name
+<<<<<<< HEAD
+    stored["usage_state"] = normalize_account_usage_state(stored.get("usage_state"))
+    stored.pop("alias", None)
+=======
     stored["alias"] = normalize_alias(stored.get("alias"))
     if not stored["alias"]:
         stored["alias"] = DEFAULT_ALIAS_ID
+>>>>>>> origin/main
     stored.pop("password", None)
     assigned_proxy_id = str(stored.get("assigned_proxy_id") or "").strip()
     if assigned_proxy_id:
@@ -757,10 +804,18 @@ def _load() -> List[Dict]:
             if not isinstance(item, dict):
                 continue
             raw_alias = item.get("alias")
+<<<<<<< HEAD
+            normalized_alias = normalize_alias_display(raw_alias, default="")
+            if not normalized_alias:
+                normalized_alias = normalize_alias_display(
+                    item.get("alias_display_name") or item.get("alias_id") or DEFAULT_ALIAS_DISPLAY_NAME,
+                    default=DEFAULT_ALIAS_DISPLAY_NAME,
+=======
             normalized_alias = normalize_alias(raw_alias)
             if not normalized_alias:
                 normalized_alias = normalize_alias(
                     item.get("alias_display_name") or item.get("alias_id") or DEFAULT_ALIAS_ID
+>>>>>>> origin/main
                 )
             if normalized_alias != str(raw_alias or ""):
                 item = dict(item)
@@ -876,6 +931,10 @@ def get_accounts() -> List[Any]:
             SimpleNamespace(
                 username=username,
                 active=_is_active(item.get("active", True)),
+<<<<<<< HEAD
+                usage_state=account_usage_state(item),
+=======
+>>>>>>> origin/main
                 data=dict(item),
             )
         )
@@ -1254,6 +1313,10 @@ def add_account(username: str, alias: str, proxy: Optional[Dict] = None) -> bool
         "username": username.strip().lstrip("@"),
         "alias": alias,
         "active": True,
+<<<<<<< HEAD
+        "usage_state": ACCOUNT_USAGE_STATE_ACTIVE,
+=======
+>>>>>>> origin/main
         "connected": False,
     }
     if proxy:
@@ -1329,6 +1392,17 @@ def set_active(username: str, is_active: bool = True) -> None:
         warn("No existe.")
 
 
+<<<<<<< HEAD
+def set_usage_state(username: str, usage_state: str = ACCOUNT_USAGE_STATE_ACTIVE) -> None:
+    normalized = normalize_account_usage_state(usage_state)
+    if update_account(username, {"usage_state": normalized}):
+        ok("Actualizada.")
+    else:
+        warn("No existe.")
+
+
+=======
+>>>>>>> origin/main
 def mark_connected(username: str, connected: bool, *, invalidate_health: bool = False) -> None:
     updated = update_account(username, {"connected": connected}, invalidate_health=invalidate_health)
     health_store.set_connected(
@@ -2467,6 +2541,10 @@ class _ManualPlaywrightLifecycle:
             profiles_root=str(BASE_PROFILES),
             normalize_username=normalize_browser_profile_username,
             log_event=_noop_log_event,
+<<<<<<< HEAD
+            subsystem="manual",
+=======
+>>>>>>> origin/main
         )
 
     _INBOX_READY_SELECTORS: tuple[str, ...] = (
@@ -2488,6 +2566,13 @@ class _ManualPlaywrightLifecycle:
         "input[type='password']",
         "form[action*='login']",
     )
+<<<<<<< HEAD
+    # Visible manual sessions already persist state on open/close and run with
+    # a persistent profile. Avoid periodic snapshots here because Chromium can
+    # briefly surface transient tabs during ctx.storage_state() in this mode.
+    _BACKGROUND_STORAGE_SYNC_ENABLED = False
+=======
+>>>>>>> origin/main
     _STORAGE_SYNC_INTERVAL_SECONDS = 2.0
 
     @staticmethod
@@ -2949,10 +3034,20 @@ class _ManualPlaywrightLifecycle:
                 "start_url": start_url,
                 "current_url": "",
             }
+<<<<<<< HEAD
+        storage_sync_stop: asyncio.Event | None = None
+        storage_sync_task: asyncio.Task[Any] | None = None
+        if self._BACKGROUND_STORAGE_SYNC_ENABLED:
+            storage_sync_stop = asyncio.Event()
+            storage_sync_task = asyncio.create_task(
+                self._storage_state_sync_loop(username=username, stop_event=storage_sync_stop)
+            )
+=======
         storage_sync_stop = asyncio.Event()
         storage_sync_task = asyncio.create_task(
             self._storage_state_sync_loop(username=username, stop_event=storage_sync_stop)
         )
+>>>>>>> origin/main
         try:
             if start_url:
                 if "/direct/inbox" in (start_url or "").lower():
@@ -3008,9 +3103,17 @@ class _ManualPlaywrightLifecycle:
                 restore_page_if_closed=restore_page_if_closed,
             )
         finally:
+<<<<<<< HEAD
+            if storage_sync_stop is not None:
+                storage_sync_stop.set()
+            if storage_sync_task is not None:
+                with contextlib.suppress(Exception):
+                    await storage_sync_task
+=======
             storage_sync_stop.set()
             with contextlib.suppress(Exception):
                 await storage_sync_task
+>>>>>>> origin/main
 
         return {
             "opened": True,

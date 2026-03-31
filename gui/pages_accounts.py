@@ -344,6 +344,231 @@ class AccountsTextInputDialog(AccountsModalDialog):
         return str(self._input.text() or "").strip()
 
 
+<<<<<<< HEAD
+class AccountUsageStateDialog(AccountsModalDialog):
+    def __init__(
+        self,
+        *,
+        selected_count: int,
+        visible_count: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        subtitle_parts = []
+        if selected_count > 0:
+            subtitle_parts.append(f"Seleccionadas: {selected_count}")
+        if visible_count > 0:
+            subtitle_parts.append(f"Visibles: {visible_count}")
+        super().__init__(
+            "Estado de uso",
+            "Aplica el estado operativo sin afectar login, health, proxy ni edicion manual."
+            + (f" ({'  |  '.join(subtitle_parts)})" if subtitle_parts else ""),
+            parent=parent,
+        )
+        self._usage_state = ""
+
+        form = QGridLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        self._scope = QComboBox()
+        if selected_count > 0:
+            self._scope.addItem(f"Cuentas seleccionadas ({selected_count})", "selected")
+        if visible_count > 0:
+            self._scope.addItem(f"Cuentas visibles ({visible_count})", "visible")
+        form.addWidget(QLabel("Aplicar a"), 0, 0)
+        form.addWidget(self._scope, 0, 1)
+        self.body_layout().addLayout(form)
+
+        hint = QLabel(
+            "Activa: la cuenta vuelve a participar en rotacion automatica. "
+            "Desactivada: sigue visible y editable, pero no se usa operativamente."
+        )
+        hint.setObjectName("AccountsModalHint")
+        hint.setWordWrap(True)
+        self.body_layout().addWidget(hint)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        cancel_button = QPushButton("Cancelar")
+        cancel_button.setObjectName("SecondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        activate_button = QPushButton("Activar")
+        activate_button.setObjectName("PrimaryButton")
+        activate_button.clicked.connect(lambda: self._accept_with_state("active"))
+        deactivate_button = QPushButton("Desactivar")
+        deactivate_button.setObjectName("DangerButton")
+        deactivate_button.clicked.connect(lambda: self._accept_with_state("deactivated"))
+        actions.addStretch(1)
+        actions.addWidget(cancel_button)
+        actions.addWidget(activate_button)
+        actions.addWidget(deactivate_button)
+        self.body_layout().addLayout(actions)
+
+    def _accept_with_state(self, usage_state: str) -> None:
+        self._usage_state = str(usage_state or "").strip().lower()
+        self.accept()
+
+    def scope(self) -> str:
+        return str(self._scope.currentData() or "selected").strip()
+
+    def usage_state(self) -> str:
+        return self._usage_state
+
+
+class AccountAliasChangeDialog(AccountsModalDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(
+            "Cambio de alias",
+            "Selecciona una o mas cuentas del alias actual y el alias destino para moverlas sin alterar su estado operativo.",
+            parent=parent,
+        )
+        self._current_alias = ""
+        self._selected_alias = ""
+
+        self._summary = QLabel("Selecciona al menos una cuenta y el alias destino.")
+        self._summary.setObjectName("AccountsModalHint")
+        self._summary.setWordWrap(True)
+        self.body_layout().addWidget(self._summary)
+
+        form = QGridLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+        self._source_alias = QLineEdit()
+        self._source_alias.setReadOnly(True)
+        self._target_alias = QComboBox()
+        form.addWidget(QLabel("Alias actual"), 0, 0)
+        form.addWidget(self._source_alias, 0, 1)
+        form.addWidget(QLabel("Alias destino"), 1, 0)
+        form.addWidget(self._target_alias, 1, 1)
+        self.body_layout().addLayout(form)
+
+        actions_row = QHBoxLayout()
+        actions_row.setContentsMargins(0, 0, 0, 0)
+        actions_row.setSpacing(8)
+        mark_all = QPushButton("Seleccionar todas")
+        mark_all.setObjectName("SecondaryButton")
+        mark_all.clicked.connect(self._mark_all)
+        clear_button = QPushButton("Limpiar")
+        clear_button.setObjectName("SecondaryButton")
+        clear_button.clicked.connect(self._clear_all)
+        actions_row.addStretch(1)
+        actions_row.addWidget(mark_all)
+        actions_row.addWidget(clear_button)
+        self.body_layout().addLayout(actions_row)
+
+        self._accounts = QListWidget()
+        self._accounts.setObjectName("AccountsAssignList")
+        self._accounts.setMinimumHeight(280)
+        self._accounts.setSelectionMode(QAbstractItemView.NoSelection)
+        self._accounts.itemChanged.connect(self._update_summary)
+        self.body_layout().addWidget(self._accounts)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(8)
+        cancel_button = QPushButton("Cancelar")
+        cancel_button.setObjectName("SecondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        accept_button = QPushButton("Aceptar")
+        accept_button.setObjectName("PrimaryButton")
+        accept_button.clicked.connect(self.accept)
+        footer.addStretch(1)
+        footer.addWidget(cancel_button)
+        footer.addWidget(accept_button)
+        self.body_layout().addLayout(footer)
+
+    def refresh(
+        self,
+        *,
+        alias: str,
+        target_aliases: list[str],
+        records: list[dict[str, Any]],
+        selected_usernames: list[str] | None = None,
+    ) -> None:
+        self._current_alias = str(alias or "").strip()
+        self._selected_alias = self._current_alias
+        self._source_alias.setText(self._current_alias or "-")
+        _fill_alias_combo(self._target_alias, target_aliases, target_aliases[0] if target_aliases else "")
+        selected = {
+            str(item or "").strip().lstrip("@").lower()
+            for item in selected_usernames or []
+            if str(item or "").strip()
+        }
+        self._accounts.blockSignals(True)
+        self._accounts.clear()
+        for record in records:
+            username = str(record.get("username") or "").strip().lstrip("@")
+            if not username:
+                continue
+            connected_label = str(record.get("connected_label") or ("Si" if bool(record.get("connected")) else "No")).strip()
+            health_label = str(record.get("health_badge") or "-").strip() or "-"
+            usage_label = str(record.get("usage_state_label") or "Activa").strip() or "Activa"
+            detail = (
+                f"@{username}  |  Conexion: {connected_label}  |  "
+                f"Health: {health_label}  |  Estado: {usage_label}"
+            )
+            item = _checkable_account_item(username, detail)
+            if username.lower() in selected:
+                item.setCheckState(Qt.Checked)
+            self._accounts.addItem(item)
+        self._accounts.blockSignals(False)
+        self._update_summary()
+
+    def _checked_usernames(self) -> list[str]:
+        usernames: list[str] = []
+        for index in range(self._accounts.count()):
+            item = self._accounts.item(index)
+            if (
+                item is None
+                or not _account_item_is_checkable(item)
+                or item.checkState() != Qt.Checked
+            ):
+                continue
+            username = str(item.data(Qt.UserRole) or "").strip().lstrip("@")
+            if username:
+                usernames.append(username)
+        return usernames
+
+    def _mark_all(self) -> None:
+        self._accounts.blockSignals(True)
+        for index in range(self._accounts.count()):
+            item = self._accounts.item(index)
+            if _account_item_is_checkable(item):
+                item.setCheckState(Qt.Checked)
+        self._accounts.blockSignals(False)
+        self._update_summary()
+
+    def _clear_all(self) -> None:
+        self._accounts.blockSignals(True)
+        for index in range(self._accounts.count()):
+            item = self._accounts.item(index)
+            if _account_item_is_checkable(item):
+                item.setCheckState(Qt.Unchecked)
+        self._accounts.blockSignals(False)
+        self._update_summary()
+
+    def _update_summary(self) -> None:
+        selected = len(self._checked_usernames())
+        available = self._accounts.count()
+        target_alias = self.target_alias() or "-"
+        self._summary.setText(
+            f"Alias actual: {self._current_alias or '-'}  |  "
+            f"Alias destino: {target_alias}  |  "
+            f"Seleccionadas: {selected}/{available}"
+        )
+
+    def selected_usernames(self) -> list[str]:
+        return self._checked_usernames()
+
+    def target_alias(self) -> str:
+        return str(self._target_alias.currentData() or self._target_alias.currentText() or "").strip()
+
+
+=======
+>>>>>>> origin/main
 class AliasDeleteDialog(AccountsModalDialog):
     def __init__(
         self,
@@ -1945,6 +2170,10 @@ class AccountsPage(AccountsSectionPage):
     LOGIN_TASKS = {LOGIN_TASK, RELOGIN_TASK}
     IMPORT_TASK = "accounts_import"
     HEALTH_REFRESH_TASK = "accounts_health_refresh"
+<<<<<<< HEAD
+    OPEN_ACCOUNT_TASK = "accounts_open_account"
+=======
+>>>>>>> origin/main
 
     def __init__(self, ctx: PageContext, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -1964,6 +2193,10 @@ class AccountsPage(AccountsSectionPage):
         self._pending_import_request: dict[str, Any] | None = None
         self._pending_login_completion_message: str | None = None
         self._active_login_usernames: list[str] = []
+<<<<<<< HEAD
+        self._opening_account_usernames: list[str] = []
+=======
+>>>>>>> origin/main
         self._login_progress_timer = QTimer(self)
         self._login_progress_timer.setInterval(700)
         self._login_progress_timer.timeout.connect(self._refresh_login_progress)
@@ -1996,9 +2229,15 @@ class AccountsPage(AccountsSectionPage):
         import_button = QPushButton("Importar cuentas CSV")
         import_button.setObjectName("SecondaryButton")
         import_button.clicked.connect(self._open_import_dialog)
+<<<<<<< HEAD
+        open_account_button = QPushButton("Abrir cuenta")
+        open_account_button.setObjectName("SecondaryButton")
+        open_account_button.clicked.connect(self._open_selected_accounts)
+=======
         login_alias_button = QPushButton("Iniciar sesion alias")
         login_alias_button.setObjectName("SecondaryButton")
         login_alias_button.clicked.connect(self._login_alias)
+>>>>>>> origin/main
         refresh_button = QPushButton("Refrescar")
         refresh_button.setObjectName("SecondaryButton")
         refresh_button.clicked.connect(self._refresh_health)
@@ -2013,7 +2252,11 @@ class AccountsPage(AccountsSectionPage):
         toolbar_layout.addWidget(import_button, 0, 7)
         toolbar_layout.addWidget(self._force_relogin, 1, 4)
         toolbar_layout.addWidget(refresh_button, 1, 6)
+<<<<<<< HEAD
+        toolbar_layout.addWidget(open_account_button, 1, 7)
+=======
         toolbar_layout.addWidget(login_alias_button, 1, 7)
+>>>>>>> origin/main
         layout.addWidget(toolbar)
 
         self._summary = QLabel("")
@@ -2021,8 +2264,13 @@ class AccountsPage(AccountsSectionPage):
         self._summary.setWordWrap(True)
         layout.addWidget(self._summary)
 
+<<<<<<< HEAD
+        self._table = QTableWidget(0, 6)
+        self._table.setHorizontalHeaderLabels(["Username", "Conectada", "Health", "Proxy", "Estado de uso", "Limite"])
+=======
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(["Username", "Conectada", "Health", "Proxy", "Limite"])
+>>>>>>> origin/main
         _configure_table(self._table, "AccountsTable", selection_mode=QAbstractItemView.MultiSelection)
         self._table.setMinimumHeight(360)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -2030,6 +2278,10 @@ class AccountsPage(AccountsSectionPage):
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+<<<<<<< HEAD
+        self._table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+=======
+>>>>>>> origin/main
         layout.addWidget(self._table)
 
         actions_card = QFrame()
@@ -2046,6 +2298,12 @@ class AccountsPage(AccountsSectionPage):
         clear_selection_button = QPushButton("Limpiar seleccion")
         clear_selection_button.setObjectName("SecondaryButton")
         clear_selection_button.clicked.connect(self._clear_selection)
+<<<<<<< HEAD
+        alias_change_button = QPushButton("Cambio de alias")
+        alias_change_button.setObjectName("SecondaryButton")
+        alias_change_button.clicked.connect(self._open_alias_change_dialog)
+=======
+>>>>>>> origin/main
         delete_button = QPushButton("Eliminar seleccionadas")
         delete_button.setObjectName("DangerButton")
         delete_button.clicked.connect(self._delete_selected)
@@ -2055,14 +2313,28 @@ class AccountsPage(AccountsSectionPage):
         apply_button = QPushButton("Aplicar limite")
         apply_button.setObjectName("SecondaryButton")
         apply_button.clicked.connect(self._apply_limit)
+<<<<<<< HEAD
+        usage_state_button = QPushButton("Estado")
+        usage_state_button.setObjectName("SecondaryButton")
+        usage_state_button.clicked.connect(self._open_usage_state_dialog)
         actions_layout.addWidget(login_button)
         actions_layout.addWidget(select_visible_button)
         actions_layout.addWidget(clear_selection_button)
+        actions_layout.addWidget(alias_change_button)
+=======
+        actions_layout.addWidget(login_button)
+        actions_layout.addWidget(select_visible_button)
+        actions_layout.addWidget(clear_selection_button)
+>>>>>>> origin/main
         actions_layout.addWidget(delete_button)
         actions_layout.addStretch(1)
         actions_layout.addWidget(QLabel("Limite"))
         actions_layout.addWidget(self._limit_spin)
         actions_layout.addWidget(apply_button)
+<<<<<<< HEAD
+        actions_layout.addWidget(usage_state_button)
+=======
+>>>>>>> origin/main
         layout.addWidget(actions_card)
 
         helper = QLabel(
@@ -2096,6 +2368,19 @@ class AccountsPage(AccountsSectionPage):
         self.refresh_table()
 
     def _on_task_finished(self, task_name: str, ok: bool, message: str) -> None:
+<<<<<<< HEAD
+        if task_name == self.OPEN_ACCOUNT_TASK:
+            opened_count = len(self._opening_account_usernames)
+            self._opening_account_usernames = []
+            if ok:
+                noun = "cuenta" if opened_count == 1 else "cuentas"
+                self.set_status(f"Apertura manual finalizada para {opened_count} {noun}.")
+            else:
+                self.set_status(message or "No se pudo abrir la cuenta seleccionada.")
+            self.refresh_table()
+            return
+=======
+>>>>>>> origin/main
         if task_name not in self.LOGIN_TASKS:
             return
         self._login_progress_timer.stop()
@@ -2299,6 +2584,10 @@ class AccountsPage(AccountsSectionPage):
                 connected_label,
                 health_label,
                 record.get("proxy_label") or "-",
+<<<<<<< HEAD
+                record.get("usage_state_label") or "Activa",
+=======
+>>>>>>> origin/main
                 record.get("message_limit_label") or message_limit(record),
             ]
             for column, value in enumerate(values):
@@ -2473,6 +2762,60 @@ class AccountsPage(AccountsSectionPage):
         self._table.clearSelection()
         self._update_summary()
 
+<<<<<<< HEAD
+    def _open_alias_change_dialog(self) -> None:
+        current_alias = str(self._current_alias() or self._ctx.state.active_alias).strip()
+        if not current_alias:
+            self.show_error("Selecciona un alias.")
+            return
+        if self._snapshot_loading and not self._records:
+            self.show_error("Espera a que termine la carga del alias actual.")
+            return
+        if not self._records:
+            self.show_error("No hay cuentas disponibles en el alias actual.")
+            return
+        target_aliases = [
+            str(alias or "").strip()
+            for alias in self._ctx.services.accounts.list_aliases()
+            if str(alias or "").strip() and str(alias or "").strip().lower() != current_alias.lower()
+        ]
+        if not target_aliases:
+            self.show_error("Necesitas al menos otro alias destino para mover cuentas.")
+            return
+        dialog = AccountAliasChangeDialog(self)
+        dialog.refresh(
+            alias=current_alias,
+            target_aliases=target_aliases,
+            records=self._records,
+            selected_usernames=self._selected_usernames(),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        usernames = dialog.selected_usernames()
+        if not usernames:
+            self.show_error("Selecciona al menos una cuenta para cambiar de alias.")
+            return
+        target_alias = dialog.target_alias()
+        if not target_alias:
+            self.show_error("Selecciona un alias destino.")
+            return
+        if target_alias.lower() == current_alias.lower():
+            self.show_error("Selecciona un alias destino distinto al alias actual.")
+            return
+        try:
+            moved = int(self._ctx.services.accounts.move_accounts(usernames, target_alias) or 0)
+        except Exception as exc:
+            self.show_exception(exc, "No se pudo completar el cambio de alias.")
+            return
+        self._queue_after_snapshot(
+            lambda moved_count=moved, total=len(usernames), alias_label=target_alias: self.set_status(
+                f"Cambio de alias aplicado: {moved_count}/{total} cuenta(s) movidas a {alias_label}."
+            )
+        )
+        self.refresh_table()
+
+=======
+>>>>>>> origin/main
     def _delete_selected(self) -> None:
         usernames = self._selected_usernames()
         if not usernames:
@@ -2500,6 +2843,45 @@ class AccountsPage(AccountsSectionPage):
         self._queue_after_snapshot(lambda count=updated: self.set_status(f"Limite aplicado a {count} cuentas."))
         self.refresh_table()
 
+<<<<<<< HEAD
+    def _apply_usage_state(self, usage_state: str, usernames: list[str]) -> None:
+        normalized = str(usage_state or "").strip().lower()
+        if normalized not in {"active", "deactivated"}:
+            self.show_error("Estado invalido.")
+            return
+        targets = [str(item or "").strip().lstrip("@") for item in usernames if str(item or "").strip()]
+        if not targets:
+            self.show_error("No hay cuentas para actualizar.")
+            return
+        updated = self._ctx.services.accounts.set_usage_state(targets, normalized)
+        action_label = "activado" if normalized == "active" else "desactivado"
+        self._queue_after_snapshot(
+            lambda count=updated, label=action_label: self.set_status(f"Estado {label} en {count} cuentas.")
+        )
+        self.refresh_table()
+
+    def _open_usage_state_dialog(self) -> None:
+        selected = self._selected_usernames()
+        visible = self._visible_usernames()
+        if not selected and not visible:
+            self.show_error("No hay cuentas disponibles para actualizar.")
+            return
+        dialog = AccountUsageStateDialog(
+            selected_count=len(selected),
+            visible_count=len(visible),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        scope = dialog.scope()
+        usernames = visible if scope == "visible" else selected
+        if scope != "visible" and not usernames:
+            self.show_error("Selecciona al menos una cuenta o usa las visibles.")
+            return
+        self._apply_usage_state(dialog.usage_state(), usernames)
+
+=======
+>>>>>>> origin/main
     def _run_login(
         self,
         *,
@@ -2570,8 +2952,41 @@ class AccountsPage(AccountsSectionPage):
             return
         self._run_login(usernames=usernames, origin_label="cuentas seleccionadas")
 
+<<<<<<< HEAD
+    def _open_selected_accounts(self) -> None:
+        usernames = self._selected_usernames()
+        if not usernames:
+            self.show_info("No se selecciono ninguna cuenta. Selecciona una cuenta para abrir.")
+            return
+        if self._ctx.tasks.is_running(self.OPEN_ACCOUNT_TASK):
+            self.show_error("Ya hay una apertura de cuentas en ejecucion.")
+            return
+        clean_alias = str(self._current_alias() or self._ctx.state.active_alias).strip()
+        if not clean_alias:
+            self.show_error("Selecciona un alias.")
+            return
+        self._set_active_alias(clean_alias)
+        self._opening_account_usernames = list(usernames)
+        try:
+            self._ctx.tasks.start_task(
+                self.OPEN_ACCOUNT_TASK,
+                lambda alias=clean_alias, selected=list(usernames): self._ctx.services.accounts.open_account_profiles(
+                    alias,
+                    selected,
+                    action_label="Abrir cuenta",
+                ),
+                metadata={"alias": clean_alias},
+            )
+        except Exception as exc:
+            self._opening_account_usernames = []
+            self.show_exception(exc, "No se pudo abrir la cuenta seleccionada.")
+            return
+        noun = "cuenta" if len(usernames) == 1 else "cuentas"
+        self.set_status(f"Abriendo {len(usernames)} {noun} seleccionada(s) en el perfil...")
+=======
     def _login_alias(self) -> None:
         self._run_login()
+>>>>>>> origin/main
 
     def _complete_import(self, payload: dict[str, Any], request: dict[str, Any]) -> None:
         added = int(payload.get("added") or 0)
@@ -2672,7 +3087,11 @@ class AccountsActionsPage(AccountsSectionPage):
         changes_layout.addLayout(actions_row)
 
         manual_helper = QLabel(
+<<<<<<< HEAD
+            "Al presionar cualquier accion, se abre un selector para elegir alias y cuentas conectadas dentro de ese alias. El health ya no bloquea esta seccion."
+=======
             "Al presionar cualquier accion, se abre un selector para elegir alias y cuentas dentro de ese alias."
+>>>>>>> origin/main
         )
         manual_helper.setObjectName("SectionPanelHint")
         manual_helper.setWordWrap(True)
@@ -2797,6 +3216,12 @@ class AccountsActionsPage(AccountsSectionPage):
         self._likes_target = QSpinBox()
         self._likes_target.setRange(0, 200)
         self._likes_target.setValue(3)
+<<<<<<< HEAD
+        self._follows_target = QSpinBox()
+        self._follows_target.setRange(0, 100)
+        self._follows_target.setValue(0)
+=======
+>>>>>>> origin/main
         self._view_start_button = QPushButton("Iniciar")
         self._view_start_button.setObjectName("PrimaryButton")
         self._view_start_button.clicked.connect(self._start_view_content)
@@ -2811,6 +3236,11 @@ class AccountsActionsPage(AccountsSectionPage):
         controls.addWidget(self._reels_minutes, 1, 1)
         controls.addWidget(QLabel("Cantidad de likes"), 2, 0)
         controls.addWidget(self._likes_target, 2, 1)
+<<<<<<< HEAD
+        controls.addWidget(QLabel("Cantidad de follows"), 3, 0)
+        controls.addWidget(self._follows_target, 3, 1)
+=======
+>>>>>>> origin/main
         controls.addWidget(self._view_start_button, 0, 2)
         controls.addWidget(self._view_stop_button, 0, 3)
         view_layout.addLayout(controls)
@@ -3779,6 +4209,10 @@ class AccountsActionsPage(AccountsSectionPage):
                     selected,
                     minutes=self._reels_minutes.value(),
                     likes_target=self._likes_target.value(),
+<<<<<<< HEAD
+                    follows_target=self._follows_target.value(),
+=======
+>>>>>>> origin/main
                 ),
                 metadata={"alias": alias},
             )
@@ -3837,9 +4271,19 @@ class AccountsActionsPage(AccountsSectionPage):
             username = _normalize_username(row.get("username")) or "cuenta"
             viewed = int(row.get("viewed") or 0)
             liked = int(row.get("liked") or 0)
+<<<<<<< HEAD
+            followed = int(row.get("followed") or 0)
+            errors = int(row.get("errors") or 0)
+            self._append_view_log(
+                (
+                    f"Resumen @{username}: reels vistos={viewed}, likes={liked}, "
+                    f"follows={followed}, errores={errors}\n"
+                )
+=======
             errors = int(row.get("errors") or 0)
             self._append_view_log(
                 f"Resumen @{username}: reels vistos={viewed}, likes={liked}, errores={errors}\n"
+>>>>>>> origin/main
             )
             for detail in row.get("messages") or []:
                 self._append_view_log(f"  - {detail}\n")

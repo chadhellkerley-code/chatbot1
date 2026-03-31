@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 # paths.py
 # -*- coding: utf-8 -*-
+=======
+# paths.py
+# -*- coding: utf-8 -*-
+>>>>>>> origin/main
 """Utilities to resolve runtime-dependent storage directories."""
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ def _env_path(name: str, *, create: bool = True) -> Path | None:
 
 
 def runtime_base(default: Path) -> Path:
+<<<<<<< HEAD
     """Return the directory that should be used for writable assets.
 
     Client builds run from temporary locations, so we allow overriding the
@@ -35,6 +41,16 @@ def runtime_base(default: Path) -> Path:
     to ``default`` if anything fails.
     """
 
+=======
+    """Return the directory that should be used for writable assets.
+
+    Client builds run from temporary locations, so we allow overriding the
+    default module directory via the ``APP_DATA_ROOT`` environment variable.
+    When the override is present we ensure the directory exists and fall back
+    to ``default`` if anything fails.
+    """
+
+>>>>>>> origin/main
     for env_name in ("APP_DATA_ROOT", "INSTACRM_INSTALL_ROOT"):
         path = _env_path(env_name)
         if path is not None:

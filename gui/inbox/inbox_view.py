@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+<<<<<<< HEAD
+from datetime import datetime
+=======
+>>>>>>> origin/main
 import json
 from typing import Any
 
@@ -132,6 +136,21 @@ class InboxView(QWidget):
         self._back_button.clicked.connect(self._ctx.go_back)
         self._back_button.hide()
 
+<<<<<<< HEAD
+        self._projection_label = QLabel("Proyeccion local")
+        self._projection_label.setObjectName("InboxMetaChip")
+        top_row.addWidget(self._projection_label, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        self._remote_sync_label = QLabel("Sync remota")
+        self._remote_sync_label.setObjectName("InboxMetaChip")
+        top_row.addWidget(self._remote_sync_label, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        self._runtime_status = QLabel("Runtime sin estado")
+        self._runtime_status.setObjectName("InboxSyncBadge")
+        top_row.addWidget(self._runtime_status, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        refresh_button = QPushButton("Pedir sync")
+=======
         self._sync_label = QLabel("Cache local")
         self._sync_label.setObjectName("InboxMetaChip")
         top_row.addWidget(self._sync_label, 0, Qt.AlignRight | Qt.AlignVCenter)
@@ -141,6 +160,7 @@ class InboxView(QWidget):
         top_row.addWidget(self._runtime_status, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         refresh_button = QPushButton("Actualizar")
+>>>>>>> origin/main
         refresh_button.setObjectName("InboxGhostButton")
         refresh_button.clicked.connect(self._controller.force_refresh)
         top_row.addWidget(refresh_button, 0, Qt.AlignRight | Qt.AlignVCenter)
@@ -160,7 +180,11 @@ class InboxView(QWidget):
         self._alias_combo = QComboBox()
         self._alias_combo.setObjectName("InboxCompactField")
         self._alias_combo.currentTextChanged.connect(self._controller.set_runtime_alias)
+<<<<<<< HEAD
+        controls_row.addWidget(_CompactField("Alias runtime", self._alias_combo, wide=True))
+=======
         controls_row.addWidget(_CompactField("Alias activo", self._alias_combo, wide=True))
+>>>>>>> origin/main
 
         self._mode_combo = QComboBox()
         self._mode_combo.setObjectName("InboxCompactField")
@@ -199,7 +223,11 @@ class InboxView(QWidget):
         self._stop_runtime.clicked.connect(self._controller.stop_runtime)
         controls_row.addWidget(self._stop_runtime, 0, Qt.AlignBottom)
 
+<<<<<<< HEAD
+        self._runtime_meta = QLabel("El selector gobierna runtime y no filtra la bandeja.")
+=======
         self._runtime_meta = QLabel("Sin runtime activo")
+>>>>>>> origin/main
         self._runtime_meta.setObjectName("InboxSummaryText")
         self._runtime_meta.setWordWrap(True)
         controls_row.addWidget(self._runtime_meta, 1, Qt.AlignVCenter)
@@ -247,6 +275,12 @@ class InboxView(QWidget):
         self._actions_drawer.hide()
 
         self._controller.snapshot_changed.connect(self._apply_snapshot)
+<<<<<<< HEAD
+        runtime_signal = getattr(self._controller, "runtime_status_changed", None)
+        if runtime_signal is not None:
+            runtime_signal.connect(self._apply_runtime_status)
+=======
+>>>>>>> origin/main
 
         self.setObjectName("InboxView")
         self.setStyleSheet(_INBOX_STYLESHEET)
@@ -296,6 +330,130 @@ class InboxView(QWidget):
             }
         )
 
+<<<<<<< HEAD
+    def _apply_runtime_status(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        self._apply_runtime_controls(payload)
+
+    def _apply_runtime_controls(self, runtime_status: dict[str, Any], *, has_aliases: bool | None = None) -> None:
+        if not isinstance(runtime_status, dict):
+            runtime_status = {}
+        is_running = bool(runtime_status.get("is_running"))
+        has_runtime_alias = bool(str(self._alias_combo.currentText() or "").strip())
+        if has_aliases is not None:
+            self._alias_combo.setEnabled(bool(has_aliases))
+        self._start_runtime.setEnabled(has_runtime_alias and not is_running)
+        self._stop_runtime.setEnabled(has_runtime_alias and is_running)
+        for widget in (self._mode_combo, self._delay_min, self._delay_max, self._turns):
+            widget.setEnabled(has_runtime_alias and not is_running)
+
+        runtime_token = _serialize_rows(runtime_status)
+        if runtime_token == self._runtime_token:
+            return
+        self._runtime_token = runtime_token
+        alias_id = str(runtime_status.get("alias_id") or self._alias_combo.currentText() or "-").strip() or "-"
+        worker_state = str(runtime_status.get("worker_state") or "").strip().lower() or ("running" if is_running else "stopped")
+        state_label = {
+            "starting": "iniciando",
+            "running": "activo" if is_running else "detenido",
+            "stopping": "deteniendo",
+            "stopped": "detenido",
+            "degraded": "degradado",
+            "error": "con error",
+        }.get(worker_state, "activo" if is_running else "detenido")
+        self._runtime_status.setText(f"Runtime @{alias_id} {state_label}")
+        scheduler_current = str(runtime_status.get("scheduler_current_account_id") or runtime_status.get("current_account_id") or "-").strip() or "-"
+        scheduler_next = str(runtime_status.get("scheduler_next_account_id") or runtime_status.get("next_account_id") or "-").strip() or "-"
+        sender_account = str(runtime_status.get("sender_attached_account_id") or "-").strip() or "-"
+        sender_thread = str(runtime_status.get("sender_attached_thread_key") or "-").strip() or "-"
+        heartbeat_at = "-"
+        try:
+            heartbeat_stamp = float(runtime_status.get("last_heartbeat_at")) if runtime_status.get("last_heartbeat_at") is not None else None
+        except Exception:
+            heartbeat_stamp = None
+        if heartbeat_stamp is not None:
+            heartbeat_at = datetime.fromtimestamp(heartbeat_stamp).strftime("%H:%M:%S")
+        updated_at = "-"
+        try:
+            updated_stamp = float(runtime_status.get("updated_at")) if runtime_status.get("updated_at") is not None else None
+        except Exception:
+            updated_stamp = None
+        if updated_stamp is not None:
+            updated_at = datetime.fromtimestamp(updated_stamp).strftime("%H:%M:%S")
+        last_error = str(runtime_status.get("last_error") or "").strip()
+        last_account = str(runtime_status.get("last_send_attempt_account_id") or "-").strip() or "-"
+        last_thread = str(runtime_status.get("last_send_attempt_thread_key") or "-").strip() or "-"
+        last_job_type = str(runtime_status.get("last_send_attempt_job_type") or "-").strip() or "-"
+        try:
+            last_job_id = int(runtime_status.get("last_send_attempt_job_id") or 0)
+        except Exception:
+            last_job_id = 0
+        last_job = "-" if not last_job_id else f"{last_job_type}#{last_job_id}"
+        last_outcome = str(runtime_status.get("last_send_attempt_outcome") or "").strip()
+        last_reason = str(runtime_status.get("last_send_attempt_reason_code") or "").strip()
+        last_when = "-"
+        try:
+            stamp = float(runtime_status.get("last_send_attempt_at")) if runtime_status.get("last_send_attempt_at") is not None else None
+        except Exception:
+            stamp = None
+        if stamp is not None:
+            last_when = datetime.fromtimestamp(stamp).strftime("%H:%M:%S")
+        last_extra = ""
+        if last_outcome or last_reason:
+            last_extra = f" ({last_outcome}{'/' if last_outcome and last_reason else ''}{last_reason})"
+
+        send_account = str(runtime_status.get("last_send_account_id") or "-").strip() or "-"
+        send_thread = str(runtime_status.get("last_send_thread_key") or "-").strip() or "-"
+        send_job_type = str(runtime_status.get("last_send_job_type") or "-").strip() or "-"
+        try:
+            send_job_id = int(runtime_status.get("last_send_job_id") or 0)
+        except Exception:
+            send_job_id = 0
+        send_job = "-" if not send_job_id else f"{send_job_type}#{send_job_id}"
+        send_outcome = str(runtime_status.get("last_send_outcome") or "").strip()
+        send_reason_code = str(runtime_status.get("last_send_reason_code") or "").strip()
+        send_reason = str(runtime_status.get("last_send_reason") or "").strip()
+        send_when = "-"
+        try:
+            send_stamp = float(runtime_status.get("last_send_at")) if runtime_status.get("last_send_at") is not None else None
+        except Exception:
+            send_stamp = None
+        if send_stamp is not None:
+            send_when = datetime.fromtimestamp(send_stamp).strftime("%H:%M:%S")
+        send_extra = ""
+        if send_outcome or send_reason_code:
+            send_extra = f" ({send_outcome}{'/' if send_outcome and send_reason_code else ''}{send_reason_code})"
+        if send_reason and send_reason != send_reason_code:
+            short_reason = send_reason if len(send_reason) <= 70 else send_reason[:70].rstrip() + "..."
+            send_extra = f"{send_extra} {short_reason}".rstrip()
+        self._runtime_meta.setText(
+            (
+                "El selector gobierna runtime y no filtra la bandeja."
+                f"\nScheduler @{scheduler_current}"
+                f"  |  Siguiente @{scheduler_next}"
+                f"  |  Sender global @{sender_account}"
+                f"  |  Thread global {sender_thread}"
+                f"  |  Modo {str(runtime_status.get('mode') or 'both')}"
+                f"  |  Turno {int(runtime_status.get('current_turn_count') or 0)}/{int(runtime_status.get('max_turns_per_account') or 1)}"
+                f"\nHeartbeat {heartbeat_at}"
+                f"  |  Estado persistido {updated_at}"
+                f"{f'  |  Error {last_error}' if last_error else ''}"
+                f"\nUltimo intento @{last_account}"
+                f"  |  Job {last_job}"
+                f"  |  Thread {last_thread}"
+                f"  |  At {last_when}{last_extra}"
+                f"\nUltimo resultado @{send_account}"
+                f"  |  Job {send_job}"
+                f"  |  Thread {send_thread}"
+                f"  |  At {send_when}{send_extra}"
+            )
+            if runtime_status
+            else "El selector gobierna runtime y no filtra la bandeja.\nSin estado persistido para el runtime seleccionado."
+        )
+
+=======
+>>>>>>> origin/main
     def _apply_snapshot(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
@@ -305,7 +463,16 @@ class InboxView(QWidget):
         self._header_summary.setText(
             f"{int(metrics.get('threads') or 0)} conversaciones  |  {int(metrics.get('pending') or 0)} sin responder"
         )
+<<<<<<< HEAD
+        projection_status = payload.get("projection_status") if isinstance(payload.get("projection_status"), dict) else {}
+        remote_sync_status = payload.get("remote_sync_status") if isinstance(payload.get("remote_sync_status"), dict) else {}
+        self._projection_label.setText(
+            str(projection_status.get("label") or payload.get("sync_label") or "Proyeccion local")
+        )
+        self._remote_sync_label.setText(str(remote_sync_status.get("label") or "Sync remota"))
+=======
         self._sync_label.setText(str(payload.get("sync_label") or "Cache local"))
+>>>>>>> origin/main
 
         runtime_aliases = [str(item or "").strip() for item in payload.get("runtime_aliases") or [] if str(item or "").strip()]
         if runtime_aliases:
@@ -322,6 +489,9 @@ class InboxView(QWidget):
                     self._alias_combo.setCurrentIndex(idx)
 
         runtime_status = payload.get("runtime_status") if isinstance(payload.get("runtime_status"), dict) else {}
+<<<<<<< HEAD
+        self._apply_runtime_controls(runtime_status, has_aliases=bool(runtime_aliases))
+=======
         is_running = bool(runtime_status.get("is_running"))
         has_runtime_alias = bool(str(self._alias_combo.currentText() or "").strip())
         self._alias_combo.setEnabled(bool(runtime_aliases))
@@ -344,6 +514,7 @@ class InboxView(QWidget):
                 if runtime_status
                 else "Sin runtime activo"
             )
+>>>>>>> origin/main
 
         rows = [row for row in payload.get("rows") or [] if isinstance(row, dict)]
         current_thread_key = str(payload.get("current_thread_key") or "").strip()
@@ -404,10 +575,18 @@ class InboxView(QWidget):
                 "tags": list((thread or {}).get("tags") or []) if isinstance((thread or {}).get("tags"), (list, tuple, set)) else str((thread or {}).get("tags") or "").strip(),
             }
         )
+<<<<<<< HEAD
+        thread_truth = payload.get("thread_truth") if isinstance(payload.get("thread_truth"), dict) else {}
+        if header_token != self._thread_header_token or permissions_changed:
+            self._thread_header_token = header_token
+            self._chat_view.set_thread(thread, permissions=thread_permissions, truth=thread_truth)
+            self._actions_panel.set_thread(thread, permissions=thread_permissions, truth=thread_truth)
+=======
         if header_token != self._thread_header_token or permissions_changed:
             self._thread_header_token = header_token
             self._chat_view.set_thread(thread, permissions=thread_permissions)
             self._actions_panel.set_thread(thread, permissions=thread_permissions)
+>>>>>>> origin/main
 
         packs = [pack for pack in payload.get("packs") or [] if isinstance(pack, dict)]
         packs_token = _serialize_rows(
@@ -428,8 +607,13 @@ class InboxView(QWidget):
         self._actions_panel.set_status(str(payload.get("actions_status") or "").strip())
 
         if not thread:
+<<<<<<< HEAD
+            self._chat_view.set_thread(None, permissions=thread_permissions, truth=thread_truth)
+            self._actions_panel.set_thread(None, permissions=thread_permissions, truth=thread_truth)
+=======
             self._chat_view.set_thread(None, permissions=thread_permissions)
             self._actions_panel.set_thread(None, permissions=thread_permissions)
+>>>>>>> origin/main
             return
 
         message_rows = [row for row in payload.get("messages") or [] if isinstance(row, dict)]

@@ -11,6 +11,10 @@ from src.runtime.ownership_router import OwnershipRouter
 
 class AutomationEngineAdapter:
     _INBOUND_PREVIEW_EPSILON_SECONDS = 0.000001
+<<<<<<< HEAD
+    PACK_QUOTA_DEFERRAL_STATE_KEY = "pack_quota_deferral"
+=======
+>>>>>>> origin/main
 
     def __init__(self) -> None:
         self._router = OwnershipRouter()
@@ -90,6 +94,11 @@ class AutomationEngineAdapter:
             and not bool(flow_engine.has_initial_stage)
         )
 
+<<<<<<< HEAD
+        now_ts = time.time()
+
+=======
+>>>>>>> origin/main
         decision = flow_engine.evaluate(
             {
                 "flow_state": flow_state,
@@ -102,7 +111,11 @@ class AutomationEngineAdapter:
                 "followup_level": self._int(thread.get("followup_level")),
                 "has_inbound_history": bool(latest_inbound or self._ts(thread.get("last_inbound_at"))),
                 "preconversation_initial_placeholder": preconversation_initial_placeholder,
+<<<<<<< HEAD
+                "now_ts": now_ts,
+=======
                 "now_ts": time.time(),
+>>>>>>> origin/main
                 "objection_strategy_name": str(prompt_entry.get("objection_strategy_name") or "").strip(),
             }
         )
@@ -118,6 +131,13 @@ class AutomationEngineAdapter:
         if inbound_ts is not None:
             thread_updates["last_inbound_at"] = inbound_ts
         state_updates: dict[str, Any] = {"flow_state": flow_state}
+<<<<<<< HEAD
+        quota_deferral = self._pack_quota_deferral(thread)
+        quota_deferral_retry_after_ts = self._ts((quota_deferral or {}).get("retry_after_ts"))
+        if quota_deferral is not None and quota_deferral_retry_after_ts is not None and now_ts >= quota_deferral_retry_after_ts:
+            state_updates[self.PACK_QUOTA_DEFERRAL_STATE_KEY] = None
+=======
+>>>>>>> origin/main
 
         inbound_type = str(decision.get("inbound_type") or "").strip().lower()
         decision_type = str(decision.get("decision") or "").strip().lower()
@@ -135,7 +155,11 @@ class AutomationEngineAdapter:
                         "preconversation_initial_placeholder": preconversation_initial_placeholder,
                         "last_outbound_ts": confirmed_last_outbound_ts,
                         "followup_level": self._int(thread.get("followup_level")),
+<<<<<<< HEAD
+                        "now_ts": now_ts,
+=======
                         "now_ts": time.time(),
+>>>>>>> origin/main
                     }
                 )
                 actions.append({"type": "schedule_followup", **followup_due})
@@ -183,7 +207,15 @@ class AutomationEngineAdapter:
         if decision_type == "followup" and not followup_allowed:
             return {"actions": actions, "thread_updates": thread_updates, "state_updates": state_updates, "decision": decision}
 
+<<<<<<< HEAD
+        action_type = responder_module._canonical_flow_action_type(
+            decision.get("action_type"),
+            allow_empty=True,
+            strict=bool(str(decision.get("action_type") or "").strip()),
+        )
+=======
         action_type = str(decision.get("action_type") or "").strip()
+>>>>>>> origin/main
         if not action_type or responder_module._is_no_send_strategy(action_type):
             if inbound_type == "positive":
                 actions.append({"type": "mark_qualified"})
@@ -195,10 +227,21 @@ class AutomationEngineAdapter:
                 actions.append({"type": "move_stage", "stage_id": next_stage_id})
             return {"actions": actions, "thread_updates": thread_updates, "state_updates": state_updates, "decision": decision}
 
+<<<<<<< HEAD
+        enqueue_state_updates: dict[str, Any] = {}
+        if decision_type == "reply":
+            reply_marker = latest_inbound_id or pending_inbound_id
+            enqueue_state_updates = {
+                "pending_reply": True,
+                "pending_inbound_id": reply_marker or None,
+            }
+        enqueue_state_updates[self.PACK_QUOTA_DEFERRAL_STATE_KEY] = None
+=======
         if decision_type == "reply":
             reply_marker = latest_inbound_id or pending_inbound_id
             state_updates["pending_reply"] = True
             state_updates["pending_inbound_id"] = reply_marker or None
+>>>>>>> origin/main
 
         post_send_route_updates: dict[str, Any] = {}
         if inbound_type == "positive":
@@ -222,6 +265,10 @@ class AutomationEngineAdapter:
             "flow_state": post_send_flow_state,
             "pending_reply": False,
             "pending_inbound_id": None,
+<<<<<<< HEAD
+            self.PACK_QUOTA_DEFERRAL_STATE_KEY: None,
+=======
+>>>>>>> origin/main
         }
         if latest_inbound_id:
             post_send_state_updates["last_inbound_id_seen"] = latest_inbound_id
@@ -241,12 +288,57 @@ class AutomationEngineAdapter:
                         "job_type": "followup" if decision_type == "followup" else "auto_reply",
                         "text": text,
                         "latest_inbound_id": latest_inbound_id,
+<<<<<<< HEAD
+                        "enqueue_state_updates": dict(enqueue_state_updates),
+=======
+>>>>>>> origin/main
                         "post_send_thread_updates": post_send_thread_updates,
                         "post_send_state_updates": post_send_state_updates,
                     }
                 )
         else:
             selected_pack = responder_module.select_pack(action_type, account_id)
+<<<<<<< HEAD
+            if not isinstance(selected_pack, dict):
+                raise ValueError(f"Sin pack valido para action_type: {action_type}")
+            pack_id = str(selected_pack.get("id") or "").strip()
+            active_quota_deferral = self._active_pack_quota_deferral(
+                thread=thread,
+                latest_inbound_id=latest_inbound_id,
+                pending_inbound_id=pending_inbound_id,
+                pack_id=pack_id,
+                job_type="followup" if decision_type == "followup" else "auto_reply",
+                now_ts=now_ts,
+            )
+            if active_quota_deferral is not None:
+                blocked_decision = {
+                    **decision,
+                    "decision": "wait",
+                    "reason": "pack_quota_deferred",
+                    "pack_quota_deferral": dict(active_quota_deferral),
+                }
+                return {
+                    "actions": actions,
+                    "thread_updates": thread_updates,
+                    "state_updates": state_updates,
+                    "decision": blocked_decision,
+                }
+            actions.append(
+                {
+                    "type": "send_pack",
+                    "job_type": "followup" if decision_type == "followup" else "auto_reply",
+                    "pack_id": pack_id,
+                    "pack_sendable_actions": responder_module._pack_sendable_action_count(selected_pack.get("actions")),
+                    "latest_inbound_id": latest_inbound_id,
+                    "enqueue_state_updates": dict(enqueue_state_updates),
+                    "post_send_thread_updates": {
+                        **post_send_thread_updates,
+                        "last_pack_sent": pack_id,
+                    },
+                    "post_send_state_updates": post_send_state_updates,
+                }
+            )
+=======
             if isinstance(selected_pack, dict):
                 actions.append(
                     {
@@ -261,6 +353,7 @@ class AutomationEngineAdapter:
                         "post_send_state_updates": post_send_state_updates,
                     }
                 )
+>>>>>>> origin/main
 
         return {
             "actions": actions,
@@ -270,6 +363,21 @@ class AutomationEngineAdapter:
         }
 
     @staticmethod
+<<<<<<< HEAD
+    def describe_evaluation(evaluation: dict[str, Any] | None) -> dict[str, Any]:
+        payload = dict(evaluation or {}) if isinstance(evaluation, dict) else {}
+        decision = dict(payload.get("decision") or {}) if isinstance(payload.get("decision"), dict) else {}
+        actions = [dict(row) for row in payload.get("actions") or [] if isinstance(row, dict)]
+        return {
+            "decision": str(decision.get("decision") or "").strip().lower(),
+            "reason": str(decision.get("reason") or "").strip(),
+            "actions_count": len(actions),
+            "action_types": [str(row.get("type") or "").strip().lower() for row in actions if str(row.get("type") or "").strip()],
+        }
+
+    @staticmethod
+=======
+>>>>>>> origin/main
     def _generate_text(
         *,
         action_type: str,
@@ -279,9 +387,18 @@ class AutomationEngineAdapter:
         conversation_text: str,
     ) -> str:
         api_key = responder_module._resolve_ai_api_key()
+<<<<<<< HEAD
+        canonical_action = responder_module._canonical_flow_action_type(action_type, allow_empty=True)
+        prompt_strategy = str(prompt_entry.get("objection_strategy_name") or "").strip()
+        if str(prompt_entry.get("objection_prompt") or "").strip() and (
+            canonical_action == "objection_engine"
+            or str(action_type or "").strip() == prompt_strategy
+        ):
+=======
         if str(prompt_entry.get("objection_prompt") or "").strip() and str(action_type or "").strip() == str(
             prompt_entry.get("objection_strategy_name") or ""
         ).strip():
+>>>>>>> origin/main
             return responder_module.generate_objection_response(
                 inbound_text,
                 str(prompt_entry.get("objection_prompt") or "").strip(),
@@ -299,12 +416,19 @@ class AutomationEngineAdapter:
 
     @staticmethod
     def _should_generate_text(action_type: str) -> bool:
+<<<<<<< HEAD
+        return responder_module._canonical_flow_action_type(action_type, allow_empty=True) in {
+            "auto_reply",
+            "followup_text",
+            "objection_engine",
+=======
         return responder_module._flow_action_token(action_type) in {
             "auto_reply",
             "autorespuesta",
             "reply_prompt",
             "followup_prompt",
             "followup_text",
+>>>>>>> origin/main
         }
 
     @staticmethod
@@ -612,3 +736,42 @@ class AutomationEngineAdapter:
             return max(0, int(value or 0))
         except Exception:
             return 0
+<<<<<<< HEAD
+
+    @classmethod
+    def _pack_quota_deferral(cls, thread: dict[str, Any]) -> dict[str, Any] | None:
+        raw = thread.get(cls.PACK_QUOTA_DEFERRAL_STATE_KEY)
+        return dict(raw) if isinstance(raw, dict) else None
+
+    @classmethod
+    def _active_pack_quota_deferral(
+        cls,
+        *,
+        thread: dict[str, Any],
+        latest_inbound_id: str,
+        pending_inbound_id: str,
+        pack_id: str,
+        job_type: str,
+        now_ts: float,
+    ) -> dict[str, Any] | None:
+        marker = cls._pack_quota_deferral(thread)
+        if marker is None:
+            return None
+        retry_after_ts = cls._ts(marker.get("retry_after_ts"))
+        if retry_after_ts is None or now_ts >= retry_after_ts:
+            return None
+        marker_job_type = str(marker.get("job_type") or "").strip().lower()
+        clean_job_type = str(job_type or "").strip().lower()
+        if marker_job_type and clean_job_type and marker_job_type != clean_job_type:
+            return None
+        marker_pack_id = str(marker.get("pack_id") or "").strip()
+        clean_pack_id = str(pack_id or "").strip()
+        if marker_pack_id and clean_pack_id and marker_pack_id != clean_pack_id:
+            return None
+        current_inbound_id = str(latest_inbound_id or pending_inbound_id or "").strip()
+        marker_inbound_id = str(marker.get("inbound_id") or "").strip()
+        if marker_inbound_id and current_inbound_id and marker_inbound_id != current_inbound_id:
+            return None
+        return marker
+=======
+>>>>>>> origin/main

@@ -6,10 +6,18 @@ import asyncio
 import contextlib
 import logging
 import random
+<<<<<<< HEAD
+import re
+=======
+>>>>>>> origin/main
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List
+<<<<<<< HEAD
+from urllib.parse import urlparse
+=======
+>>>>>>> origin/main
 
 from config import SETTINGS
 from core.accounts import list_all
@@ -36,6 +44,34 @@ from src.transport.session_manager import ManagedSession, SessionManager
 
 logger = logging.getLogger(__name__)
 _PLAYWRIGHT_REELS_MANAGERS: dict[bool, SessionManager] = {}
+<<<<<<< HEAD
+_REEL_MIN_SECONDS = 5.0
+_REEL_MAX_SECONDS = 45.0
+_LIKE_SESSION_PROGRESS_FLOOR = 0.12
+_LIKE_SESSION_PROGRESS_CEILING = 0.92
+_FOLLOW_SESSION_PROGRESS_FLOOR = 0.2
+_FOLLOW_SESSION_PROGRESS_CEILING = 0.9
+_PROFILE_PATH_BLOCKLIST = {
+    "accounts",
+    "api",
+    "direct",
+    "explore",
+    "developer",
+    "directory",
+    "graphql",
+    "legal",
+    "oauth",
+    "p",
+    "reel",
+    "reels",
+    "static",
+    "stories",
+    "tags",
+    "tv",
+}
+_PROFILE_SECONDARY_SEGMENTS = {"reels", "tagged", "channel"}
+=======
+>>>>>>> origin/main
 
 
 @dataclass
@@ -43,6 +79,10 @@ class ReelsPlaywrightSummary:
     username: str
     viewed: int = 0
     liked: int = 0
+<<<<<<< HEAD
+    followed: int = 0
+=======
+>>>>>>> origin/main
     errors: int = 0
     messages: List[str] = field(default_factory=list)
 
@@ -75,6 +115,10 @@ def _reels_session_manager(headless: bool) -> SessionManager:
             profiles_root=str(_profiles_root()),
             normalize_username=lambda value: str(value or "").strip().lstrip("@"),
             log_event=lambda *_args, **_kwargs: None,
+<<<<<<< HEAD
+            subsystem="interactions",
+=======
+>>>>>>> origin/main
         )
         _PLAYWRIGHT_REELS_MANAGERS[bool(headless)] = manager
     return manager
@@ -215,19 +259,299 @@ async def _next_reel(page) -> None:
     await page.mouse.wheel(0, 1200)
 
 
+<<<<<<< HEAD
+def _build_like_progress_targets(likes_target: int) -> list[float]:
+    return _build_progress_targets(
+        likes_target,
+        floor=_LIKE_SESSION_PROGRESS_FLOOR,
+        ceiling=_LIKE_SESSION_PROGRESS_CEILING,
+    )
+
+
+def _build_follow_progress_targets(follows_target: int) -> list[float]:
+    return _build_progress_targets(
+        follows_target,
+        floor=_FOLLOW_SESSION_PROGRESS_FLOOR,
+        ceiling=_FOLLOW_SESSION_PROGRESS_CEILING,
+    )
+
+
+def _build_progress_targets(target_count: int, *, floor: float, ceiling: float) -> list[float]:
+    clean_target = max(0, int(target_count or 0))
+    if clean_target <= 0:
+        return []
+    span = max(0.01, ceiling - floor)
+    min_gap = min(0.18, span / max(clean_target + 1, 2) * 0.45)
+    seeds = [
+        max(
+            floor,
+            min(
+                ceiling,
+                ((index + 1) / (clean_target + 1)) + random.uniform(-0.08, 0.08),
+            ),
+        )
+        for index in range(clean_target)
+    ]
+    seeds.sort()
+    targets: list[float] = []
+    for index, seed in enumerate(seeds):
+        remaining = clean_target - index - 1
+        lower_bound = floor if not targets else targets[-1] + min_gap
+        upper_bound = ceiling - (remaining * min_gap)
+        if lower_bound > upper_bound:
+            lower_bound = upper_bound
+        targets.append(min(max(seed, lower_bound), upper_bound))
+    return targets
+
+
+def _profile_url_from_href(href: str) -> str:
+    raw = str(href or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        path = urlparse(raw).path
+    else:
+        path = raw
+    clean_path = str(path or "").split("?", 1)[0].split("#", 1)[0].strip()
+    if not clean_path.startswith("/"):
+        return ""
+    parts = [part for part in clean_path.split("/") if part]
+    if not parts:
+        return ""
+    username = str(parts[0] or "").strip()
+    if not username or username.lower() in _PROFILE_PATH_BLOCKLIST:
+        return ""
+    if len(parts) > 1:
+        tail = [str(part or "").strip().lower() for part in parts[1:] if str(part or "").strip()]
+        if not tail:
+            pass
+        elif tail[0] not in _PROFILE_SECONDARY_SEGMENTS:
+            return ""
+    if re.fullmatch(r"[A-Za-z0-9._]+", username) is None:
+        return ""
+    return f"https://www.instagram.com/{username}/"
+
+
+async def _document_profile_urls(page) -> list[str]:
+    with contextlib.suppress(Exception):
+        hrefs = await page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll('a[href]'))
+              .map((node) => node.getAttribute('href') || '')
+              .filter(Boolean)
+            """
+        )
+        if isinstance(hrefs, list):
+            urls: list[str] = []
+            seen: set[str] = set()
+            for href in hrefs:
+                profile_url = _profile_url_from_href(str(href or ""))
+                if not profile_url or profile_url in seen:
+                    continue
+                seen.add(profile_url)
+                urls.append(profile_url)
+            if urls:
+                return urls
+    with contextlib.suppress(Exception):
+        content = await page.content()
+        matches = re.findall(r'''href=["']([^"']+)["']''', str(content or ""))
+        urls = []
+        seen: set[str] = set()
+        for href in matches:
+            profile_url = _profile_url_from_href(str(href or ""))
+            if not profile_url or profile_url in seen:
+                continue
+            seen.add(profile_url)
+            urls.append(profile_url)
+        if urls:
+            return urls
+    return []
+
+
+async def _current_reel_author_urls(page) -> list[str]:
+    selectors = (
+        "main header a[href]",
+        "main article header a[href]",
+        "main a[href]",
+        "body header a[href]",
+        "article a[href]",
+        "body a[href]",
+    )
+    urls: list[str] = []
+    seen: set[str] = set()
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            count = min(await locator.count(), 10)
+        except Exception:
+            continue
+        for index in range(count):
+            try:
+                href = await locator.nth(index).get_attribute("href")
+            except Exception:
+                continue
+            profile_url = _profile_url_from_href(str(href or ""))
+            if not profile_url or profile_url in seen:
+                continue
+            seen.add(profile_url)
+            urls.append(profile_url)
+    if urls:
+        return urls
+    return await _document_profile_urls(page)
+
+
+async def _follow_profile_page(profile_page) -> tuple[bool, str]:
+    await _dismiss_popups_async(profile_page)
+    for selector in (
+        "button:has-text('Following')",
+        "button:has-text('Siguiendo')",
+        "button:has-text('Requested')",
+        "button:has-text('Solicitado')",
+    ):
+        with contextlib.suppress(Exception):
+            locator = profile_page.locator(selector).first
+            if await locator.count() > 0:
+                return False, "already_following"
+    for selector in (
+        "button:has-text('Follow')",
+        "button:has-text('Seguir')",
+        "button:has-text('Follow back')",
+        "button:has-text('Seguir tambien')",
+        "div[role='button']:has-text('Follow')",
+        "div[role='button']:has-text('Seguir')",
+    ):
+        try:
+            locator = profile_page.locator(selector).first
+            if await locator.count() <= 0:
+                continue
+            await locator.click(timeout=3_000)
+            await _sleep_with_stop_async(random.uniform(1.2, 2.2))
+            return True, ""
+        except Exception:
+            continue
+    return False, "follow_button_not_found"
+
+
+async def _try_follow_current_reel_author(page, attempted_profiles: set[str]) -> tuple[bool, str]:
+    candidates = [
+        profile_url
+        for profile_url in await _current_reel_author_urls(page)
+        if profile_url not in attempted_profiles
+    ]
+    if not candidates:
+        return False, "author_profile_not_found"
+    last_reason = "follow_not_attempted"
+    for profile_url in candidates:
+        attempted_profiles.add(profile_url)
+        profile_page = None
+        try:
+            profile_page = await page.context.new_page()
+            profile_page.set_default_timeout(15_000)
+            await profile_page.goto(profile_url, wait_until="domcontentloaded", timeout=45_000)
+            ok, reason = await _follow_profile_page(profile_page)
+            if ok:
+                return True, ""
+            last_reason = reason or last_reason
+        except Exception as exc:
+            last_reason = _short_message(exc, limit=120)
+        finally:
+            if profile_page is not None:
+                with contextlib.suppress(Exception):
+                    await profile_page.close()
+    return False, last_reason
+
+
+=======
+>>>>>>> origin/main
 async def _run_reels_for_account(
     *,
     page,
     summary: ReelsPlaywrightSummary,
     duration_s: int,
     likes_target: int,
+<<<<<<< HEAD
+    follows_target: int = 0,
+) -> None:
+    total_duration = max(1.0, float(duration_s or 0))
+    session_start = time.monotonic()
+    end = session_start + total_duration
+    like_targets = _build_like_progress_targets(likes_target)
+    follow_targets = _build_follow_progress_targets(follows_target)
+    next_like_target_index = 0
+    next_follow_target_index = 0
+    last_liked_view = -999
+    last_followed_view = -999
+    attempted_profiles: set[str] = set()
+    last_follow_reason = ""
+=======
 ) -> None:
     end = time.monotonic() + max(1.0, float(duration_s or 0))
+>>>>>>> origin/main
     await _dismiss_popups_async(page)
     await _sleep_with_stop_async(random.uniform(1.5, 2.5))
     while time.monotonic() < end:
         if STOP_EVENT.is_set():
             return
+<<<<<<< HEAD
+        remaining_before_view = max(0.0, end - time.monotonic())
+        if remaining_before_view <= 1.0:
+            break
+        summary.viewed += 1
+        current_view = summary.viewed
+        watch_s = min(random.uniform(_REEL_MIN_SECONDS, _REEL_MAX_SECONDS), remaining_before_view)
+        progress_at_view_end = min(
+            1.0,
+            max(0.0, ((time.monotonic() - session_start) + watch_s) / total_duration),
+        )
+        should_attempt_like = (
+            next_like_target_index < len(like_targets)
+            and progress_at_view_end >= like_targets[next_like_target_index]
+            and (current_view - last_liked_view) > 1
+        )
+        should_attempt_follow = (
+            next_follow_target_index < len(follow_targets)
+            and progress_at_view_end >= follow_targets[next_follow_target_index]
+            and (current_view - last_followed_view) > 1
+        )
+        like_delay = None
+        if should_attempt_like and watch_s > 1.2:
+            like_delay = min(
+                max(0.8, watch_s * random.uniform(0.25, 0.7)),
+                max(0.8, watch_s - 0.4),
+            )
+        first_pause = like_delay if like_delay is not None else watch_s
+        await _sleep_with_stop_async(first_pause)
+        if STOP_EVENT.is_set() or time.monotonic() >= end:
+            break
+        action_taken_on_view = False
+        if should_attempt_like and like_delay is not None:
+            with contextlib.suppress(Exception):
+                if await _try_like_current_reel(page):
+                    summary.liked += 1
+                    last_liked_view = current_view
+                    next_like_target_index += 1
+                    action_taken_on_view = True
+        if (
+            not action_taken_on_view
+            and should_attempt_follow
+            and max(0.0, end - time.monotonic()) >= 3.0
+        ):
+            with contextlib.suppress(Exception):
+                followed_ok, follow_reason = await _try_follow_current_reel_author(page, attempted_profiles)
+                if followed_ok:
+                    summary.followed += 1
+                    last_followed_view = current_view
+                    next_follow_target_index += 1
+                    action_taken_on_view = True
+                    last_follow_reason = ""
+                elif follow_reason:
+                    last_follow_reason = follow_reason
+        remaining_watch = max(0.0, watch_s - first_pause)
+        if remaining_watch > 0:
+            await _sleep_with_stop_async(min(remaining_watch, max(0.0, end - time.monotonic())))
+        if STOP_EVENT.is_set() or time.monotonic() >= end:
+            break
+=======
         summary.viewed += 1
         watch_s = random.uniform(25.0, 50.0)
         like_delay = min(random.uniform(4.0, 12.0), watch_s)
@@ -242,15 +566,32 @@ async def _run_reels_for_account(
         await _sleep_with_stop_async(remaining_watch)
         if STOP_EVENT.is_set() or time.monotonic() >= end:
             return
+>>>>>>> origin/main
         await _sleep_with_stop_async(
             min(random.uniform(0.4, 1.2), max(0.0, end - time.monotonic()))
         )
         if STOP_EVENT.is_set() or time.monotonic() >= end:
+<<<<<<< HEAD
+            break
+=======
             return
+>>>>>>> origin/main
         await _next_reel(page)
         await _sleep_with_stop_async(
             min(random.uniform(1.2, 2.4), max(0.0, end - time.monotonic()))
         )
+<<<<<<< HEAD
+    if likes_target > 0 and summary.liked < likes_target:
+        summary.messages.append(
+            f"Likes completados parcialmente: {summary.liked}/{max(0, int(likes_target or 0))}."
+        )
+    if follows_target > 0 and summary.followed < follows_target:
+        message = f"Follows completados parcialmente: {summary.followed}/{max(0, int(follows_target or 0))}."
+        if last_follow_reason:
+            message += f" Motivo final: {last_follow_reason}."
+        summary.messages.append(message)
+=======
+>>>>>>> origin/main
 
 
 def run_from_menu(alias: str) -> None:
@@ -264,7 +605,12 @@ def run_from_menu(alias: str) -> None:
 
     minutes = ask_int("Tiempo de navegacion por cuenta (min): ", min_value=1, default=10)
     likes_target = ask_int("Cantidad de likes por cuenta: ", min_value=0, default=10)
+<<<<<<< HEAD
+    follows_target = ask_int("Cantidad de follows por cuenta: ", min_value=0, default=0)
+    print("Cada reel se vera entre 5s y 45s (random).")
+=======
     print("Cada reel se vera entre 25s y 50s (random).")
+>>>>>>> origin/main
 
     ensure_logging(quiet=SETTINGS.quiet, log_dir=SETTINGS.log_dir, log_file=SETTINGS.log_file)
     reset_stop_event()
@@ -336,6 +682,10 @@ def run_from_menu(alias: str) -> None:
                     summary=summary,
                     duration_s=minutes * 60,
                     likes_target=likes_target,
+<<<<<<< HEAD
+                    follows_target=follows_target,
+=======
+>>>>>>> origin/main
                 )
                 with contextlib.suppress(Exception):
                     await session_manager.save_storage_state(session, username)
@@ -372,7 +722,14 @@ def run_from_menu(alias: str) -> None:
         color = Fore.GREEN if summary.errors == 0 else Fore.YELLOW
         print(
             style_text(
+<<<<<<< HEAD
+                (
+                    f"@{summary.username}: vistos={summary.viewed} "
+                    f"likes={summary.liked} follows={summary.followed} errores={summary.errors}"
+                ),
+=======
                 f"@{summary.username}: vistos={summary.viewed} likes={summary.liked} errores={summary.errors}",
+>>>>>>> origin/main
                 color=color,
                 bold=True,
             )
