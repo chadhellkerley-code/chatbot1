@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-<<<<<<< HEAD
 import json
-=======
->>>>>>> origin/main
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -23,11 +20,7 @@ from core.leads_store import (
     LeadListStore,
     LeadListStoreError,
 )
-<<<<<<< HEAD
 from core.storage_atomic import atomic_append_jsonl, atomic_write_text, path_lock
-=======
-from core.storage_atomic import atomic_append_jsonl, path_lock
->>>>>>> origin/main
 from core.templates_store import (
     TemplateStore,
     load_template_state_file,
@@ -390,7 +383,6 @@ class LeadsService:
     def _legacy_storage_root(self) -> Path:
         return storage_root(Path(self.context.root_dir), scoped=False, honor_env=False)
 
-<<<<<<< HEAD
     @staticmethod
     def _normalized_list_key(name: object) -> str:
         return str(name or "").strip().casefold()
@@ -505,8 +497,6 @@ class LeadsService:
         self._purge_deleted_backups_for_list(clean_name)
         self._purge_import_state_for_list(clean_name)
 
-=======
->>>>>>> origin/main
     def _template_storage_roots(self) -> list[Path]:
         candidates = [
             self.context.storage_path(),
@@ -721,11 +711,7 @@ class LeadsService:
     def delete_list(self, name: str) -> None:
         clean_name = self._require_list_name(name)
         try:
-<<<<<<< HEAD
             self._delete_list_everywhere(clean_name)
-=======
-            self._list_store.delete(clean_name)
->>>>>>> origin/main
         except OSError as exc:
             raise self._storage_error("No se pudo eliminar la lista de leads.", exc) from exc
 

@@ -1,19 +1,20 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QKeyEvent
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QObject, QPoint, QSize, QTimer, Qt, Signal  # UI: add the model primitives required by the list-based message renderer
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QPainter, QPen  # UI: add the painting primitives required by the delegate-driven bubble renderer
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListView,
     QMenu,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +36,178 @@ class _ComposerEdit(QPlainTextEdit):
             self.submitRequested.emit()
             return
         super().keyPressEvent(event)
+
+
+class ChatMessageModel(QAbstractListModel):
+    MessageRole = Qt.UserRole + 1  # UI: expose the full row dict so the chat-level context menu can act on original message payloads
+    IdentityRole = Qt.UserRole + 2  # UI: expose stable identities so incremental updates and scroll anchors can target the same logical row
+    SignatureRole = Qt.UserRole + 3  # UI: expose signatures so the existing no-op and append diff paths can be preserved
+    DirectionRole = Qt.UserRole + 4  # UI: expose direction directly for left/right delegate painting
+    TextRole = Qt.UserRole + 5  # UI: expose text directly for delegate paint and size calculations
+    MetaRole = Qt.UserRole + 6  # UI: expose the preformatted meta line so painting matches the old widget footer text exactly
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)  # UI: parent the message model into the chat widget tree for predictable lifetime management
+        self._rows: list[dict[str, Any]] = []  # UI: store normalized message rows exactly as the chat view wants to display them
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:  # type: ignore[override]
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        row = self._rows[index.row()]
+        if role == Qt.DisplayRole:
+            return str(row.get("text") or "")  # UI: provide a fallback display role even though the custom delegate owns the final paint
+        if role == self.MessageRole:
+            return dict(row)
+        if role == self.IdentityRole:
+            return _message_identity(row, index.row())  # UI: keep fallback identities position-stable like the previous widget diff path
+        if role == self.SignatureRole:
+            return _message_signature(row)
+        if role == self.DirectionRole:
+            return str(row.get("direction") or "").strip().lower()
+        if role == self.TextRole:
+            return str(row.get("text") or "")
+        if role == self.MetaRole:
+            return _message_meta(row)
+        return None
+
+    def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        clean_rows = [dict(row) for row in rows if isinstance(row, dict)]  # UI: defensively copy inbound rows so model updates never leak back upstream
+        self.beginResetModel()  # UI: replace the full thread efficiently when the chat chooses a complete rerender
+        self._rows = clean_rows
+        self.endResetModel()
+
+    def update_row(self, row_index: int, row: dict[str, Any]) -> None:
+        if not (0 <= row_index < len(self._rows)):
+            return
+        self._rows[row_index] = dict(row or {})  # UI: refresh one logical row in place so text/meta updates do not disturb scroll state
+        changed_index = self.index(row_index, 0)
+        self.dataChanged.emit(
+            changed_index,
+            changed_index,
+            [
+                Qt.DisplayRole,
+                self.MessageRole,
+                self.IdentityRole,
+                self.SignatureRole,
+                self.DirectionRole,
+                self.TextRole,
+                self.MetaRole,
+            ],
+        )  # UI: invalidate every delegate-relevant role for the updated message row
+
+    def append_rows(self, rows: list[dict[str, Any]]) -> None:
+        clean_rows = [dict(row) for row in rows if isinstance(row, dict)]  # UI: normalize appended rows before exposing them to the live view
+        if not clean_rows:
+            return
+        start = len(self._rows)
+        end = start + len(clean_rows) - 1
+        self.beginInsertRows(QModelIndex(), start, end)  # UI: preserve the append-only fast path through proper model inserts
+        self._rows.extend(clean_rows)
+        self.endInsertRows()
+
+    def signatures(self) -> list[tuple[str, ...]]:
+        return [_message_signature(row) for row in self._rows]
+
+    def identities(self) -> list[str]:
+        return [_message_identity(row, index) for index, row in enumerate(self._rows)]
+
+class ChatMessageDelegate(QStyledItemDelegate):
+    _MAX_BUBBLE_WIDTH = 520  # UI: preserve the existing bubble width cap from the widget renderer
+    _BUBBLE_RATIO = 0.75  # UI: limit bubble width to the requested fraction of the available row width
+    _SIDE_MARGIN = 18  # UI: preserve the old chat canvas side padding around painted bubbles
+    _H_PADDING = 10  # UI: match the requested horizontal bubble padding
+    _V_PADDING = 8  # UI: match the requested vertical bubble padding
+    _TEXT_META_GAP = 4  # UI: preserve the old visual separation between message text and metadata
+    _RADIUS = 12  # UI: paint the delegate bubbles with the requested rounded-corner radius
+    _TEXT_COLOR = QColor("#f4f8ff")  # UI: match the old bubble text color from the stylesheet exactly
+    _META_COLOR = QColor("#8297b3")  # UI: match the old bubble meta color from the stylesheet exactly
+    _OUTBOUND_FILL = QColor("#13395f")  # UI: match the old outbound bubble fill from the stylesheet exactly
+    _OUTBOUND_BORDER = QColor("#255990")  # UI: match the old outbound bubble border from the stylesheet exactly
+    _INBOUND_FILL = QColor("#0f1d2f")  # UI: match the old inbound bubble fill from the stylesheet exactly
+    _INBOUND_BORDER = QColor("#1b3047")  # UI: match the old inbound bubble border from the stylesheet exactly
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)  # UI: parent the delegate to the list view so width-driven relayout stays local to the chat surface
+
+    def _effective_width(self, option, index: QModelIndex) -> int:
+        del index
+        width = int(option.rect.width() or 0)
+        parent = self.parent()
+        if width <= 0 and isinstance(parent, QListView):
+            width = parent.viewport().width()
+        return max(1, width)
+
+    def _bubble_width(self, option, index: QModelIndex) -> int:
+        available_width = max(1, self._effective_width(option, index) - (self._SIDE_MARGIN * 2))
+        return min(self._MAX_BUBBLE_WIDTH, max(1, int(available_width * self._BUBBLE_RATIO)))
+
+    def _text_font(self, option) -> QFont:
+        font = QFont(option.font)
+        font.setPointSize(12)  # UI: preserve the old 12px bubble text size from the stylesheet
+        return font
+
+    def _meta_font(self, option) -> QFont:
+        font = QFont(option.font)
+        font.setPointSize(10)  # UI: preserve the old 10px bubble meta size from the stylesheet
+        return font
+
+    def _text_height(self, font: QFont, width: int, text: str) -> int:
+        metrics = QFontMetrics(font)
+        bounds = metrics.boundingRect(0, 0, max(1, width), 100000, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, text)
+        return max(metrics.lineSpacing(), bounds.height())
+
+    def _layout(self, option, index: QModelIndex) -> tuple[QFont, QFont, str, str, bool, int, int]:
+        direction = str(index.data(ChatMessageModel.DirectionRole) or "").strip().lower()
+        outbound = direction == "outbound"
+        text = str(index.data(ChatMessageModel.TextRole) or "").strip() or " "  # UI: preserve the old empty-text placeholder behavior exactly
+        meta = str(index.data(ChatMessageModel.MetaRole) or "")
+        bubble_width = self._bubble_width(option, index)
+        text_font = self._text_font(option)
+        meta_font = self._meta_font(option)
+        text_width = max(1, bubble_width - (self._H_PADDING * 2))
+        text_height = self._text_height(text_font, text_width, text)
+        meta_height = max(1, QFontMetrics(meta_font).lineSpacing())
+        bubble_height = max(48, (self._V_PADDING * 2) + text_height + self._TEXT_META_GAP + meta_height)
+        return text_font, meta_font, text, meta, outbound, bubble_width, bubble_height
+
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:  # type: ignore[override]
+        text_font, meta_font, text, meta, outbound, bubble_width, bubble_height = self._layout(option, index)
+        content_rect = option.rect.adjusted(self._SIDE_MARGIN, 0, -self._SIDE_MARGIN, 0)  # UI: keep the old canvas padding around delegate-painted bubbles
+        bubble_x = (content_rect.right() - bubble_width + 1) if outbound else content_rect.left()
+        bubble_rect = content_rect.adjusted(0, 0, 0, 0)
+        bubble_rect.setX(bubble_x)
+        bubble_rect.setWidth(bubble_width)
+        bubble_rect.setHeight(bubble_height)
+        text_width = max(1, bubble_rect.width() - (self._H_PADDING * 2))
+        text_height = self._text_height(text_font, text_width, text)
+        meta_height = max(1, QFontMetrics(meta_font).lineSpacing())
+        text_rect = bubble_rect.adjusted(self._H_PADDING, self._V_PADDING, -self._H_PADDING, -(self._V_PADDING + meta_height + self._TEXT_META_GAP))
+        text_rect.setHeight(text_height)
+        meta_rect = bubble_rect.adjusted(self._H_PADDING, bubble_rect.height() - self._V_PADDING - meta_height, -self._H_PADDING, -self._V_PADDING)
+        fill = self._OUTBOUND_FILL if outbound else self._INBOUND_FILL
+        border = self._OUTBOUND_BORDER if outbound else self._INBOUND_BORDER
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)  # UI: keep rounded bubbles smooth now that they are painted instead of QWidget-backed
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(bubble_rect, self._RADIUS, self._RADIUS)
+        painter.setPen(self._TEXT_COLOR)
+        painter.setFont(text_font)
+        painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, text)
+        painter.setPen(self._META_COLOR)
+        painter.setFont(meta_font)
+        painter.drawText(meta_rect, Qt.AlignRight | Qt.AlignVCenter, meta)
+        painter.restore()
+
+    def sizeHint(self, option, index: QModelIndex) -> QSize:  # type: ignore[override]
+        _text_font, _meta_font, _text, _meta, _outbound, _bubble_width, bubble_height = self._layout(option, index)
+        return QSize(self._effective_width(option, index), max(48, bubble_height))  # UI: let row height grow with wrapped content while the list keeps full-width hit areas
 
 
 class ChatView(QWidget):
@@ -99,40 +272,45 @@ class ChatView(QWidget):
         header_layout.addLayout(badges, 0)
         shell_layout.addWidget(header)
 
-        self._pack_action = QAction("Enviar pack", self)
-        self._pack_action.triggered.connect(self.actionsRequested.emit)
-        self._pack_action.setEnabled(False)
+        self._msg_model = ChatMessageModel(self)  # UI: move message storage into a model so the chat no longer instantiates one widget per row
+        self._msg_delegate = ChatMessageDelegate(self)  # UI: move bubble rendering into a delegate so large threads paint efficiently
+        self._msg_view = QListView()  # UI: replace the scroll-area canvas with a list view designed for many variable-height rows
+        self._msg_view.setObjectName("InboxChatMessageList")  # UI: give the list surface a stable hook for local styling and debugging
+        self._msg_view.viewport().setObjectName("InboxChatViewport")  # UI: preserve the transparent viewport styling hook used by the old scroll area
+        self._msg_view.setModel(self._msg_model)  # UI: bind the chat list to the new message model
+        self._msg_view.setItemDelegate(self._msg_delegate)  # UI: render each row through the custom bubble delegate
+        self._msg_view.setVerticalScrollMode(QListView.ScrollPerPixel)  # UI: keep pixel-smooth scrolling like the old scroll area
+        self._msg_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # UI: preserve the single-column chat layout with no horizontal scrolling
+        self._msg_view.setResizeMode(QListView.Adjust)  # UI: recompute delegate layouts when the viewport width changes
+        self._msg_view.setSelectionMode(QListView.NoSelection)  # UI: match the old bubble widgets, which were not selectable rows
+        self._msg_view.setFocusPolicy(Qt.NoFocus)  # UI: keep keyboard focus on the composer rather than the message surface
+        self._msg_view.setSpacing(6)  # UI: preserve a small gap between consecutive bubbles in the list renderer
+        self._msg_view.setFrameShape(QFrame.NoFrame)  # UI: remove the default item-view frame so the stage card remains visually clean
+        self._msg_view.setContextMenuPolicy(Qt.CustomContextMenu)  # UI: move message actions to the list view context menu now that bubbles are painted
+        self._msg_view.customContextMenuRequested.connect(self._show_message_context_menu)  # UI: keep copy/delete actions routed through the existing chat helpers
+        self._msg_view.setStyleSheet("QListView#InboxChatMessageList { background: transparent; border: none; }")  # UI: preserve the transparent chat surface without touching the shared inbox stylesheet
 
-        self._tag_action = QAction("Agregar etiqueta", self)
-        self._tag_action.triggered.connect(self.addTagRequested.emit)
-        self._tag_action.setEnabled(False)
+        self._message_stage = QWidget()  # UI: host the list view and the empty-state surface in the same slot the scroll area used to occupy
+        self._message_stage_layout = QVBoxLayout(self._message_stage)  # UI: let the chat toggle between real messages and placeholders without rebuilding parent layouts
+        self._message_stage_layout.setContentsMargins(0, 0, 0, 0)
+        self._message_stage_layout.setSpacing(0)
 
-        self._follow_up_action = QAction("Marcar seguimiento", self)
-        self._follow_up_action.triggered.connect(self.markFollowUpRequested.emit)
-        self._follow_up_action.setEnabled(False)
+        self._empty_state_host = QWidget()  # UI: preserve the old loading/error/no-thread placeholder card behavior alongside the new list view
+        self._empty_state_layout = QVBoxLayout(self._empty_state_host)  # UI: center placeholder cards in a dedicated host instead of inserting them into a message canvas
+        self._empty_state_layout.setContentsMargins(18, 16, 18, 16)
+        self._empty_state_layout.setSpacing(0)
+        self._empty_state_layout.addStretch(1)
+        self._empty_state_layout.addStretch(1)
+        self._empty_state_card: _EmptyStateCard | None = None  # UI: track the active placeholder card so it can be replaced cleanly
 
-        self._takeover_action = QAction("Tomar manual", self)
-        self._takeover_action.triggered.connect(self.manualTakeoverRequested.emit)
-        self._takeover_action.setEnabled(False)
-
-        self._release_action = QAction("Devolver a auto", self)
-        self._release_action.triggered.connect(self.manualReleaseRequested.emit)
-        self._release_action.setEnabled(False)
-
-        self._scroll = QScrollArea()
-        self._scroll.setObjectName("InboxChatScroll")
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.viewport().setObjectName("InboxChatViewport")
-
-        self._body = QWidget()
-        self._body.setObjectName("InboxChatCanvas")
-        self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(18, 16, 18, 16)
-        self._body_layout.setSpacing(8)
-        self._body_layout.addStretch(1)
-        self._scroll.setWidget(self._body)
-        shell_layout.addWidget(self._scroll, 1)
+        self._message_stage_layout.addWidget(self._msg_view, 1)  # UI: place the live message list into the stage slot
+        self._message_stage_layout.addWidget(self._empty_state_host, 1)  # UI: keep placeholder content in the same slot as the live message list
+        shell_layout.addWidget(self._message_stage, 1)  # UI: replace the old scroll-area slot with the list/placeholder stage
+        self._render_hint = QLabel("")  # UI: reserve a render-status label above the composer so large thread rebuilds show progress
+        self._render_hint.setObjectName("InboxRenderHint")  # UI: style the render-status label independently from message content
+        self._render_hint.setAlignment(Qt.AlignCenter)  # UI: center the render-status label so it reads like a transient loading hint
+        self._render_hint.hide()  # UI: keep the render-status label hidden until a large thread rebuild begins
+        shell_layout.addWidget(self._render_hint)  # UI: place the render-status label above the composer without mixing it into the message area
 
         composer = QFrame()
         composer.setObjectName("InboxComposerDock")
@@ -168,31 +346,20 @@ class ChatView(QWidget):
         root.addWidget(shell, 1)
 
         self._current_thread_key = ""
-        self._message_widgets: list[QWidget] = []
         self._rendered_thread_key = ""
         self._rendered_signatures: list[tuple[str, ...]] = []
         self._rendered_identities: list[str] = []
-        self._pending_rows: list[dict[str, Any]] = []
-        self._pending_signatures: list[tuple[str, ...]] = []
-        self._pending_identities: list[str] = []
-        self._render_job_id = 0
-        self._rendering = False
-        self._render_batch_size = 80
-        self._pending_scroll_to_bottom = False
-        self._pending_restore_value = 0
-        self._pending_restore_anchor: dict[str, Any] | None = None
         self._current_health_state = "healthy"
         self._runtime_active = False
         self._manual_send_reason = ""
+        self._msg_cache_key: str = ""  # UI: cache the last normalized message payload key so unchanged snapshots can skip re-normalization
+        self._msg_cache_rows: list[dict[str, Any]] = []  # UI: store the last normalized rows so unchanged snapshots can reuse them directly
+        self._msg_cache_signature: str = ""  # UI: retain a stable signature token alongside the cached normalized message rows
         self._show_placeholder(
             "Selecciona una conversacion",
             "El historial aparecera aqui apenas abras un thread desde la columna izquierda.",
         )
 
-    def set_runtime_state(self, *, active: bool) -> None:
-        self._runtime_active = bool(active)
-
-<<<<<<< HEAD
     def set_thread(
         self,
         thread: dict[str, Any] | None,
@@ -200,12 +367,11 @@ class ChatView(QWidget):
         permissions: dict[str, Any] | None = None,
         truth: dict[str, Any] | None = None,
     ) -> None:
-=======
-    def set_thread(self, thread: dict[str, Any] | None, *, permissions: dict[str, Any] | None = None) -> None:
->>>>>>> origin/main
         if not thread:
-            self._cancel_pending_render()
             self._current_thread_key = ""
+            self._msg_cache_key = ""  # UI: invalidate message cache on thread switch
+            self._msg_cache_rows = []  # UI: invalidate message cache on thread switch
+            self._msg_cache_signature = ""  # UI: invalidate message cache on thread switch
             self._avatar.setText("?")
             self._title.setText("Selecciona una conversacion")
             self._meta.setText("El historial aparecera aqui cuando abras un thread.")
@@ -217,11 +383,6 @@ class ChatView(QWidget):
             self._input.setReadOnly(True)
             self._input.setEnabled(False)
             self._send_button.setEnabled(False)
-            self._pack_action.setEnabled(False)
-            self._tag_action.setEnabled(False)
-            self._follow_up_action.setEnabled(False)
-            self._takeover_action.setEnabled(False)
-            self._release_action.setEnabled(False)
             self._show_placeholder(
                 "Selecciona una conversacion",
                 "El historial aparecera aqui apenas abras un thread desde la columna izquierda.",
@@ -230,8 +391,10 @@ class ChatView(QWidget):
 
         new_thread_key = str(thread.get("thread_key") or "").strip()
         if new_thread_key != self._current_thread_key:
-            self._cancel_pending_render()
             self._reset_render_state()
+            self._msg_cache_key = ""  # UI: invalidate message cache on thread switch
+            self._msg_cache_rows = []  # UI: invalidate message cache on thread switch
+            self._msg_cache_signature = ""  # UI: invalidate message cache on thread switch
         self._current_thread_key = new_thread_key
         display_name = str(
             thread.get("display_name") or thread.get("recipient_username") or "Conversacion"
@@ -242,10 +405,7 @@ class ChatView(QWidget):
         self._current_health_state = str(thread.get("account_health") or "healthy").strip().lower() or "healthy"
         owner = str(thread.get("owner") or "none").strip().lower() or "none"
         resolved = self._resolve_permissions(thread, permissions)
-<<<<<<< HEAD
         truth_payload = dict(truth or {})
-=======
->>>>>>> origin/main
         self._runtime_active = bool(resolved.get("runtime_active", False))
         self._manual_send_reason = str(resolved.get("manual_send_reason") or "").strip().lower()
         can_reply = bool(resolved.get("can_manual_send"))
@@ -259,36 +419,23 @@ class ChatView(QWidget):
         self._avatar.setText(_initials(display_name))
         self._title.setText(display_name)
         self._meta.setText(f"@{recipient}  |  {source_label}")
-<<<<<<< HEAD
         self._submeta.setText(_thread_submeta(thread, truth=truth_payload))
         self._context_badge.setText(stage or bucket or "Thread activo")
         self._state_badge.setText(str(truth_payload.get("label") or _thread_state(thread)).strip() or "Thread activo")
-=======
-        self._submeta.setText(_thread_submeta(thread))
-        self._context_badge.setText(stage or bucket or "Thread activo")
-        self._state_badge.setText(_thread_state(thread))
->>>>>>> origin/main
         self._composer_hint.setText(self._composer_hint_text())
         self._input.setPlaceholderText(self._composer_placeholder(can_reply, read_only))
         self._input.setReadOnly(read_only or not can_reply)
         self._input.setEnabled(can_reply or read_only)
         self._send_button.setEnabled(can_reply)
-        self._pack_action.setEnabled(bool(resolved.get("can_send_pack")))
-        self._tag_action.setEnabled(bool(resolved.get("can_add_tag")))
-        self._follow_up_action.setEnabled(bool(resolved.get("can_mark_follow_up")))
-        self._takeover_action.setEnabled(bool(resolved.get("can_takeover_manual")))
-        self._release_action.setEnabled(bool(resolved.get("can_release_manual")))
 
         del owner
 
     def set_loading(self, loading: bool) -> None:
         if loading:
-            self._cancel_pending_render()
             self._state_badge.setText("Cargando conversacion...")
             self._show_placeholder("Abriendo conversacion", "Traiendo historial y estado del thread.")
 
     def set_error(self, message: str) -> None:
-        self._cancel_pending_render()
         detail = str(message or "").strip() or "No se pudo abrir la conversacion."
         self._state_badge.setText("Error al cargar")
         self._show_placeholder("No se pudo abrir la conversacion", detail)
@@ -300,6 +447,7 @@ class ChatView(QWidget):
         seen_text: str = "",
         force_scroll_to_bottom: bool = False,
     ) -> None:
+        del seen_text  # UI: keep the existing public signature stable while the renderer remains row-driven
         if not self._current_thread_key:
             self._show_placeholder(
                 "Selecciona una conversacion",
@@ -307,63 +455,61 @@ class ChatView(QWidget):
             )
             return
 
-<<<<<<< HEAD
-=======
-        if seen_text:
-            self._state_badge.setText(seen_text)
->>>>>>> origin/main
-        normalized_rows = _normalize_message_rows(rows)
-        message_signatures = [_message_signature(row) for row in normalized_rows]
+        incoming_key = f"{self._current_thread_key}:{len(rows)}:{rows[-1].get('message_id', '') if rows else ''}"  # UI: derive a cheap thread revision token before running the normalization pipeline
+        if incoming_key == self._msg_cache_key:  # UI: reuse normalized messages when the incoming thread revision token is unchanged
+            normalized_rows = list(self._msg_cache_rows)  # UI: skip re-normalization when thread content is unchanged
+            message_signatures = [_message_signature(row) for row in normalized_rows]  # UI: still recompute render signatures so downstream diff logic keeps running
+        else:
+            normalized_rows = _normalize_message_rows(rows)  # UI: run the full normalization pipeline when the incoming thread revision token changes
+            message_signatures = [_message_signature(row) for row in normalized_rows]  # UI: compute render signatures immediately after normalization for cache refresh
+            self._msg_cache_key = incoming_key  # UI: update message cache after normalization
+            self._msg_cache_rows = list(normalized_rows)  # UI: update message cache after normalization
+            self._msg_cache_signature = repr(message_signatures)  # UI: update message cache after normalization
         message_identities = [_message_identity(row, index) for index, row in enumerate(normalized_rows)]
-        scrollbar = self._scroll.verticalScrollBar()
+        scrollbar = self._msg_view.verticalScrollBar()  # UI: measure scroll state from the list view now that message bubbles are delegate-painted rows
         previous_value = scrollbar.value()
         previous_max = scrollbar.maximum()
         near_bottom = previous_max <= 0 or (previous_max - previous_value) <= 56
-        scroll_anchor = None if force_scroll_to_bottom or near_bottom else self._capture_scroll_anchor(previous_value)
+        scroll_anchor = None if force_scroll_to_bottom or near_bottom else self._capture_scroll_anchor()  # UI: preserve anchor-based restore from the first visible list row
 
         if not normalized_rows:
-            self._cancel_pending_render()
             self._show_placeholder(
                 "Sin mensajes sincronizados",
                 "Cuando el thread tenga historial disponible en storage, se mostrara aqui.",
             )
             return
+        self._msg_view.show()  # UI: show the live list surface as soon as the thread has renderable rows
+        self._empty_state_host.hide()  # UI: hide placeholder content when real messages are present
+
         if (
-            not self._rendering
-            and self._rendered_thread_key == self._current_thread_key
+            self._rendered_thread_key == self._current_thread_key
             and message_signatures == self._rendered_signatures
         ):
             if force_scroll_to_bottom:
                 QTimer.singleShot(0, self._scroll_to_bottom)
             return
         if (
-            not self._rendering
-            and self._rendered_thread_key == self._current_thread_key
-            and self._message_widgets
+            self._rendered_thread_key == self._current_thread_key
+            and self._msg_model.rowCount() > 0
             and len(message_identities) == len(self._rendered_identities)
             and message_identities == self._rendered_identities
         ):
-            for widget, row in zip(self._message_widgets, normalized_rows):
-                if isinstance(widget, _MessageBubble):
-                    widget.update_message(row)
-            self._rendered_signatures = message_signatures
+            for row_index, row in enumerate(normalized_rows):
+                self._msg_model.update_row(row_index, row)  # UI: preserve the old in-place update path without rebuilding the whole thread
+            self._rendered_signatures = self._msg_model.signatures()  # UI: keep cached signatures aligned with the live model after in-place updates
         elif (
-            not self._rendering
-            and self._rendered_thread_key == self._current_thread_key
-            and self._message_widgets
+            self._rendered_thread_key == self._current_thread_key
+            and self._msg_model.rowCount() > 0
             and len(message_signatures) >= len(self._rendered_signatures)
             and message_signatures[: len(self._rendered_signatures)] == self._rendered_signatures
         ):
             new_rows = normalized_rows[len(self._rendered_signatures) :]
-            for row in new_rows:
-                self._append_message_row(row)
-            self._rendered_signatures = message_signatures
-            self._rendered_identities = message_identities
+            self._msg_model.append_rows(new_rows)  # UI: preserve the append-only fast path by inserting only new tail rows into the model
+            self._rendered_signatures = self._msg_model.signatures()  # UI: refresh signatures from the model after appends
+            self._rendered_identities = self._msg_model.identities()  # UI: refresh identities from the model after appends
         else:
-            self._schedule_render(
+            self._render_full(
                 normalized_rows,
-                message_signatures,
-                message_identities,
                 scroll_to_bottom=bool(force_scroll_to_bottom or near_bottom),
                 restore_value=previous_value,
                 restore_anchor=scroll_anchor,
@@ -372,7 +518,7 @@ class ChatView(QWidget):
         if force_scroll_to_bottom or near_bottom:
             QTimer.singleShot(0, self._scroll_to_bottom)
         else:
-            QTimer.singleShot(0, lambda anchor=scroll_anchor, value=previous_value: self._restore_scroll(anchor, value))
+            QTimer.singleShot(0, lambda value=previous_value, anchor=scroll_anchor: self._restore_scroll(value, anchor))  # UI: restore the user's reading position after model-level updates
 
     def load_suggestion(self, text: str) -> None:
         content = str(text or "").strip()
@@ -394,11 +540,7 @@ class ChatView(QWidget):
             return
         self.sendRequested.emit(content)
         self._input.clear()
-<<<<<<< HEAD
         self._state_badge.setText("Mensaje en cola local")
-=======
-        self._state_badge.setText("Mensaje en cola...")
->>>>>>> origin/main
 
     def _resolve_permissions(
         self,
@@ -443,56 +585,41 @@ class ChatView(QWidget):
             return "Envio deshabilitado por estado de cuenta"
         return "Envio no disponible para este thread"
 
-    def _clear_messages(self) -> None:
-        while self._body_layout.count() > 1:
-            item = self._body_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._message_widgets.clear()
-
     def _show_placeholder(self, title: str, subtitle: str) -> None:
         self._reset_render_state()
-        self._clear_messages()
-        self._body_layout.insertWidget(0, _EmptyStateCard(title, subtitle), 0, Qt.AlignCenter)
+        self._render_hint.hide()  # UI: clear transient loading feedback when the chat falls back to a placeholder state
+        self._render_hint.setText("")
+        self._msg_model.set_rows([])  # UI: clear the list model so placeholder states never leave stale messages behind
+        if self._empty_state_card is not None:
+            self._empty_state_layout.removeWidget(self._empty_state_card)  # UI: detach the previous placeholder card before installing a new one
+            self._empty_state_card.deleteLater()  # UI: replace the existing placeholder card instead of stacking multiple cards
+        self._empty_state_card = _EmptyStateCard(title, subtitle)  # UI: keep the existing placeholder card styling inside the new message stage
+        self._empty_state_layout.insertWidget(1, self._empty_state_card, 0, Qt.AlignCenter)  # UI: center the placeholder card inside the dedicated host
+        self._msg_view.hide()  # UI: hide the live list while there is no thread content to render
+        self._empty_state_host.show()  # UI: show the placeholder host in the list-view slot
 
     def _scroll_to_bottom(self) -> None:
-        scrollbar = self._scroll.verticalScrollBar()
+        scrollbar = self._msg_view.verticalScrollBar()  # UI: drive auto-stick behavior from the list view scrollbar
         scrollbar.setValue(scrollbar.maximum())
 
-    def _restore_scroll(self, anchor: dict[str, Any] | None, value: int) -> None:
-        scrollbar = self._scroll.verticalScrollBar()
-        if isinstance(anchor, dict):
-            identity = str(anchor.get("identity") or "").strip()
-            offset = int(anchor.get("offset") or 0)
-            for widget in self._message_widgets:
-                if not isinstance(widget, _MessageBubble):
+    def _restore_scroll(self, restore_value: int, restore_anchor: dict[str, Any] | None) -> None:
+        scrollbar = self._msg_view.verticalScrollBar()  # UI: restore scroll against list rows instead of QWidget bubble geometry
+        if isinstance(restore_anchor, dict):
+            identity = str(restore_anchor.get("identity") or "").strip()
+            offset = int(restore_anchor.get("offset") or 0)
+            for row_index in range(self._msg_model.rowCount()):
+                index = self._msg_model.index(row_index, 0)
+                if self._msg_model.data(index, ChatMessageModel.IdentityRole) != identity:
                     continue
-                if widget.identity() != identity:
-                    continue
-                scrollbar.setValue(min(max(0, widget.y() - offset), scrollbar.maximum()))
+                rect = self._msg_view.visualRect(index)
+                scrollbar.setValue(min(max(0, rect.top() - offset), scrollbar.maximum()))
                 return
-        scrollbar.setValue(min(max(0, int(value or 0)), scrollbar.maximum()))
+        scrollbar.setValue(min(max(0, int(restore_value or 0)), scrollbar.maximum()))
 
     def _reset_render_state(self) -> None:
         self._rendered_thread_key = ""
         self._rendered_signatures = []
         self._rendered_identities = []
-
-    def _cancel_pending_render(self) -> None:
-        self._render_job_id += 1
-        self._rendering = False
-        self._pending_rows = []
-        self._pending_signatures = []
-        self._pending_identities = []
-        self._pending_restore_anchor = None
-
-    def _append_message_row(self, row: dict[str, Any]) -> None:
-        widget = _MessageBubble(row)
-        widget.copyRequested.connect(self._copy_message)
-        widget.deleteRequested.connect(self._confirm_delete_message)
-        self._body_layout.insertWidget(self._body_layout.count() - 1, widget)
-        self._message_widgets.append(widget)
 
     def _copy_message(self, message: dict[str, Any]) -> None:
         content = str((message or {}).get("text") or "").strip()
@@ -509,7 +636,7 @@ class ChatView(QWidget):
         confirmed = confirm_automation_action(
             self,
             title="Eliminar mensaje",
-            message="¿Queres eliminar este mensaje del Inbox?",
+            message="Queres eliminar este mensaje del Inbox?",
             confirm_text="Si",
             cancel_text="No",
             danger=True,
@@ -517,83 +644,68 @@ class ChatView(QWidget):
         if confirmed:
             self.messageDeleteRequested.emit(dict(message))
 
-    def _capture_scroll_anchor(self, fallback_value: int) -> dict[str, Any] | None:
-        for widget in self._message_widgets:
-            if not isinstance(widget, _MessageBubble):
+    def _capture_scroll_anchor(self) -> dict[str, Any] | None:
+        scrollbar = self._msg_view.verticalScrollBar()  # UI: capture the current list scroll offset before rows change underneath it
+        value = scrollbar.value()
+        viewport = self._msg_view.viewport()
+        for y in range(0, max(1, viewport.height()), 20):
+            index = self._msg_view.indexAt(QPoint(10, y))
+            if not index.isValid():
                 continue
-            if widget.y() + widget.height() < fallback_value:
-                continue
+            rect = self._msg_view.visualRect(index)
             return {
-                "identity": widget.identity(),
-                "offset": max(0, fallback_value - widget.y()),
+                "identity": self._msg_model.data(index, ChatMessageModel.IdentityRole),
+                "offset": max(0, value - rect.top()),
             }
         return None
 
-    def _schedule_render(
+    def _render_full(
         self,
         rows: list[dict[str, Any]],
-        signatures: list[tuple[str, ...]],
-        identities: list[str],
         *,
         scroll_to_bottom: bool,
         restore_value: int,
         restore_anchor: dict[str, Any] | None,
     ) -> None:
-        self._cancel_pending_render()
-        self._clear_messages()
-        self._pending_rows = list(rows)
-        self._pending_signatures = list(signatures)
-        self._pending_identities = list(identities)
-        self._pending_scroll_to_bottom = bool(scroll_to_bottom)
-        self._pending_restore_value = int(restore_value or 0)
-        self._pending_restore_anchor = dict(restore_anchor) if isinstance(restore_anchor, dict) else None
-        self._rendering = True
-        job_id = self._render_job_id
-        QTimer.singleShot(0, lambda current_job=job_id: self._render_next_batch(current_job, 0))
-
-    def _render_next_batch(self, job_id: int, start_index: int) -> None:
-        if not self._rendering or job_id != self._render_job_id:
-            return
-        batch_size = self._render_batch_size
-        if len(self._pending_rows) > batch_size:
-            batch_size = min(160, max(batch_size, len(self._pending_rows) // 2))
-        end_index = min(start_index + batch_size, len(self._pending_rows))
-        self._body.setUpdatesEnabled(False)
-        try:
-            for row in self._pending_rows[start_index:end_index]:
-                self._append_message_row(row)
-        finally:
-            self._body.setUpdatesEnabled(True)
-        if end_index < len(self._pending_rows):
-            QTimer.singleShot(
-                0,
-                lambda current_job=job_id, next_index=end_index: self._render_next_batch(
-                    current_job,
-                    next_index,
-                ),
-            )
-            return
-        self._rendering = False
-        self._rendered_thread_key = self._current_thread_key
-        self._rendered_signatures = list(self._pending_signatures)
-        self._rendered_identities = list(self._pending_identities)
-        pending_scroll_to_bottom = self._pending_scroll_to_bottom
-        pending_restore_anchor = self._pending_restore_anchor
-        pending_restore_value = self._pending_restore_value
-        self._pending_rows = []
-        self._pending_signatures = []
-        self._pending_identities = []
-        self._pending_restore_anchor = None
-        if pending_scroll_to_bottom:
+        if len(rows) > 30:
+            self._render_hint.setText("Cargando mensajes...")  # UI: preserve the large-thread loading hint even though rendering is now model-backed
+            self._render_hint.show()
+        self._msg_view.show()  # UI: make the live list visible before replacing its rows wholesale
+        self._empty_state_host.hide()  # UI: hide placeholder content while a real thread is being rendered
+        self._msg_model.set_rows(rows)  # UI: replace the full thread in one model reset instead of rebuilding QWidget bubbles
+        self._render_hint.hide()
+        self._render_hint.setText("")
+        self._rendered_thread_key = self._current_thread_key  # UI: mark the current thread as fully rendered after the model reset
+        self._rendered_signatures = self._msg_model.signatures()  # UI: refresh render caches from the model after a full reset
+        self._rendered_identities = self._msg_model.identities()
+        if scroll_to_bottom:
             QTimer.singleShot(0, self._scroll_to_bottom)
         else:
             QTimer.singleShot(
                 0,
-                lambda anchor=pending_restore_anchor, value=pending_restore_value: self._restore_scroll(
-                    anchor,
+                lambda value=restore_value, anchor=restore_anchor: self._restore_scroll(
                     value,
+                    anchor,
                 ),
-            )
+            )  # UI: restore the user's scroll target after the list view has laid out the new rows
+
+    def _show_message_context_menu(self, pos: QPoint) -> None:
+        index = self._msg_view.indexAt(pos)  # UI: resolve context-menu actions from the list row under the pointer
+        if not index.isValid():
+            return
+        row = self._msg_model.data(index, ChatMessageModel.MessageRole)
+        if not isinstance(row, dict):
+            return
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copiar")
+        delete_action = menu.addAction("Eliminar")
+        action = menu.exec(self._msg_view.viewport().mapToGlobal(pos))
+        if action == copy_action:
+            self._copy_message(row)  # UI: reuse the existing chat-level copy helper for the delegate-rendered list
+            return
+        if action == delete_action:
+            self._confirm_delete_message(row)  # UI: reuse the existing delete-confirmation flow for the delegate-rendered list
+            return
 
 
 class _EmptyStateCard(QFrame):
@@ -618,77 +730,6 @@ class _EmptyStateCard(QFrame):
         layout.addWidget(subtitle_label)
 
 
-class _MessageBubble(QWidget):
-    copyRequested = Signal(object)
-    deleteRequested = Signal(object)
-
-    def __init__(self, message: dict[str, Any]) -> None:
-        super().__init__()
-        direction = str(message.get("direction") or "unknown").strip().lower()
-        outbound = direction == "outbound"
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(3)
-
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(10)
-        if outbound:
-            row.addStretch(1)
-
-        bubble = QFrame()
-        bubble.setObjectName("InboxBubbleOut" if outbound else "InboxBubbleIn")
-        bubble.setMaximumWidth(520)
-        bubble_layout = QVBoxLayout(bubble)
-        bubble_layout.setContentsMargins(12, 9, 12, 8)
-        bubble_layout.setSpacing(4)
-
-        self._text = QLabel()
-        self._text.setObjectName("InboxBubbleText")
-        self._text.setWordWrap(True)
-        bubble_layout.addWidget(self._text)
-
-        self._meta = QLabel()
-        self._meta.setObjectName("InboxBubbleMeta")
-        bubble_layout.addWidget(self._meta, 0, Qt.AlignRight)
-
-        row.addWidget(bubble, 0)
-        if not outbound:
-            row.addStretch(1)
-        root.addLayout(row)
-        self._identity = ""
-        self._signature: tuple[str, ...] = ()
-        self._message: dict[str, Any] = {}
-        self.update_message(message)
-
-    def update_message(self, message: dict[str, Any]) -> None:
-        self._message = dict(message or {})
-        self._identity = _message_identity(message)
-        self._signature = _message_signature(message)
-        self._text.setText(str(message.get("text") or "").strip() or " ")
-        self._meta.setText(_message_meta(message))
-
-    def identity(self) -> str:
-        return self._identity
-
-    def signature(self) -> tuple[str, ...]:
-        return self._signature
-
-    def contextMenuEvent(self, event) -> None:  # type: ignore[override]
-        menu = QMenu(self)
-        copy_action = menu.addAction("Copiar")
-        delete_action = menu.addAction("Eliminar")
-        selected = menu.exec(event.globalPos())
-        if selected == copy_action:
-            self.copyRequested.emit(dict(self._message))
-            return
-        if selected == delete_action:
-            self.deleteRequested.emit(dict(self._message))
-            return
-        super().contextMenuEvent(event)
-
-
 def _thread_state(thread: dict[str, Any]) -> str:
     health = str(thread.get("account_health") or "healthy").strip().lower()
     if health != "healthy":
@@ -700,7 +741,6 @@ def _thread_state(thread: dict[str, Any]) -> str:
             "proxy_error": "Error de proxy",
             "unknown": "Estado de cuenta desconocido",
         }.get(health, "Estado de cuenta desconocido")
-<<<<<<< HEAD
     thread_status = str(thread.get("thread_status") or "").strip().lower()
     sender_status = str(thread.get("sender_status") or "").strip().lower()
     pack_status = str(thread.get("pack_status") or "").strip().lower()
@@ -743,38 +783,14 @@ def _thread_submeta(thread: dict[str, Any], *, truth: dict[str, Any] | None = No
         parts.append(detail)
     if alias_note:
         parts.append(alias_note)
-=======
-    thread_error = str(thread.get("thread_error") or "").strip()
-    if thread_error:
-        return "Error al cargar"
-    seen_text = str(thread.get("last_seen_text") or "").strip()
-    if seen_text:
-        return seen_text
-    direction = str(thread.get("last_message_direction") or "").strip().lower()
-    if direction == "inbound":
-        return "Pendiente de respuesta"
-    if direction == "outbound":
-        return "Ultimo mensaje enviado"
-    return "Conversacion activa"
-
-
-def _thread_submeta(thread: dict[str, Any]) -> str:
-    parts: list[str] = []
-    stage = str(thread.get("stage_id") or thread.get("stage") or "").strip()
-    bucket = str(thread.get("bucket") or "").strip()
-    alias_id = str(thread.get("account_alias") or "").strip()
->>>>>>> origin/main
     if stage:
         parts.append(f"Etapa {stage}")
     if bucket:
         parts.append(f"Bucket {bucket}")
     if alias_id:
         parts.append(f"Alias @{alias_id}")
-<<<<<<< HEAD
     if seen_text:
         parts.append(seen_text)
-=======
->>>>>>> origin/main
     if not parts:
         parts.append("Conversacion lista para revisar y responder.")
     return "  |  ".join(parts)

@@ -33,24 +33,41 @@ class _PackCard(QFrame):
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(8)
 
-        name = QLabel(str(pack.get("name") or "Pack").strip() or "Pack")
-        name.setObjectName("InboxPackName")
-        name.setWordWrap(True)
-        top_row.addWidget(name, 1)
+        self._name_label = QLabel("")  # UI: keep a dedicated name label so pack updates can rewrite the title in place
+        self._name_label.setObjectName("InboxPackName")  # UI: preserve the existing pack title styling for active and inactive cards
+        self._name_label.setWordWrap(True)  # UI: allow long pack titles to wrap cleanly inside the card
+        top_row.addWidget(self._name_label, 1)  # UI: render the normalized pack title inside the card header
 
-        pack_type = str(pack.get("type") or "pack").strip().upper() or "PACK"
-        badge = QLabel(pack_type)
-        badge.setObjectName("InboxPackBadge")
-        top_row.addWidget(badge, 0, Qt.AlignRight | Qt.AlignTop)
+        self._badge_label = QLabel("")  # UI: keep a dedicated type badge so incremental pack updates can refresh it in place
+        self._badge_label.setObjectName("InboxPackBadge")  # UI: preserve the existing type badge styling during in-place updates
+        top_row.addWidget(self._badge_label, 0, Qt.AlignRight | Qt.AlignTop)  # UI: render the reusable type badge inside the pack card header
         layout.addLayout(top_row)
 
-        actions = pack.get("actions")
-        action_count = len(actions) if isinstance(actions, list) else 0
+        self._steps_label = QLabel("")  # UI: keep a dedicated steps label so pack updates can refresh counts in place
+        self._steps_label.setObjectName("InboxPackSteps")  # UI: preserve the existing pack steps styling during in-place updates
+        self._steps_label.setWordWrap(True)  # UI: allow refreshed pack step counts to wrap cleanly inside the card
+        layout.addWidget(self._steps_label)  # UI: render the reusable steps label inside the card body
+        self._active_state = True  # UI: track the applied active state so in-place updates can toggle styling only when needed
+        self.update_pack(pack)  # UI: initialize the card through the same in-place update path used by incremental pack diffs
 
-        steps = QLabel(f"{action_count} pasos  |  click para enviar")
-        steps.setObjectName("InboxPackSteps")
-        steps.setWordWrap(True)
-        layout.addWidget(steps)
+    def update_pack(self, pack: dict[str, Any]) -> None:  # UI: update pack card fields in place during incremental diff
+        is_active = _pack_is_active(pack)  # UI: resolve the latest activity flag before mutating the existing card
+        pack_name = str(pack.get("name") or "Pack").strip() or "Pack"  # UI: normalize the updated pack title before applying it to the card
+        pack_type = str(pack.get("type") or "pack").strip().upper() or "PACK"  # UI: normalize the updated pack type before refreshing the badge in place
+        if not is_active:  # UI: suffix inactive pack titles so disabled cards remain readable without relying only on color
+            pack_name = f"{pack_name} (inactivo)"  # UI: expose the inactive state directly in the visible pack title
+        self._name_label.setText(pack_name)  # UI: update pack card fields in place during incremental diff
+        self._badge_label.setText(pack_type)  # UI: update pack card fields in place during incremental diff
+        actions = pack.get("actions")  # UI: read the updated pack actions so the existing card can refresh its step count
+        action_count = len(actions) if isinstance(actions, list) else 0  # UI: normalize the updated step count before refreshing the card copy
+        self._steps_label.setText(f"{action_count} pasos  |  click para enviar")  # UI: update pack card fields in place during incremental diff
+        if is_active != self._active_state:  # UI: only restyle the card when its active state actually changes
+            if is_active:  # UI: restore the normal card presentation when an inactive pack becomes active again
+                self.setStyleSheet("")  # UI: clear the muted pack styling when the card returns to an active state
+            else:  # UI: apply the muted styling only when the pack transitions into an inactive state
+                self.setStyleSheet("QFrame#InboxPackCard { background-color: #1a2230; border: 1px solid #2c384d; } QLabel { color: #7d8798; }")  # UI: mute inactive pack cards without removing them from the list
+        self.setEnabled(is_active)  # UI: update pack card fields in place during incremental diff
+        self._active_state = is_active  # UI: remember the applied activity state for the next in-place pack update
 
 
 class _EmptyPackCard(QFrame):
@@ -134,6 +151,8 @@ class ActionsPanel(QWidget):
         self._current_bucket = "all"
         self._current_owner = "none"
         self._current_suggestion = ""
+        self._pack_item_cache: dict[str, QListWidgetItem] = {}  # UI: keyed by pack_id, stores existing list items for diffing
+        self._empty_pack_item: QListWidgetItem | None = None  # UI: keep track of the temporary empty-state card without clearing the full pack list
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -180,34 +199,35 @@ class ActionsPanel(QWidget):
         self._thread_badge.setObjectName("InboxThreadBadge")
         badges_row.addWidget(self._thread_badge, 0, Qt.AlignLeft)
 
-<<<<<<< HEAD
         self._classification_badge = QLabel("Sin clasificar")
         self._classification_badge.setObjectName("InboxStateBadge")
         badges_row.addWidget(self._classification_badge, 0, Qt.AlignLeft)
 
         self._owner_badge = QLabel("Sin control")
-=======
-        self._classification_badge = QLabel("Todas")
-        self._classification_badge.setObjectName("InboxStateBadge")
-        badges_row.addWidget(self._classification_badge, 0, Qt.AlignLeft)
-
-        self._owner_badge = QLabel("Sin owner")
->>>>>>> origin/main
         self._owner_badge.setObjectName("InboxMetaChip")
         badges_row.addWidget(self._owner_badge, 0, Qt.AlignLeft)
 
         badges_row.addStretch(1)
         hero_layout.addLayout(badges_row)
         canvas_layout.addWidget(hero)
+        self._empty_thread_state = QWidget()  # UI: host a single centered prompt when no conversation is selected
+        empty_state_layout = QVBoxLayout(self._empty_thread_state)  # UI: center the no-thread prompt within the available drawer space
+        empty_state_layout.setContentsMargins(16, 24, 16, 24)  # UI: give the no-thread prompt breathing room inside the drawer
+        empty_state_layout.addStretch(1)  # UI: push the no-thread prompt toward the vertical center of the drawer
+        self._empty_thread_label = QLabel("Seleccioná una conversación")  # UI: show a single clear prompt instead of disabled section placeholders
+        self._empty_thread_label.setObjectName("InboxSummaryText")  # UI: style the no-thread prompt like the inbox summary copy
+        self._empty_thread_label.setAlignment(Qt.AlignCenter)  # UI: center the no-thread prompt horizontally for a cleaner empty state
+        self._empty_thread_label.setWordWrap(True)  # UI: allow the no-thread prompt to wrap cleanly on narrow layouts
+        empty_state_layout.addWidget(self._empty_thread_label, 0, Qt.AlignCenter)  # UI: render the no-thread prompt in the middle of the drawer
+        empty_state_layout.addStretch(1)  # UI: keep the no-thread prompt vertically centered within the empty state container
+        self._empty_thread_state.hide()  # UI: start with the no-thread prompt hidden until the drawer receives an empty selection
+        canvas_layout.addWidget(self._empty_thread_state, 1)  # UI: reserve flexible space for the centered no-thread prompt below the hero card
 
         actions_card, actions_layout = _build_section(
             "Acciones del thread",
-<<<<<<< HEAD
             "Clasificacion, control manual/automatico y atajos del thread actual.",
-=======
-            "Clasificacion, ownership y atajos manuales del thread actual.",
->>>>>>> origin/main
         )
+        self._actions_card = actions_card  # UI: toggle the thread actions card off entirely when no conversation is selected
         self._status = QLabel("Selecciona una conversacion para habilitar acciones.")
         self._status.setObjectName("InboxMutedText")
         self._status.setWordWrap(True)
@@ -218,29 +238,17 @@ class ActionsPanel(QWidget):
         classify_grid.setHorizontalSpacing(8)
         classify_grid.setVerticalSpacing(8)
 
-<<<<<<< HEAD
         self._qualify_button = QPushButton("Tomar manual y calificar")
-=======
-        self._qualify_button = QPushButton("Pasar a Agendar / Calificadas")
->>>>>>> origin/main
         self._qualify_button.setObjectName("InboxPrimaryButton")
         self._qualify_button.clicked.connect(self.markQualifiedRequested.emit)
         classify_grid.addWidget(self._qualify_button, 0, 0, 1, 2)
 
-<<<<<<< HEAD
         self._disqualify_button = QPushButton("Descalificar")
-=======
-        self._disqualify_button = QPushButton("Pasar a Descalificadas")
->>>>>>> origin/main
         self._disqualify_button.setObjectName("InboxMiniAction")
         self._disqualify_button.clicked.connect(self.markDisqualifiedRequested.emit)
         classify_grid.addWidget(self._disqualify_button, 1, 0)
 
-<<<<<<< HEAD
         self._clear_bucket_button = QPushButton("Restaurar a automatico")
-=======
-        self._clear_bucket_button = QPushButton("Volver a Todas")
->>>>>>> origin/main
         self._clear_bucket_button.setObjectName("InboxMiniAction")
         self._clear_bucket_button.clicked.connect(self.clearClassificationRequested.emit)
         classify_grid.addWidget(self._clear_bucket_button, 1, 1)
@@ -311,11 +319,13 @@ class ActionsPanel(QWidget):
         self._suggestion_preview.setMaximumHeight(240)
         ai_layout.addWidget(self._suggestion_preview)
         canvas_layout.addWidget(ai_card)
+        self._ai_card = ai_card  # UI: toggle the AI card off entirely when no conversation is selected
 
         packs_card, packs_layout = _build_section(
             "Packs",
             "Lista scrollable de packs disponibles para disparar desde el thread seleccionado.",
         )
+        self._packs_card = packs_card  # UI: toggle the packs card off entirely when no conversation is selected
 
         packs_title_row = QHBoxLayout()
         packs_title_row.setContentsMargins(0, 0, 0, 0)
@@ -344,11 +354,7 @@ class ActionsPanel(QWidget):
             "Resumen compacto del estado comercial y operativo del lead.",
         )
 
-<<<<<<< HEAD
         self._detail_overview = QLabel("Alias, stage, control y ultima actividad apareceran aqui.")
-=======
-        self._detail_overview = QLabel("Alias, stage, owner y ultima actividad apareceran aqui.")
->>>>>>> origin/main
         self._detail_overview.setObjectName("InboxLeadSubtitle")
         self._detail_overview.setWordWrap(True)
         detail_layout.addWidget(self._detail_overview)
@@ -362,13 +368,8 @@ class ActionsPanel(QWidget):
             (
                 ("alias", "Alias"),
                 ("stage", "Stage"),
-<<<<<<< HEAD
                 ("owner", "Control"),
                 ("bucket", "Clasificacion"),
-=======
-                ("owner", "Owner"),
-                ("bucket", "Bucket"),
->>>>>>> origin/main
                 ("last_activity", "Ultima actividad"),
                 ("quality", "Quality"),
                 ("last_action", "Ultima accion"),
@@ -386,12 +387,13 @@ class ActionsPanel(QWidget):
         self._tags_value.setWordWrap(True)
         detail_layout.addWidget(self._tags_value)
         canvas_layout.addWidget(detail_card)
+        self._detail_card = detail_card  # UI: toggle the detail card off entirely when no conversation is selected
         canvas_layout.addStretch(1)
 
         self._reset_thread_details()
         self._update_availability()
+        self._apply_empty_state()  # UI: start the drawer in its dedicated no-thread layout until a conversation is selected
 
-<<<<<<< HEAD
     def set_thread(
         self,
         thread: dict[str, Any] | None,
@@ -399,10 +401,7 @@ class ActionsPanel(QWidget):
         permissions: dict[str, Any] | None = None,
         truth: dict[str, Any] | None = None,
     ) -> None:
-=======
-    def set_thread(self, thread: dict[str, Any] | None, *, permissions: dict[str, Any] | None = None) -> None:
->>>>>>> origin/main
-        self._has_thread = bool(thread)
+        self._has_thread = bool(thread)  # UI: track whether the drawer should render active controls or the no-thread prompt
         self._healthy_account = True
         self._can_send_pack = False
         self._can_request_ai = False
@@ -411,19 +410,18 @@ class ActionsPanel(QWidget):
         self._current_owner = "none"
         self._current_suggestion = ""
         if not thread:
+            self._has_thread = False  # UI: treat missing or empty thread payloads as the empty drawer state
             self._thread_badge.setText("Sin thread activo")
-<<<<<<< HEAD
             self._classification_badge.setText("Sin clasificar")
             self._owner_badge.setText("Sin control")
-=======
-            self._classification_badge.setText("Todas")
-            self._owner_badge.setText("Sin owner")
->>>>>>> origin/main
             self._reset_thread_details()
             self._update_suggestion_preview(None)
             self._update_availability()
+            self._apply_empty_state()  # UI: collapse the drawer sections into a single no-thread prompt
             return
 
+        self._has_thread = True  # UI: mark the drawer as active when a real thread payload is present
+        self._apply_active_state()  # UI: restore the full drawer cards before rendering the selected thread details
         display_name = str(thread.get("display_name") or thread.get("recipient_username") or "Conversacion").strip()
         account_id = str(thread.get("account_id") or "-").strip() or "-"
         alias_id = str(thread.get("account_alias") or thread.get("alias_id") or "").strip()
@@ -436,7 +434,6 @@ class ActionsPanel(QWidget):
         self._can_request_ai = bool(self._thread_permissions.get("can_request_ai", self._has_thread))
         self._current_bucket = bucket
         self._current_owner = owner
-<<<<<<< HEAD
         truth_payload = dict(truth or {})
         truth_label = str(truth_payload.get("label") or "").strip()
         truth_detail = str(truth_payload.get("detail") or "").strip()
@@ -444,11 +441,6 @@ class ActionsPanel(QWidget):
 
         source_label = f"Alias @{alias_id}" if alias_id else f"Cuenta @{account_id}"
         self._thread_badge.setText(f"Alias thread @{alias_id}" if alias_id else f"Cuenta thread @{account_id}")
-=======
-
-        source_label = f"Alias @{alias_id}" if alias_id else f"Cuenta @{account_id}"
-        self._thread_badge.setText(source_label)
->>>>>>> origin/main
         self._classification_badge.setText(_bucket_label(bucket))
         self._owner_badge.setText(_owner_label(owner))
         self._lead_title.setText(display_name)
@@ -465,7 +457,6 @@ class ActionsPanel(QWidget):
                 if part
             )
         )
-<<<<<<< HEAD
         if truth_label or truth_detail or alias_note:
             self._detail_overview.setText(
                 "  |  ".join(
@@ -478,12 +469,6 @@ class ActionsPanel(QWidget):
         self._detail_values["stage"].setText(_text_value(thread.get("stage_id") or thread.get("stage"), fallback="Sin etapa"))
         self._detail_values["owner"].setText(_owner_label(thread.get("owner")))
         self._detail_values["bucket"].setText(_bucket_label(thread.get("bucket")))
-=======
-        self._detail_values["alias"].setText(f"@{alias_id}" if alias_id else f"@{account_id}")
-        self._detail_values["stage"].setText(_text_value(thread.get("stage_id") or thread.get("stage"), fallback="Sin etapa"))
-        self._detail_values["owner"].setText(_text_value(thread.get("owner"), fallback="Sin owner"))
-        self._detail_values["bucket"].setText(_text_value(thread.get("bucket"), fallback="Sin bucket"))
->>>>>>> origin/main
         self._detail_values["last_activity"].setText(_last_activity_value(thread))
         self._detail_values["quality"].setText(_text_value(thread.get("quality"), fallback="Sin quality"))
         self._detail_values["last_action"].setText(_text_value(thread.get("last_action_type"), fallback="Sin accion"))
@@ -502,38 +487,71 @@ class ActionsPanel(QWidget):
         self._update_availability()
 
     def set_packs(self, packs: list[dict[str, Any]]) -> None:
-        self._packs.clear()
-        self._pack_count = 0
-
-        valid_packs = [pack for pack in packs if isinstance(pack, dict)]
-        self._pack_count = len(valid_packs)
-        self._packs_summary.setText(f"{self._pack_count} disponibles")
-
-        if not valid_packs:
-            item = QListWidgetItem()
-            widget = _EmptyPackCard(
-                "No hay packs cargados",
-                "Cuando existan packs conversacionales disponibles, se podran disparar desde aqui.",
-            )
-            item.setFlags(Qt.NoItemFlags)
-            item.setSizeHint(widget.sizeHint())
-            self._packs.addItem(item)
-            self._packs.setItemWidget(item, widget)
-            self._update_availability()
-            return
-
-        for pack in valid_packs:
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, str(pack.get("id") or "").strip())
-            widget = _PackCard(pack)
-            item.setSizeHint(widget.sizeHint())
-            self._packs.addItem(item)
-            self._packs.setItemWidget(item, widget)
-
-        self._update_availability()
+        self._pack_count = 0  # UI: recompute the visible pack count from the incremental diff input each time packs refresh
+        valid_packs = [pack for pack in packs if isinstance(pack, dict)]  # UI: limit the incremental diff to well-formed pack payloads
+        incoming = {str(pack.get("pack_id") or pack.get("id") or "").strip(): pack for pack in valid_packs if str(pack.get("pack_id") or pack.get("id") or "").strip()}  # UI: key incoming packs by stable pack id for incremental diffing
+        self._pack_count = len(incoming)  # UI: summarize only the diffable packs that have a stable identifier
+        self._packs_summary.setText(f"{self._pack_count} disponibles")  # UI: refresh the pack count summary without rebuilding the full list
+        default_flags = QListWidgetItem().flags()  # UI: preserve the platform-default item flags when active packs stay interactive
+        if self._empty_pack_item is not None and self._packs.row(self._empty_pack_item) >= 0 and incoming:  # UI: hide the empty pack card as soon as real packs are available
+            self._packs.takeItem(self._packs.row(self._empty_pack_item))  # UI: remove the temporary empty card without clearing the full pack list
+            self._empty_pack_item = None  # UI: forget the empty pack item once the list contains real packs again
+        for pack_id in list(self._pack_item_cache.keys()):  # UI: compare existing rendered packs against the new catalog without clearing the list
+            if pack_id not in incoming:  # UI: remove stale pack cards without rebuilding the full list
+                row = self._packs.row(self._pack_item_cache[pack_id])  # UI: look up the stale pack row before removing its existing item
+                if row >= 0:  # UI: guard the stale-pack removal in case the item is already gone
+                    self._packs.takeItem(row)  # UI: remove stale pack cards without rebuilding the full list
+                del self._pack_item_cache[pack_id]  # UI: remove stale pack cards without rebuilding the full list
+        for pack_id, pack in incoming.items():  # UI: walk the incoming pack catalog to update or insert cards incrementally
+            if pack_id in self._pack_item_cache:  # UI: reuse rendered cards when the pack already exists in the list
+                item = self._pack_item_cache[pack_id]  # UI: grab the existing list item so its card can be updated in place
+                widget = self._packs.itemWidget(item)  # UI: resolve the current card widget for in-place pack updates
+                item.setData(Qt.UserRole, pack_id)  # UI: keep the existing list item bound to its stable pack id during updates
+                item.setFlags(default_flags if _pack_is_active(pack) else Qt.NoItemFlags)  # UI: refresh item interactivity when a pack toggles active state
+                if widget is not None and hasattr(widget, "update_pack"):  # UI: update existing pack cards only when the rendered widget supports in-place refresh
+                    widget.update_pack(pack)  # UI: update existing pack card in place to avoid full list rebuild
+                    item.setSizeHint(widget.sizeHint())  # UI: refresh the cached size hint after an in-place pack card update
+            else:
+                item = QListWidgetItem()  # UI: allocate a new list item only for packs that are newly introduced by the diff
+                item.setData(Qt.UserRole, pack_id)  # UI: bind the new list item to its stable pack id for future incremental diffs
+                item.setFlags(default_flags if _pack_is_active(pack) else Qt.NoItemFlags)  # UI: make new inactive packs visible but non-interactive from the start
+                card = _PackCard(pack)  # UI: create a card only for genuinely new packs instead of rebuilding the whole list
+                item.setSizeHint(card.sizeHint())  # UI: size the newly inserted pack item from its freshly created card
+                self._packs.addItem(item)  # UI: insert new pack card without clearing existing items
+                self._packs.setItemWidget(item, card)  # UI: insert new pack card without clearing existing items
+                self._pack_item_cache[pack_id] = item  # UI: remember the new list item for future incremental diffs
+        if not incoming:  # UI: fall back to the empty-state card only when the incremental diff leaves no packs to render
+            if self._empty_pack_item is None or self._packs.row(self._empty_pack_item) < 0:  # UI: avoid recreating the empty pack card when it is already visible
+                self._empty_pack_item = QListWidgetItem()  # UI: allocate the empty-state item only when no real packs remain in the list
+                widget = _EmptyPackCard(  # UI: reuse the existing empty-state card copy when the pack catalog is empty
+                    "No hay packs cargados",  # UI: preserve the existing empty-state title for an empty pack catalog
+                    "Cuando existan packs conversacionales disponibles, se podran disparar desde aqui.",  # UI: preserve the existing empty-state subtitle for an empty pack catalog
+                )
+                self._empty_pack_item.setFlags(Qt.NoItemFlags)  # UI: keep the empty-state card non-interactive while no packs exist
+                self._empty_pack_item.setSizeHint(widget.sizeHint())  # UI: size the empty-state item from its card widget
+                self._packs.addItem(self._empty_pack_item)  # UI: show the empty-state card without clearing the list widget
+                self._packs.setItemWidget(self._empty_pack_item, widget)  # UI: attach the empty-state card widget only when the pack catalog is empty
+        elif self._empty_pack_item is not None and self._packs.row(self._empty_pack_item) >= 0:  # UI: remove the empty-state card once real packs exist again
+            self._packs.takeItem(self._packs.row(self._empty_pack_item))  # UI: hide the empty pack card without rebuilding the full list
+            self._empty_pack_item = None  # UI: forget the empty-state item once the pack catalog is populated
+        self._update_availability()  # UI: refresh pack-related button states after the incremental diff settles
 
     def set_status(self, text: str) -> None:
         self._status.setText(str(text or "").strip() or " ")
+
+    def _apply_empty_state(self) -> None:  # UI: collapse the drawer to a single prompt when there is no active conversation
+        self._actions_card.hide()  # UI: remove the thread actions card from view when no conversation is selected
+        self._ai_card.hide()  # UI: remove the AI card from view when no conversation is selected
+        self._packs_card.hide()  # UI: remove the packs card from view when no conversation is selected
+        self._detail_card.hide()  # UI: remove the detail card from view when no conversation is selected
+        self._empty_thread_state.show()  # UI: show the dedicated centered prompt for the empty drawer state
+
+    def _apply_active_state(self) -> None:  # UI: restore the full drawer layout when a conversation becomes active
+        self._actions_card.show()  # UI: restore the thread actions card when a conversation is selected
+        self._ai_card.show()  # UI: restore the AI card when a conversation is selected
+        self._packs_card.show()  # UI: restore the packs card when a conversation is selected
+        self._detail_card.show()  # UI: restore the detail card when a conversation is selected
+        self._empty_thread_state.hide()  # UI: hide the empty-state prompt once real thread data is available
 
     def _emit_pack_selected(self, item: QListWidgetItem) -> None:
         if not self._packs.isEnabled():
@@ -549,11 +567,7 @@ class ActionsPanel(QWidget):
     def _reset_thread_details(self) -> None:
         self._lead_title.setText("Selecciona una conversacion")
         self._lead_subtitle.setText("La metadata operativa se mostrara aqui con espacio real y lectura clara.")
-<<<<<<< HEAD
         self._detail_overview.setText("Alias, stage, control y ultima actividad apareceran aqui.")
-=======
-        self._detail_overview.setText("Alias, stage, owner y ultima actividad apareceran aqui.")
->>>>>>> origin/main
         for value in self._detail_values.values():
             value.setText("-")
         self._tags_value.setText("Tags: Sin tags")
@@ -619,6 +633,13 @@ class ActionsPanel(QWidget):
         )
 
 
+def _pack_is_active(pack: dict[str, Any]) -> bool:  # UI: normalize pack activity flags so inactive packs stay visible but disabled
+    for key in ("active", "is_active", "enabled"):  # UI: honor whichever pack activity flag the payload provides
+        if key in pack:  # UI: stop at the first explicit activity field found on the pack payload
+            return bool(pack.get(key))  # UI: use the payload activity flag to decide whether the pack should render as disabled
+    return True  # UI: default packs to active when no explicit activity field is provided
+
+
 def _text_value(value: Any, *, fallback: str) -> str:
     clean = str(value or "").strip()
     return clean or fallback
@@ -647,29 +668,15 @@ def _format_datetime(value: Any) -> str:
 
 def _bucket_label(value: str) -> str:
     return {
-<<<<<<< HEAD
         "qualified": "Calificada",
         "disqualified": "Descalificada",
         "all": "Sin clasificar",
     }.get(str(value or "").strip().lower(), "Sin clasificar")
-=======
-        "qualified": "Agendar / Calificadas",
-        "disqualified": "Descalificadas",
-        "all": "Todas",
-    }.get(str(value or "").strip().lower(), "Todas")
->>>>>>> origin/main
 
 
 def _owner_label(value: str) -> str:
     return {
-<<<<<<< HEAD
         "manual": "Control manual",
         "auto": "Control automatico",
         "none": "Sin control",
     }.get(str(value or "").strip().lower(), "Sin control")
-=======
-        "manual": "Owner manual",
-        "auto": "Owner auto",
-        "none": "Sin owner",
-    }.get(str(value or "").strip().lower(), "Sin owner")
->>>>>>> origin/main

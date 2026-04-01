@@ -15,8 +15,8 @@ from src.inbox.message_timestamps import message_canonical_timestamp, message_so
 from .base import ServiceContext
 
 
-_DEFAULT_IDLE_BACKEND_SHUTDOWN_SECONDS = 20.0
-_DEFAULT_IDLE_BACKEND_RETRY_SECONDS = 5.0
+_DEFAULT_IDLE_BACKEND_SHUTDOWN_SECONDS = 120.0
+_DEFAULT_IDLE_BACKEND_RETRY_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -161,11 +161,8 @@ class InboxProjectionBuilder:
                 continue
             if not bool(raw.get("active", True)):
                 continue
-<<<<<<< HEAD
             if str(raw.get("usage_state") or "active").strip().lower() == "deactivated":
                 continue
-=======
->>>>>>> origin/main
             username = self._clean_account_id(raw.get("username"))
             if username:
                 active_accounts.add(username.lower())
@@ -1000,7 +997,7 @@ class InboxRuntime(QObject):
                 with self._worker_lock:
                     while not self._stop_event.is_set() and not self._pending_rebuild:
                         self._mark_worker_state("idle", clear_error=False)
-                        self._worker_lock.wait(timeout=0.5)
+                        self._worker_lock.wait(timeout=0.05)  # PERF: shorter idle slice improves rebuild responsiveness
                     if self._stop_event.is_set():
                         return
                     self._mark_worker_state("running", clear_error=False)
@@ -1135,14 +1132,28 @@ class InboxRuntime(QObject):
         del full
         if invalidate_legacy:
             self._builder.invalidate()
+        build_rows_started_at = time.monotonic()
         rows = self._builder.build_rows(self._safe_engine_list_threads())
+        logger.debug(
+            "Inbox projection rebuilt %d threads in %.1f ms",
+            len(rows),
+            (time.monotonic() - build_rows_started_at) * 1000.0,
+        )
         rows_by_key = {
             str(row.get("thread_key") or "").strip(): dict(row)
             for row in rows
             if str(row.get("thread_key") or "").strip()
         }
-        unread_rows = [dict(row) for row in rows if _include_thread(row, "unread")]
-        pending_rows = [dict(row) for row in rows if _include_thread(row, "pending")]
+        snap_all: list[dict[str, Any]] = []
+        snap_unread: list[dict[str, Any]] = []
+        snap_pending: list[dict[str, Any]] = []
+        for row in rows:
+            row_copy = dict(row)
+            snap_all.append(row_copy)
+            if _include_thread(row, "unread"):
+                snap_unread.append(dict(row))
+            if _include_thread(row, "pending"):
+                snap_pending.append(dict(row))
         invalidated_keys = {str(item or "").strip() for item in thread_keys or [] if str(item or "").strip()}
         detail_cache: dict[str, dict[str, Any]] = {}
         for thread_key in sorted(invalidated_keys):
@@ -1167,26 +1178,26 @@ class InboxRuntime(QObject):
             removed_keys = existing_thread_keys - known_thread_keys
             self._rows_by_key = rows_by_key
             self._snapshots = {
-                "all": [dict(row) for row in rows],
-                "unread": unread_rows,
-                "pending": pending_rows,
+                "all": snap_all,
+                "unread": snap_unread,
+                "pending": snap_pending,
             }
             self._metrics = {
                 "threads": len(rows),
-                "unread": len(unread_rows),
-                "pending": len(pending_rows),
+                "unread": len(snap_unread),
+                "pending": len(snap_pending),
             }
-            if not invalidated_keys and not invalidated_accounts:
-                self._thread_cache = {}
-            else:
-                affected_keys = set(invalidated_keys) | set(removed_keys)
-                if invalidated_accounts:
-                    for source in (previous_rows_by_key, rows_by_key):
-                        for key, row in source.items():
-                            if self._builder._clean_account_id((row or {}).get("account_id")) in invalidated_accounts:
-                                affected_keys.add(key)
+            affected_keys = set(invalidated_keys) | set(removed_keys)
+            if invalidated_accounts:
+                for source in (previous_rows_by_key, rows_by_key):
+                    for key, row in source.items():
+                        if self._builder._clean_account_id((row or {}).get("account_id")) in invalidated_accounts:
+                            affected_keys.add(key)
+            if affected_keys:
                 for key in affected_keys:
-                    self._thread_cache.pop(key, None)
+                    self._thread_cache.pop(key, None)  # PERF: evict only touched thread details when keys are known
+            else:
+                self._thread_cache = {}  # PERF: preserve full clear when rebuild does not identify touched keys
             for key, detail in detail_cache.items():
                 self._thread_cache[key] = copy.deepcopy(detail)
         self._projection_ready.set()

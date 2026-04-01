@@ -12,10 +12,7 @@ from typing import Any
 from core import responder as responder_module
 from core.storage_atomic import load_json_file
 from paths import storage_root
-<<<<<<< HEAD
 from src.inbox_diagnostics import normalize_reason_code
-=======
->>>>>>> origin/main
 from src.inbox.message_timestamps import (
     annotate_message_timestamps,
     message_canonical_timestamp,
@@ -251,7 +248,6 @@ class InboxStorage:
                     delay_max_ms INTEGER NOT NULL DEFAULT 0,
                     mode TEXT NOT NULL DEFAULT 'both',
                     next_account_id TEXT NOT NULL DEFAULT '',
-<<<<<<< HEAD
                     last_send_attempt_account_id TEXT NOT NULL DEFAULT '',
                     last_send_attempt_thread_key TEXT NOT NULL DEFAULT '',
                     last_send_attempt_job_id INTEGER NOT NULL DEFAULT 0,
@@ -269,8 +265,6 @@ class InboxStorage:
                     last_send_at REAL,
                     last_send_exception_type TEXT NOT NULL DEFAULT '',
                     last_send_exception_message TEXT NOT NULL DEFAULT '',
-=======
->>>>>>> origin/main
                     last_heartbeat_at REAL,
                     last_error TEXT NOT NULL DEFAULT '',
                     stats_json TEXT NOT NULL DEFAULT '{}',
@@ -286,7 +280,6 @@ class InboxStorage:
                     last_error TEXT NOT NULL DEFAULT '',
                     updated_at REAL NOT NULL
                 );
-<<<<<<< HEAD
 
                 CREATE TABLE IF NOT EXISTS inbox_diagnostic_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,8 +301,6 @@ class InboxStorage:
                     traceback TEXT NOT NULL DEFAULT '',
                     payload_json TEXT NOT NULL DEFAULT '{}'
                 );
-=======
->>>>>>> origin/main
                 """
             )
             self._conn.commit()
@@ -421,7 +412,6 @@ class InboxStorage:
                     "delay_max_ms": "INTEGER NOT NULL DEFAULT 0",
                     "mode": "TEXT NOT NULL DEFAULT 'both'",
                     "next_account_id": "TEXT NOT NULL DEFAULT ''",
-<<<<<<< HEAD
                     "last_send_attempt_account_id": "TEXT NOT NULL DEFAULT ''",
                     "last_send_attempt_thread_key": "TEXT NOT NULL DEFAULT ''",
                     "last_send_attempt_job_id": "INTEGER NOT NULL DEFAULT 0",
@@ -439,8 +429,6 @@ class InboxStorage:
                     "last_send_at": "REAL",
                     "last_send_exception_type": "TEXT NOT NULL DEFAULT ''",
                     "last_send_exception_message": "TEXT NOT NULL DEFAULT ''",
-=======
->>>>>>> origin/main
                     "last_heartbeat_at": "REAL",
                     "last_error": "TEXT NOT NULL DEFAULT ''",
                     "stats_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -458,7 +446,6 @@ class InboxStorage:
                     "updated_at": "REAL",
                 },
             )
-<<<<<<< HEAD
             self._ensure_table_columns(
                 "inbox_diagnostic_events",
                 {
@@ -481,8 +468,6 @@ class InboxStorage:
                     "payload_json": "TEXT NOT NULL DEFAULT '{}'",
                 },
             )
-=======
->>>>>>> origin/main
             self._backfill_alias_ids()
             self._conn.commit()
 
@@ -546,7 +531,6 @@ class InboxStorage:
                 "thread_key, created_at DESC",
                 ("thread_key", "created_at"),
             )
-<<<<<<< HEAD
             self._create_index_if_possible(
                 "inbox_diagnostic_events_created_idx",
                 "inbox_diagnostic_events",
@@ -565,8 +549,6 @@ class InboxStorage:
                 "account_id, created_at DESC",
                 ("account_id", "created_at"),
             )
-=======
->>>>>>> origin/main
             self._conn.commit()
 
     def _create_index_if_possible(
@@ -2000,7 +1982,6 @@ class InboxStorage:
         rows.sort(key=self._thread_sort_key)
         if len(rows) <= self._MAX_ACTIVE_THREADS:
             return
-<<<<<<< HEAD
         max_threads = max(1, int(self._MAX_ACTIVE_THREADS or 0))
         excess = len(rows) - max_threads
         if excess <= 0:
@@ -2015,10 +1996,6 @@ class InboxStorage:
                 continue
             self._drop_thread_locked(thread_key)
             excess -= 1
-=======
-        for row in rows[self._MAX_ACTIVE_THREADS :]:
-            self._drop_thread_locked(str(row.get("thread_key") or "").strip())
->>>>>>> origin/main
 
     @staticmethod
     def _include_thread(thread: dict[str, Any], filter_mode: str) -> bool:
@@ -2338,20 +2315,13 @@ class InboxStorage:
         *,
         source: str = "manual",
         pack_id: str = "",
-<<<<<<< HEAD
         local_message_id: str = "",
-=======
->>>>>>> origin/main
     ) -> dict[str, Any] | None:
         clean_key = str(thread_key or "").strip()
         content = str(text or "").strip()
         if not clean_key or not content:
             return None
-<<<<<<< HEAD
         local_id = str(local_message_id or "").strip() or f"local-{uuid.uuid4().hex}"
-=======
-        local_id = f"local-{uuid.uuid4().hex}"
->>>>>>> origin/main
         now = time.time()
         normalized_source = self._normalize_message_source(source)
         action_by_source = {
@@ -3063,7 +3033,6 @@ class InboxStorage:
         state: str = "queued",
         scheduled_at: float | None = None,
     ) -> int:
-<<<<<<< HEAD
         result = self.enqueue_send_queue_job(
             task_type,
             thread_key=thread_key,
@@ -3147,20 +3116,6 @@ class InboxStorage:
                     SELECT id, task_type, job_type, dedupe_key, thread_key, account_id, payload_json,
                            priority, state, attempt_count, scheduled_at, started_at, finished_at,
                            error_message, failure_reason, created_at, updated_at
-=======
-        clean_job_type = self._normalize_job_type(task_type)
-        if not clean_job_type:
-            return 0
-        now = time.time()
-        job_priority = self._priority_for_job_type(clean_job_type) if priority is None else int(priority)
-        scheduled = self._coerce_timestamp(scheduled_at) or now
-        with self._lock:
-            clean_dedupe = str(dedupe_key or "").strip()
-            if clean_dedupe:
-                existing = self._conn.execute(
-                    """
-                    SELECT id
->>>>>>> origin/main
                     FROM inbox_send_queue_jobs
                     WHERE dedupe_key = ?
                       AND state IN ('queued', 'processing')
@@ -3170,7 +3125,6 @@ class InboxStorage:
                     (clean_dedupe,),
                 ).fetchone()
                 if existing is not None:
-<<<<<<< HEAD
                     existing_payload = self._decode_json_dict(self._row_value(existing, "payload_json", "{}"))
                     merged_payload = self._merge_reused_send_queue_payload(existing_payload, clean_payload)
                     if merged_payload != existing_payload:
@@ -3196,9 +3150,6 @@ class InboxStorage:
                         "state": self._normalize_job_state(self._row_value(existing, "state", "queued")),
                         "payload": merged_payload,
                     }
-=======
-                    return int(self._row_value(existing, "id", 0) or 0)
->>>>>>> origin/main
             cursor = self._conn.execute(
                 """
                 INSERT INTO inbox_send_queue_jobs(
@@ -3212,15 +3163,9 @@ class InboxStorage:
                     clean_job_type,
                     clean_job_type,
                     clean_dedupe,
-<<<<<<< HEAD
                     clean_thread_key,
                     clean_account_id,
                     self._encode_json(clean_payload),
-=======
-                    str(thread_key or "").strip(),
-                    self._clean_account_id(account_id),
-                    self._encode_json(dict(payload or {})),
->>>>>>> origin/main
                     int(job_priority),
                     self._normalize_job_state(state),
                     scheduled,
@@ -3229,7 +3174,6 @@ class InboxStorage:
                 ),
             )
             self._conn.commit()
-<<<<<<< HEAD
             return {
                 "ok": True,
                 "job_id": int(cursor.lastrowid or 0),
@@ -3302,9 +3246,6 @@ class InboxStorage:
         with self._lock:
             self._reconcile_send_queue_thread_state_locked(clean_key)
             self._conn.commit()
-=======
-            return int(cursor.lastrowid or 0)
->>>>>>> origin/main
 
     def update_send_queue_job(
         self,
@@ -3539,12 +3480,8 @@ class InboxStorage:
         filters.append(f"jobs.state IN ({state_placeholders})")
         params.extend(normalized_states)
         query = (
-<<<<<<< HEAD
             "SELECT jobs.id, jobs.thread_key, jobs.job_type, jobs.account_id, jobs.payload_json, "
             "       COALESCE(NULLIF(threads.alias_id, ''), NULLIF(threads.account_alias, '')) AS alias_id "
-=======
-            "SELECT jobs.id, jobs.thread_key, jobs.job_type, jobs.payload_json "
->>>>>>> origin/main
             "FROM inbox_send_queue_jobs AS jobs "
             "LEFT JOIN inbox_threads AS threads ON threads.thread_key = jobs.thread_key "
             "WHERE "
@@ -3557,10 +3494,7 @@ class InboxStorage:
                 return 0
             now = time.time()
             cancelled = 0
-<<<<<<< HEAD
             touched_threads: set[str] = set()
-=======
->>>>>>> origin/main
             for row in rows:
                 payload = self._decode_json_dict(self._row_value(row, "payload_json", "{}"))
                 local_message_id = str(payload.get("local_message_id") or "").strip()
@@ -3592,16 +3526,12 @@ class InboxStorage:
                         error_message=str(reason or "cancelled").strip(),
                     )
                 if job_thread_key:
-<<<<<<< HEAD
                     touched_threads.add(job_thread_key)
-=======
->>>>>>> origin/main
                     self._cleanup_auto_reply_pending_state_locked(
                         job_thread_key,
                         job_type=job_type,
                         payload=payload,
                     )
-<<<<<<< HEAD
                     reason_code = normalize_reason_code(str(reason or "cancelled").strip())
                     event_type = "job_cancelled"
                     if reason_code == "job_cancelled_by_takeover":
@@ -3631,9 +3561,6 @@ class InboxStorage:
                 cancelled += 1
             for item in touched_threads:
                 self._reconcile_send_queue_thread_state_locked(item)
-=======
-                cancelled += 1
->>>>>>> origin/main
             self._conn.commit()
         return cancelled
 
@@ -3668,7 +3595,6 @@ class InboxStorage:
             )
             self._conn.commit()
 
-<<<<<<< HEAD
     def record_diagnostic_event(
         self,
         *,
@@ -3798,8 +3724,6 @@ class InboxStorage:
             )
         return events
 
-=======
->>>>>>> origin/main
     def list_thread_events(self, thread_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
         clean_key = str(thread_key or "").strip()
         if not clean_key:
@@ -3854,7 +3778,6 @@ class InboxStorage:
                 return str(updates.get(name) or "").strip()
             return str(current.get(name) or "").strip()
 
-<<<<<<< HEAD
         def _int_field(name: str) -> int:
             if name not in updates:
                 try:
@@ -3871,8 +3794,6 @@ class InboxStorage:
                 return self._coerce_timestamp(updates.get(name))
             return self._coerce_timestamp(current.get(name))
 
-=======
->>>>>>> origin/main
         merged = {
             "alias_id": clean_alias,
             "is_running": bool(updates.get("is_running", current.get("is_running", False))),
@@ -3884,7 +3805,6 @@ class InboxStorage:
             "delay_max_ms": max(0, int(updates.get("delay_max_ms", current.get("delay_max_ms", 0)) or 0)),
             "mode": self._normalize_runtime_mode(updates.get("mode") or current.get("mode") or "both"),
             "next_account_id": _string_field("next_account_id"),
-<<<<<<< HEAD
             "last_send_attempt_account_id": self._clean_account_id(_string_field("last_send_attempt_account_id")),
             "last_send_attempt_thread_key": _string_field("last_send_attempt_thread_key"),
             "last_send_attempt_job_id": _int_field("last_send_attempt_job_id"),
@@ -3902,8 +3822,6 @@ class InboxStorage:
             "last_send_at": _timestamp_field("last_send_at"),
             "last_send_exception_type": _string_field("last_send_exception_type"),
             "last_send_exception_message": _string_field("last_send_exception_message"),
-=======
->>>>>>> origin/main
             "last_heartbeat_at": self._coerce_timestamp(updates.get("last_heartbeat_at") or current.get("last_heartbeat_at")),
             "last_error": _string_field("last_error"),
             "stats": dict(updates.get("stats") or current.get("stats") or {}),
@@ -3915,7 +3833,6 @@ class InboxStorage:
                 INSERT INTO runtime_alias_state(
                     alias_id, is_running, worker_state, current_account_id, current_turn_count,
                     max_turns_per_account, delay_min_ms, delay_max_ms, mode,
-<<<<<<< HEAD
                     next_account_id,
                     last_send_attempt_account_id, last_send_attempt_thread_key, last_send_attempt_job_id,
                     last_send_attempt_job_type, last_send_attempt_at, last_send_attempt_outcome, last_send_attempt_reason_code,
@@ -3925,11 +3842,6 @@ class InboxStorage:
                     last_heartbeat_at, last_error, stats_json, updated_at
                 )
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-=======
-                    next_account_id, last_heartbeat_at, last_error, stats_json, updated_at
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
->>>>>>> origin/main
                 ON CONFLICT(alias_id) DO UPDATE SET
                     is_running = excluded.is_running,
                     worker_state = excluded.worker_state,
@@ -3940,7 +3852,6 @@ class InboxStorage:
                     delay_max_ms = excluded.delay_max_ms,
                     mode = excluded.mode,
                     next_account_id = excluded.next_account_id,
-<<<<<<< HEAD
                     last_send_attempt_account_id = excluded.last_send_attempt_account_id,
                     last_send_attempt_thread_key = excluded.last_send_attempt_thread_key,
                     last_send_attempt_job_id = excluded.last_send_attempt_job_id,
@@ -3958,8 +3869,6 @@ class InboxStorage:
                     last_send_at = excluded.last_send_at,
                     last_send_exception_type = excluded.last_send_exception_type,
                     last_send_exception_message = excluded.last_send_exception_message,
-=======
->>>>>>> origin/main
                     last_heartbeat_at = excluded.last_heartbeat_at,
                     last_error = excluded.last_error,
                     stats_json = excluded.stats_json,
@@ -3976,7 +3885,6 @@ class InboxStorage:
                     merged["delay_max_ms"],
                     merged["mode"],
                     merged["next_account_id"],
-<<<<<<< HEAD
                     merged["last_send_attempt_account_id"],
                     merged["last_send_attempt_thread_key"],
                     merged["last_send_attempt_job_id"],
@@ -3994,8 +3902,6 @@ class InboxStorage:
                     merged["last_send_at"],
                     merged["last_send_exception_type"],
                     merged["last_send_exception_message"],
-=======
->>>>>>> origin/main
                     merged["last_heartbeat_at"],
                     merged["last_error"],
                     self._encode_json(merged["stats"]),
@@ -4034,7 +3940,6 @@ class InboxStorage:
             "delay_max_ms": max(0, int(self._row_value(row, "delay_max_ms", 0) or 0)),
             "mode": self._normalize_runtime_mode(self._row_value(row, "mode", "both")),
             "next_account_id": self._clean_account_id(self._row_value(row, "next_account_id", "")),
-<<<<<<< HEAD
             "last_send_attempt_account_id": self._clean_account_id(self._row_value(row, "last_send_attempt_account_id", "")),
             "last_send_attempt_thread_key": str(self._row_value(row, "last_send_attempt_thread_key", "") or "").strip(),
             "last_send_attempt_job_id": max(0, int(self._row_value(row, "last_send_attempt_job_id", 0) or 0)),
@@ -4052,8 +3957,6 @@ class InboxStorage:
             "last_send_at": self._coerce_timestamp(self._row_value(row, "last_send_at")),
             "last_send_exception_type": str(self._row_value(row, "last_send_exception_type", "") or "").strip(),
             "last_send_exception_message": str(self._row_value(row, "last_send_exception_message", "") or "").strip(),
-=======
->>>>>>> origin/main
             "last_heartbeat_at": self._coerce_timestamp(self._row_value(row, "last_heartbeat_at")),
             "last_error": str(self._row_value(row, "last_error", "") or "").strip(),
             "stats": self._decode_json_dict(self._row_value(row, "stats_json", "{}")),

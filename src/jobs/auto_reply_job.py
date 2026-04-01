@@ -235,11 +235,7 @@ def check_and_reply_all() -> Dict[str, Any]:
     Verifica mensajes nuevos y genera respuestas automáticas.
     Ejecutado periódicamente o triggered por polling.
     """
-<<<<<<< HEAD
     from core.accounts import is_account_enabled_for_operation, list_all
-=======
-    from core.accounts import list_all
->>>>>>> origin/main
     
     logger.info("[AUTO REPLY ALL] Starting auto-reply check")
     
@@ -247,11 +243,7 @@ def check_and_reply_all() -> Dict[str, Any]:
     all_accounts = list_all()
     auto_reply_accounts = [
         acc for acc in all_accounts
-<<<<<<< HEAD
         if acc.get('auto_reply_enabled', False) and is_account_enabled_for_operation(acc)
-=======
-        if acc.get('auto_reply_enabled', False)
->>>>>>> origin/main
     ]
     
     logger.info(f"[AUTO REPLY ALL] {len(auto_reply_accounts)} accounts with auto-reply enabled")

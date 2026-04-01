@@ -1,4 +1,4 @@
-﻿# scripts/smoke_playwright_login.py
+# scripts/smoke_playwright_login.py
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import os

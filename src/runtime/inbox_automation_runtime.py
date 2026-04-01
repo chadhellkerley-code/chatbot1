@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-<<<<<<< HEAD
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -10,12 +9,6 @@ from core.inbox.conversation_reader import ConversationReader
 from core.storage import TZ as STORAGE_TZ
 from core.account_limits import can_send_message_for_account
 from src.inbox_diagnostics import record_inbox_diagnostic
-=======
-from typing import Any
-
-from core import accounts as accounts_module
-from core.inbox.conversation_reader import ConversationReader
->>>>>>> origin/main
 from src.inbox.endpoint_reader import sync_account_threads_from_storage
 from src.runtime.automation_engine_adapter import AutomationEngineAdapter
 from src.runtime.ownership_router import OwnershipRouter
@@ -35,7 +28,6 @@ class RuntimeSendQueue:
         self._store = store
         self._sender = sender
 
-<<<<<<< HEAD
     def _record_enqueue_diagnostic(
         self,
         *,
@@ -62,8 +54,6 @@ class RuntimeSendQueue:
             callsite_skip=2,
         )
 
-=======
->>>>>>> origin/main
     def enqueue_text(
         self,
         thread_key: str,
@@ -72,7 +62,6 @@ class RuntimeSendQueue:
         job_type: str,
         dedupe_key: str,
         metadata: dict[str, Any] | None = None,
-<<<<<<< HEAD
     ) -> dict[str, Any]:
         enqueue_fn = getattr(self._sender, "enqueue_message_job", None)
         result: dict[str, Any]
@@ -142,21 +131,6 @@ class RuntimeSendQueue:
             "dedupe_key": str(result.get("dedupe_key") or dedupe_key).strip(),
             "state": str(result.get("state") or "queued").strip() or "queued",
         }
-=======
-    ) -> bool:
-        if self._has_pending_dedupe(dedupe_key):
-            return False
-        local_id = self._sender.queue_message(
-            thread_key,
-            text,
-            job_type=job_type,
-            metadata={
-                "dedupe_key": dedupe_key,
-                **dict(metadata or {}),
-            },
-        )
-        return bool(local_id)
->>>>>>> origin/main
 
     def enqueue_pack(
         self,
@@ -166,7 +140,6 @@ class RuntimeSendQueue:
         job_type: str,
         dedupe_key: str,
         metadata: dict[str, Any] | None = None,
-<<<<<<< HEAD
     ) -> dict[str, Any]:
         enqueue_fn = getattr(self._sender, "enqueue_pack_job", None)
         result: dict[str, Any]
@@ -235,19 +208,6 @@ class RuntimeSendQueue:
             "dedupe_key": str(result.get("dedupe_key") or dedupe_key).strip(),
             "state": str(result.get("state") or "queued").strip() or "queued",
         }
-=======
-    ) -> bool:
-        if self._has_pending_dedupe(dedupe_key):
-            return False
-        return bool(
-            self._sender.queue_pack(
-                thread_key,
-                pack_id,
-                job_type=job_type,
-                metadata={"dedupe_key": dedupe_key, **dict(metadata or {})},
-            )
-        )
->>>>>>> origin/main
 
     def _has_pending_dedupe(self, dedupe_key: str) -> bool:
         clean_dedupe = str(dedupe_key or "").strip()
@@ -260,14 +220,11 @@ class RuntimeSendQueue:
 
 
 class InboxAutomationRuntime:
-<<<<<<< HEAD
     _EVALUATE_STARTED_EVENT = "automation_evaluate_started"
     _EVALUATE_COMPLETED_EVENT = "automation_evaluate_completed"
     _ENQUEUE_ATTEMPT_EVENT = "automation_enqueue_attempt"
     _ENQUEUE_RESULT_EVENT = "automation_enqueue_result"
 
-=======
->>>>>>> origin/main
     def __init__(
         self,
         *,
@@ -286,7 +243,6 @@ class InboxAutomationRuntime:
             store=store,
         )
 
-<<<<<<< HEAD
     def _record_diagnostic(
         self,
         *,
@@ -318,23 +274,17 @@ class InboxAutomationRuntime:
             callsite_skip=2,
         )
 
-=======
->>>>>>> origin/main
     def list_alias_accounts(self, alias_id: str) -> list[dict[str, Any]]:
         clean_alias = str(alias_id or "").strip().lower()
         rows: list[dict[str, Any]] = []
         for raw in accounts_module.list_all():
             if not isinstance(raw, dict):
                 continue
-<<<<<<< HEAD
             enabled_for_operation = getattr(accounts_module, "is_account_enabled_for_operation", None)
             if callable(enabled_for_operation):
                 if not bool(enabled_for_operation(raw)):
                     continue
             elif not bool(raw.get("active", True)):
-=======
-            if not bool(raw.get("active", True)):
->>>>>>> origin/main
                 continue
             alias = str(raw.get("alias") or "").strip().lower()
             username = str(raw.get("username") or "").strip().lstrip("@")
@@ -345,7 +295,6 @@ class InboxAutomationRuntime:
 
     def process_account_turn(self, account: dict[str, Any], *, mode: str) -> dict[str, Any]:
         account_id = str(account.get("username") or "").strip().lstrip("@").lower()
-<<<<<<< HEAD
         alias_id = str(account.get("alias") or "").strip()
         if not account_id:
             self._record_diagnostic(
@@ -355,15 +304,11 @@ class InboxAutomationRuntime:
                 reason="missing_account_id",
                 payload={"mode": mode},
             )
-=======
-        if not account_id:
->>>>>>> origin/main
             return {"account_id": "", "touched_threads": 0, "queued_jobs": 0, "errors": 1}
         self._ensure_backend_started()
         self._connector.start(account_id)
         if not self._connector.is_ready(account_id):
             self._connector.mark_degraded(account_id, "storage_state_missing")
-<<<<<<< HEAD
             self._record_diagnostic(
                 account_id=account_id,
                 alias_id=alias_id,
@@ -374,8 +319,6 @@ class InboxAutomationRuntime:
                 reason_code="storage_state_missing",
                 payload={"mode": mode},
             )
-=======
->>>>>>> origin/main
             return {"account_id": account_id, "touched_threads": 0, "queued_jobs": 0, "errors": 1}
         try:
             started_at = ConversationReader._account_started_at(account)
@@ -394,16 +337,11 @@ class InboxAutomationRuntime:
             touched = self._store.apply_endpoint_threads(account, list(rows or []))
             queued_jobs = 0
             errors = 0
-<<<<<<< HEAD
-=======
-            alias_id = str(account.get("alias") or "").strip()
->>>>>>> origin/main
             for thread_row in self._threads_for_account(account_id):
                 thread_key = str(thread_row.get("thread_key") or "").strip()
                 if not thread_key:
                     continue
                 thread = self._store.get_thread(thread_key) or thread_row
-<<<<<<< HEAD
                 try:
                     base_updates = self._router.initialize_thread(thread)
                     base_updates["alias_id"] = alias_id
@@ -491,27 +429,6 @@ class InboxAutomationRuntime:
                 exception=exc,
                 payload={"mode": mode},
             )
-=======
-                base_updates = self._router.initialize_thread(thread)
-                base_updates["alias_id"] = alias_id
-                self._store.update_thread_record(thread_key, base_updates)
-                refreshed = self._store.get_thread(thread_key) or thread
-                if not self._router.can_automation_touch(refreshed):
-                    continue
-                evaluation = self._engine.evaluate_thread(account=account, thread=refreshed, mode=mode)
-                if evaluation.get("thread_updates"):
-                    self._store.update_thread_record(thread_key, dict(evaluation.get("thread_updates") or {}))
-                if evaluation.get("state_updates"):
-                    self._store.update_thread_state(thread_key, dict(evaluation.get("state_updates") or {}))
-                result = self._apply_actions(
-                    account=account,
-                    thread=self._store.get_thread(thread_key) or refreshed,
-                    actions=list(evaluation.get("actions") or []),
-                )
-                queued_jobs += int(result.get("queued_jobs") or 0)
-                errors += int(result.get("errors") or 0)
-        except Exception as exc:
->>>>>>> origin/main
             self._connector.mark_degraded(account_id, f"{type(exc).__name__}: {exc}")
             raise
         self._connector.heartbeat(account_id, state="ready", last_error="")
@@ -556,7 +473,6 @@ class InboxAutomationRuntime:
             elif action_type == "send_text":
                 job_type = str(action.get("job_type") or "auto_reply")
                 if job_type == "followup" and not self._router.can_followup_touch(thread):
-<<<<<<< HEAD
                     self._record_diagnostic(
                         account_id=account_id,
                         alias_id=alias_id,
@@ -864,61 +780,6 @@ class InboxAutomationRuntime:
                                 "job_id": int(enqueue_result.get("job_id") or 0),
                             },
                         )
-=======
-                    continue
-                if job_type != "followup" and not self._router.can_automation_touch(thread):
-                    continue
-                latest_inbound_id = str(action.get("latest_inbound_id") or thread.get("last_inbound_id_seen") or "").strip()
-                dedupe_key = f"{job_type}:{thread_key}:{latest_inbound_id or action.get('text')}"
-                if self._send_queue.enqueue_text(
-                    thread_key,
-                    str(action.get("text") or "").strip(),
-                    job_type=job_type,
-                    dedupe_key=dedupe_key,
-                    metadata={
-                        "post_send_thread_updates": dict(action.get("post_send_thread_updates") or {}),
-                        "post_send_state_updates": dict(action.get("post_send_state_updates") or {}),
-                    },
-                ):
-                    queued_jobs += 1
-                    self._store.add_thread_event(
-                        thread_key,
-                        queued_thread_event(job_type),
-                        account_id=account_id,
-                        alias_id=alias_id,
-                        payload={"job_type": job_type, "content_kind": "text"},
-                    )
-            elif action_type == "send_pack":
-                job_type = str(action.get("job_type") or "auto_reply")
-                if job_type == "followup" and not self._router.can_followup_touch(thread):
-                    continue
-                if job_type != "followup" and not self._router.can_automation_touch(thread):
-                    continue
-                pack_id = str(action.get("pack_id") or "").strip()
-                dedupe_key = f"{job_type}:{thread_key}:pack:{pack_id}:{action.get('latest_inbound_id') or thread.get('followup_level')}"
-                if self._send_queue.enqueue_pack(
-                    thread_key,
-                    pack_id,
-                    job_type=job_type,
-                    dedupe_key=dedupe_key,
-                    metadata={
-                        "post_send_thread_updates": dict(action.get("post_send_thread_updates") or {}),
-                        "post_send_state_updates": dict(action.get("post_send_state_updates") or {}),
-                    },
-                ):
-                    queued_jobs += 1
-                    self._store.add_thread_event(
-                        thread_key,
-                        queued_thread_event(job_type, is_pack=True),
-                        account_id=account_id,
-                        alias_id=alias_id,
-                        payload={
-                            "job_type": job_type,
-                            "content_kind": "pack",
-                            "pack_id": pack_id,
-                        },
-                    )
->>>>>>> origin/main
             else:
                 errors += 1
         self._store.add_thread_event(
@@ -930,7 +791,6 @@ class InboxAutomationRuntime:
         )
         return {"queued_jobs": queued_jobs, "errors": errors}
 
-<<<<<<< HEAD
     @staticmethod
     def _build_evaluate_context(thread: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -1052,8 +912,6 @@ class InboxAutomationRuntime:
             payload=payload,
         )
 
-=======
->>>>>>> origin/main
     def _threads_for_account(self, account_id: str) -> list[dict[str, Any]]:
         clean_account = str(account_id or "").strip().lstrip("@").lower()
         return [
@@ -1072,7 +930,6 @@ class InboxAutomationRuntime:
             if username == clean_account:
                 return dict(raw)
         return None
-<<<<<<< HEAD
 
     @staticmethod
     def _pack_sendable_action_count(action: dict[str, Any], pack_id: str) -> int:
@@ -1153,5 +1010,3 @@ class InboxAutomationRuntime:
             return float(value)
         except Exception:
             return None
-=======
->>>>>>> origin/main

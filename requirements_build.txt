@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-pyinstaller==6.3.0
-=======
-pyinstaller==6.3.0
->>>>>>> origin/main
+﻿pyinstaller==6.3.0

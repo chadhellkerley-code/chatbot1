@@ -40,7 +40,6 @@ class _FakeLocator:
 
 
 class _FakeKeyboard:
-<<<<<<< HEAD
     def __init__(self) -> None:
         self.pressed: list[str] = []
         self.inserted: list[str] = []
@@ -55,9 +54,6 @@ class _FakeKeyboard:
 
     async def type(self, text: str) -> None:
         self.inserted.append(str(text))
-=======
-    async def press(self, _key: str) -> None:
->>>>>>> origin/main
         return None
 
 
@@ -65,7 +61,6 @@ class _FakeComposer:
     def __init__(self) -> None:
         self.filled: list[str] = []
         self.pressed: list[str] = []
-<<<<<<< HEAD
         self.clicked = 0
         self.focused = 0
         self.fail_click = False
@@ -99,18 +94,6 @@ class _FakeComposer:
         del args, kwargs
         return None
 
-=======
-
-    async def click(self) -> None:
-        return None
-
-    async def fill(self, text: str) -> None:
-        self.filled.append(str(text))
-
-    async def press(self, key: str) -> None:
-        self.pressed.append(str(key))
-
->>>>>>> origin/main
 
 class _FakePage:
     def __init__(self, sequences: dict[str, list[list[bool]]], *, url: str = "https://www.instagram.com/direct/t/123/") -> None:
@@ -130,12 +113,8 @@ class _FakeRuntime:
     def __init__(self, page: _FakePage) -> None:
         self._page = page
 
-<<<<<<< HEAD
     def run_async(self, coro, *, timeout=None):
         del timeout
-=======
-    def run_async(self, coro):
->>>>>>> origin/main
         return asyncio.run(coro)
 
     def open_page(self, _account):
@@ -302,7 +281,6 @@ def test_task_direct_client_reconciles_send_via_thread_read_after_refresh(monkey
     assert call_order == ["confirm", "refresh", "confirm", "thread_read"]
 
 
-<<<<<<< HEAD
 def test_task_direct_client_send_text_with_ack_uses_keyboard_and_button_fallbacks(monkeypatch) -> None:
     page = _FakePage({})
     runtime = _FakeRuntime(page)
@@ -348,8 +326,6 @@ def test_task_direct_client_send_text_with_ack_uses_keyboard_and_button_fallback
     assert composer.focused >= 1
 
 
-=======
->>>>>>> origin/main
 def test_send_pack_messages_aborts_before_opening_client_when_quota_cannot_cover_pack(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.inbox.message_sender.can_send_message_for_account",

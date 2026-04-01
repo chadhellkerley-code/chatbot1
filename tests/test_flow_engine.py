@@ -47,11 +47,7 @@ def test_flow_simple_3_stages_progresses_without_jumps() -> None:
     )
     assert decision["decision"] == "reply"
     assert decision["next_stage_id"] == "s2"
-<<<<<<< HEAD
     assert decision["action_type"] == "PACK_1"
-=======
-    assert decision["action_type"] == "PACK_2"
->>>>>>> origin/main
     updated = engine.apply_outbound(
         {"stage_id": "s1", "followup_level": 0, "objection_step": 0},
         decision,
@@ -94,11 +90,7 @@ def test_flow_complex_10_plus_clamps_out_of_order_transition() -> None:
         }
     )
     assert decision["next_stage_id"] == "s2"
-<<<<<<< HEAD
     assert decision["action_type"] == "PACK_1"
-=======
-    assert decision["action_type"] == "PACK_2"
->>>>>>> origin/main
 
 
 def test_followups_multiple_levels_no_repeat_no_double_send() -> None:
@@ -217,11 +209,7 @@ def test_chained_objections_resolve_and_reset_step() -> None:
             "objection_strategy_name": "OBJECION",
         }
     )
-<<<<<<< HEAD
     assert d1["action_type"] == "objection_engine"
-=======
-    assert d1["action_type"] == "OBJECION"
->>>>>>> origin/main
     assert d1["objection_step_after"] == 1
     state = engine.apply_outbound({"stage_id": "s1", "followup_level": 0, "objection_step": 0}, d1, sent_at=time.time())
     d2 = engine.evaluate(
@@ -238,11 +226,7 @@ def test_chained_objections_resolve_and_reset_step() -> None:
         }
     )
     assert d2["next_stage_id"] == "s2"
-<<<<<<< HEAD
     assert d2["action_type"] == "PACK_1"
-=======
-    assert d2["action_type"] == "PACK_2"
->>>>>>> origin/main
     assert d2["objection_step_after"] == 0
 
 
@@ -480,7 +464,6 @@ def test_select_pack_accepts_pack_id_strategy_name(monkeypatch) -> None:
     assert selected is not None
     assert selected["type"] == "PACK_A"
     assert memory_state["last_pack_used"]["PACK_A"] == "pack-uuid-1"
-<<<<<<< HEAD
 
 
 def test_validate_and_normalize_flow_config_rejects_invalid_action_token() -> None:
@@ -536,5 +519,3 @@ def test_validate_and_normalize_flow_config_accepts_canonical_text_action() -> N
 
     ok, reason = responder._validate_flow_pack_bindings(config)
     assert ok, reason
-=======
->>>>>>> origin/main

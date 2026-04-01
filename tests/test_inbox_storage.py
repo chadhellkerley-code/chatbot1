@@ -126,7 +126,6 @@ def test_inbox_storage_resolve_local_outbound_without_sent_timestamp_keeps_origi
         storage.shutdown()
 
 
-<<<<<<< HEAD
 def test_inbox_storage_trim_global_threads_does_not_drop_threads_with_pending_work(tmp_path: Path) -> None:
     original_limit = InboxStorage._MAX_ACTIVE_THREADS
     InboxStorage._MAX_ACTIVE_THREADS = 3
@@ -168,8 +167,6 @@ def test_inbox_storage_trim_global_threads_does_not_drop_threads_with_pending_wo
         InboxStorage._MAX_ACTIVE_THREADS = original_limit
 
 
-=======
->>>>>>> origin/main
 def test_inbox_storage_persists_outbound_source_by_job_type(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -242,7 +239,6 @@ def test_inbox_storage_reconciles_synthetic_confirmation_with_remote_message_wit
                 storage.shutdown()
 
 
-<<<<<<< HEAD
 def test_enqueue_send_queue_job_reuses_dedupe_without_losing_metadata_or_local_message_id(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:
@@ -288,8 +284,6 @@ def test_enqueue_send_queue_job_reuses_dedupe_without_losing_metadata_or_local_m
         storage.shutdown()
 
 
-=======
->>>>>>> origin/main
 def test_inbox_storage_keeps_synced_activity_even_if_it_predates_session_start(tmp_path: Path) -> None:
     storage = InboxStorage(tmp_path)
     try:

@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-<<<<<<< HEAD
 import time
 from types import SimpleNamespace
 
 import pytest
 from playwright.async_api import async_playwright
-=======
-
-import pytest
->>>>>>> origin/main
 
 from src.transport.message_composer import MessageComposer
 
@@ -23,7 +18,6 @@ class _SenderStub:
         return None
 
 
-<<<<<<< HEAD
 class _ComposerCandidateStub:
     def __init__(
         self,
@@ -89,8 +83,6 @@ class _PageStub:
         await asyncio.sleep(0)
 
 
-=======
->>>>>>> origin/main
 class _ComposerValueStub:
     def __init__(self, *, input_value=None, inner_text=None, text_content=None) -> None:
         self._input_value = input_value
@@ -119,17 +111,13 @@ def _build_composer() -> MessageComposer:
         thread_composers=("a",),
         send_buttons=("b",),
         composer_visible_timeout_ms=1000,
-<<<<<<< HEAD
         usable_composer_timeout_ms=1000,
-=======
->>>>>>> origin/main
         type_delay_min_ms=1,
         type_delay_max_ms=1,
         log_event=lambda *args, **kwargs: None,
     )
 
 
-<<<<<<< HEAD
 async def _audit_surface_from_html(html: str) -> dict:
     composer = _build_composer()
     async with async_playwright() as playwright:
@@ -144,8 +132,6 @@ async def _audit_surface_from_html(html: str) -> dict:
         return meta
 
 
-=======
->>>>>>> origin/main
 def test_composer_text_uses_first_available_source() -> None:
     composer = _build_composer()
     locator = _ComposerValueStub(
@@ -164,7 +150,6 @@ def test_type_message_rejects_empty_payload() -> None:
 
     with pytest.raises(ValueError, match="empty_message"):
         asyncio.run(composer.type_message(page=None, composer=None, text="   \n  "))
-<<<<<<< HEAD
 
 
 def test_thread_composer_require_usable_rejects_modal_candidate() -> None:
@@ -529,5 +514,3 @@ def test_ensure_visible_chat_surface_ready_fails_when_composer_is_missing() -> N
     assert meta["ok"] is False
     assert meta["reason_code"] == "COMPOSER_NOT_USABLE_AFTER_NORMALIZATION"
     assert meta["failed_checks"] == ["composer_not_found"]
-=======
->>>>>>> origin/main

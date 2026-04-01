@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-<<<<<<< HEAD
 from datetime import datetime
-=======
->>>>>>> origin/main
 import json
 from typing import Any
 
@@ -62,7 +59,7 @@ class _ActionsDrawer(QFrame):
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(8)
 
-        title = QLabel("Mas acciones")
+        title = QLabel("Más acciones")
         title.setObjectName("InboxDrawerTitle")
         header_row.addWidget(title, 1)
 
@@ -90,11 +87,14 @@ class InboxView(QWidget):
         self._ctx = ctx
         self._controller = controller
         self._actions_visible = False
-        self._list_token = ""
-        self._thread_header_token = ""
-        self._packs_token = ""
+        self._list_token = None
+        self._thread_header_token = None
+        self._packs_token = None
         self._runtime_token = ""
-        self._thread_permissions_token = ""
+        self._thread_permissions_token = None
+        self._last_runtime_meta_text = ""
+        self._splitter_sizes_initialized = False
+        self._last_no_thread_applied = False  # UI: only reapply the empty thread state when the selection actually transitions
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -136,8 +136,7 @@ class InboxView(QWidget):
         self._back_button.clicked.connect(self._ctx.go_back)
         self._back_button.hide()
 
-<<<<<<< HEAD
-        self._projection_label = QLabel("Proyeccion local")
+        self._projection_label = QLabel("Proyección local")
         self._projection_label.setObjectName("InboxMetaChip")
         top_row.addWidget(self._projection_label, 0, Qt.AlignRight | Qt.AlignVCenter)
 
@@ -150,22 +149,11 @@ class InboxView(QWidget):
         top_row.addWidget(self._runtime_status, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         refresh_button = QPushButton("Pedir sync")
-=======
-        self._sync_label = QLabel("Cache local")
-        self._sync_label.setObjectName("InboxMetaChip")
-        top_row.addWidget(self._sync_label, 0, Qt.AlignRight | Qt.AlignVCenter)
-
-        self._runtime_status = QLabel("Runtime detenido")
-        self._runtime_status.setObjectName("InboxSyncBadge")
-        top_row.addWidget(self._runtime_status, 0, Qt.AlignRight | Qt.AlignVCenter)
-
-        refresh_button = QPushButton("Actualizar")
->>>>>>> origin/main
         refresh_button.setObjectName("InboxGhostButton")
         refresh_button.clicked.connect(self._controller.force_refresh)
         top_row.addWidget(refresh_button, 0, Qt.AlignRight | Qt.AlignVCenter)
 
-        self._toggle_button = QPushButton("Mas acciones")
+        self._toggle_button = QPushButton("Más acciones")
         self._toggle_button.setObjectName("InboxGhostButton")
         self._toggle_button.setCheckable(True)
         self._toggle_button.clicked.connect(self._toggle_actions_panel)
@@ -180,11 +168,7 @@ class InboxView(QWidget):
         self._alias_combo = QComboBox()
         self._alias_combo.setObjectName("InboxCompactField")
         self._alias_combo.currentTextChanged.connect(self._controller.set_runtime_alias)
-<<<<<<< HEAD
         controls_row.addWidget(_CompactField("Alias runtime", self._alias_combo, wide=True))
-=======
-        controls_row.addWidget(_CompactField("Alias activo", self._alias_combo, wide=True))
->>>>>>> origin/main
 
         self._mode_combo = QComboBox()
         self._mode_combo.setObjectName("InboxCompactField")
@@ -223,14 +207,11 @@ class InboxView(QWidget):
         self._stop_runtime.clicked.connect(self._controller.stop_runtime)
         controls_row.addWidget(self._stop_runtime, 0, Qt.AlignBottom)
 
-<<<<<<< HEAD
         self._runtime_meta = QLabel("El selector gobierna runtime y no filtra la bandeja.")
-=======
-        self._runtime_meta = QLabel("Sin runtime activo")
->>>>>>> origin/main
         self._runtime_meta.setObjectName("InboxSummaryText")
         self._runtime_meta.setWordWrap(True)
         controls_row.addWidget(self._runtime_meta, 1, Qt.AlignVCenter)
+        self._last_runtime_meta_text = self._runtime_meta.text()
 
         header_layout.addLayout(controls_row)
         root.addWidget(self._header)
@@ -256,7 +237,6 @@ class InboxView(QWidget):
 
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([308, 1152])
         root.addWidget(self._splitter, 1)
 
         self._actions_drawer = _ActionsDrawer(self)
@@ -275,12 +255,9 @@ class InboxView(QWidget):
         self._actions_drawer.hide()
 
         self._controller.snapshot_changed.connect(self._apply_snapshot)
-<<<<<<< HEAD
         runtime_signal = getattr(self._controller, "runtime_status_changed", None)
         if runtime_signal is not None:
             runtime_signal.connect(self._apply_runtime_status)
-=======
->>>>>>> origin/main
 
         self.setObjectName("InboxView")
         self.setStyleSheet(_INBOX_STYLESHEET)
@@ -293,9 +270,25 @@ class InboxView(QWidget):
         self._controller.deactivate()
         self._set_actions_visible(False)
 
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._apply_initial_splitter_sizes()
+        self._position_actions_drawer()
+
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._position_actions_drawer()
+
+    def _apply_initial_splitter_sizes(self) -> None:
+        if self._splitter_sizes_initialized:
+            return
+        total_width = int(self.width() or self._splitter.width() or 1460)
+        if total_width <= 0:
+            total_width = 1460
+        left_width = max(1, int(total_width * 0.21))
+        right_width = max(1, total_width - left_width)
+        self._splitter.setSizes([left_width, right_width])
+        self._splitter_sizes_initialized = True
 
     def _position_actions_drawer(self) -> None:
         header_bottom = self._header.geometry().bottom()
@@ -330,7 +323,6 @@ class InboxView(QWidget):
             }
         )
 
-<<<<<<< HEAD
     def _apply_runtime_status(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
@@ -427,7 +419,7 @@ class InboxView(QWidget):
         if send_reason and send_reason != send_reason_code:
             short_reason = send_reason if len(send_reason) <= 70 else send_reason[:70].rstrip() + "..."
             send_extra = f"{send_extra} {short_reason}".rstrip()
-        self._runtime_meta.setText(
+        runtime_meta_text = (
             (
                 "El selector gobierna runtime y no filtra la bandeja."
                 f"\nScheduler @{scheduler_current}"
@@ -439,11 +431,11 @@ class InboxView(QWidget):
                 f"\nHeartbeat {heartbeat_at}"
                 f"  |  Estado persistido {updated_at}"
                 f"{f'  |  Error {last_error}' if last_error else ''}"
-                f"\nUltimo intento @{last_account}"
+                f"\nÚltimo intento @{last_account}"
                 f"  |  Job {last_job}"
                 f"  |  Thread {last_thread}"
                 f"  |  At {last_when}{last_extra}"
-                f"\nUltimo resultado @{send_account}"
+                f"\nÚltimo resultado @{send_account}"
                 f"  |  Job {send_job}"
                 f"  |  Thread {send_thread}"
                 f"  |  At {send_when}{send_extra}"
@@ -451,28 +443,27 @@ class InboxView(QWidget):
             if runtime_status
             else "El selector gobierna runtime y no filtra la bandeja.\nSin estado persistido para el runtime seleccionado."
         )
+        if runtime_meta_text != self._last_runtime_meta_text:
+            self._last_runtime_meta_text = runtime_meta_text
+            self._runtime_meta.setText(runtime_meta_text)
 
-=======
->>>>>>> origin/main
     def _apply_snapshot(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
 
         self._back_button.setEnabled(self._ctx.can_go_back())
         metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
-        self._header_summary.setText(
-            f"{int(metrics.get('threads') or 0)} conversaciones  |  {int(metrics.get('pending') or 0)} sin responder"
-        )
-<<<<<<< HEAD
+        header_summary_text = f"{int(metrics.get('threads') or 0)} conversaciones  |  {int(metrics.get('pending') or 0)} sin responder"  # UI: compute the header copy once so we can guard redundant repaints
+        if self._header_summary.text() != header_summary_text:  # UI: avoid resetting the header label when the summary text is unchanged
+            self._header_summary.setText(header_summary_text)  # UI: refresh the header summary only when the snapshot text changes
         projection_status = payload.get("projection_status") if isinstance(payload.get("projection_status"), dict) else {}
         remote_sync_status = payload.get("remote_sync_status") if isinstance(payload.get("remote_sync_status"), dict) else {}
-        self._projection_label.setText(
-            str(projection_status.get("label") or payload.get("sync_label") or "Proyeccion local")
-        )
-        self._remote_sync_label.setText(str(remote_sync_status.get("label") or "Sync remota"))
-=======
-        self._sync_label.setText(str(payload.get("sync_label") or "Cache local"))
->>>>>>> origin/main
+        projection_text = str(projection_status.get("label") or payload.get("sync_label") or "Proyección local")  # UI: compute the projection chip text once for guarded updates
+        if self._projection_label.text() != projection_text:  # UI: avoid resetting the projection chip when the label text is unchanged
+            self._projection_label.setText(projection_text)  # UI: refresh the projection chip only when the snapshot label changes
+        remote_sync_text = str(remote_sync_status.get("label") or "Sync remota")  # UI: compute the remote sync chip text once for guarded updates
+        if self._remote_sync_label.text() != remote_sync_text:  # UI: avoid resetting the remote sync chip when the label text is unchanged
+            self._remote_sync_label.setText(remote_sync_text)  # UI: refresh the remote sync chip only when the snapshot label changes
 
         runtime_aliases = [str(item or "").strip() for item in payload.get("runtime_aliases") or [] if str(item or "").strip()]
         if runtime_aliases:
@@ -486,58 +477,34 @@ class InboxView(QWidget):
             if current_alias:
                 idx = self._alias_combo.findText(current_alias)
                 if idx >= 0:
-                    self._alias_combo.setCurrentIndex(idx)
+                    self._alias_combo.blockSignals(True)  # UI: suppress alias-change side effects while applying snapshot selection
+                    self._alias_combo.setCurrentIndex(idx)  # UI: restore the snapshot-selected alias without emitting controller updates
+                    self._alias_combo.blockSignals(False)  # UI: re-enable alias-change notifications after the snapshot selection is applied
 
         runtime_status = payload.get("runtime_status") if isinstance(payload.get("runtime_status"), dict) else {}
-<<<<<<< HEAD
         self._apply_runtime_controls(runtime_status, has_aliases=bool(runtime_aliases))
-=======
-        is_running = bool(runtime_status.get("is_running"))
-        has_runtime_alias = bool(str(self._alias_combo.currentText() or "").strip())
-        self._alias_combo.setEnabled(bool(runtime_aliases))
-        self._start_runtime.setEnabled(has_runtime_alias and not is_running)
-        self._stop_runtime.setEnabled(has_runtime_alias and is_running)
-        for widget in (self._mode_combo, self._delay_min, self._delay_max, self._turns):
-            widget.setEnabled(has_runtime_alias and not is_running)
-
-        runtime_token = _serialize_rows(runtime_status)
-        if runtime_token != self._runtime_token:
-            self._runtime_token = runtime_token
-            self._runtime_status.setText("Runtime activo" if is_running else "Runtime detenido")
-            self._runtime_meta.setText(
-                (
-                    f"Actual @{str(runtime_status.get('current_account_id') or '-').strip() or '-'}"
-                    f"  |  Proxima @{str(runtime_status.get('next_account_id') or '-').strip() or '-'}"
-                    f"  |  Modo {str(runtime_status.get('mode') or 'both')}"
-                    f"  |  Turno {int(runtime_status.get('current_turn_count') or 0)}/{int(runtime_status.get('max_turns_per_account') or 1)}"
-                )
-                if runtime_status
-                else "Sin runtime activo"
-            )
->>>>>>> origin/main
 
         rows = [row for row in payload.get("rows") or [] if isinstance(row, dict)]
         current_thread_key = str(payload.get("current_thread_key") or "").strip()
-        list_token = _serialize_rows(
-            {
-                "current_thread_key": current_thread_key,
-                "total_count": int(payload.get("total_count") or 0),
-                "rows": [
-                    {
-                        "thread_key": str(row.get("thread_key") or "").strip(),
-                        "display_name": str(row.get("display_name") or "").strip(),
-                        "recipient_username": str(row.get("recipient_username") or "").strip(),
-                        "last_message_text": str(row.get("last_message_text") or "").strip(),
-                        "last_message_direction": str(row.get("last_message_direction") or "").strip(),
-                        "last_message_timestamp": row.get("last_message_timestamp"),
-                        "unread_count": row.get("unread_count"),
-                        "needs_reply": bool(row.get("needs_reply")) if "needs_reply" in row else None,
-                        "account_health": str(row.get("account_health") or "").strip(),
-                    }
-                    for row in rows
-                ],
-            }
+        list_token = (
+            current_thread_key,
+            int(payload.get("total_count") or 0),
+            tuple(
+                (
+                    str(row.get("thread_key") or "").strip(),
+                    str(row.get("display_name") or "").strip(),
+                    str(row.get("recipient_username") or "").strip(),
+                    str(row.get("last_message_text") or "").strip(),
+                    str(row.get("last_message_direction") or "").strip(),
+                    _token_scalar(row.get("last_message_timestamp")),
+                    _token_scalar(row.get("unread_count")),
+                    bool(row.get("needs_reply")) if "needs_reply" in row else None,
+                    str(row.get("account_health") or "").strip(),
+                )
+                for row in rows
+            ),
         )
+        self._conversation_list.set_loading(bool(payload.get("is_loading", False)))  # UI: keep the conversation overlay in sync even when the row token is unchanged
         if list_token != self._list_token:
             self._list_token = list_token
             self._conversation_list.set_threads(
@@ -548,57 +515,48 @@ class InboxView(QWidget):
 
         thread = payload.get("thread") if isinstance(payload.get("thread"), dict) else None
         thread_permissions = payload.get("thread_permissions") if isinstance(payload.get("thread_permissions"), dict) else {}
-        thread_permissions_token = _serialize_rows(thread_permissions)
+        thread_permissions_token = _normalize_token_value(thread_permissions)
         permissions_changed = thread_permissions_token != self._thread_permissions_token
         if permissions_changed:
             self._thread_permissions_token = thread_permissions_token
-        header_token = _serialize_rows(
-            {
-                "thread_key": str((thread or {}).get("thread_key") or "").strip(),
-                "display_name": str((thread or {}).get("display_name") or "").strip(),
-                "account_id": str((thread or {}).get("account_id") or "").strip(),
-                "account_alias": str((thread or {}).get("account_alias") or "").strip(),
-                "recipient_username": str((thread or {}).get("recipient_username") or "").strip(),
-                "last_seen_text": str((thread or {}).get("last_seen_text") or "").strip(),
-                "last_message_direction": str((thread or {}).get("last_message_direction") or "").strip(),
-                "last_message_timestamp": (thread or {}).get("last_message_timestamp"),
-                "stage": str((thread or {}).get("stage_id") or (thread or {}).get("stage") or "").strip(),
-                "owner": str((thread or {}).get("owner") or "").strip(),
-                "bucket": str((thread or {}).get("bucket") or "").strip(),
-                "quality": str((thread or {}).get("quality") or "").strip(),
-                "last_action_type": str((thread or {}).get("last_action_type") or "").strip(),
-                "last_pack_sent": str((thread or {}).get("last_pack_sent") or (thread or {}).get("pack_name") or "").strip(),
-                "suggestion_status": str((thread or {}).get("suggestion_status") or "").strip(),
-                "suggestion_error": str((thread or {}).get("suggestion_error") or "").strip(),
-                "suggested_reply": str((thread or {}).get("suggested_reply") or "").strip(),
-                "suggested_reply_at": (thread or {}).get("suggested_reply_at"),
-                "tags": list((thread or {}).get("tags") or []) if isinstance((thread or {}).get("tags"), (list, tuple, set)) else str((thread or {}).get("tags") or "").strip(),
-            }
+        header_token = (
+            str((thread or {}).get("thread_key") or "").strip(),
+            str((thread or {}).get("display_name") or "").strip(),
+            str((thread or {}).get("account_id") or "").strip(),
+            str((thread or {}).get("account_alias") or "").strip(),
+            str((thread or {}).get("recipient_username") or "").strip(),
+            str((thread or {}).get("last_seen_text") or "").strip(),
+            str((thread or {}).get("last_message_direction") or "").strip(),
+            _token_scalar((thread or {}).get("last_message_timestamp")),
+            str((thread or {}).get("stage_id") or (thread or {}).get("stage") or "").strip(),
+            str((thread or {}).get("owner") or "").strip(),
+            str((thread or {}).get("bucket") or "").strip(),
+            str((thread or {}).get("quality") or "").strip(),
+            str((thread or {}).get("last_action_type") or "").strip(),
+            str((thread or {}).get("last_pack_sent") or (thread or {}).get("pack_name") or "").strip(),
+            str((thread or {}).get("suggestion_status") or "").strip(),
+            str((thread or {}).get("suggestion_error") or "").strip(),
+            str((thread or {}).get("suggested_reply") or "").strip(),
+            _token_scalar((thread or {}).get("suggested_reply_at")),
+            _normalize_token_value((thread or {}).get("tags")),
         )
-<<<<<<< HEAD
         thread_truth = payload.get("thread_truth") if isinstance(payload.get("thread_truth"), dict) else {}
         if header_token != self._thread_header_token or permissions_changed:
             self._thread_header_token = header_token
-            self._chat_view.set_thread(thread, permissions=thread_permissions, truth=thread_truth)
-            self._actions_panel.set_thread(thread, permissions=thread_permissions, truth=thread_truth)
-=======
-        if header_token != self._thread_header_token or permissions_changed:
-            self._thread_header_token = header_token
-            self._chat_view.set_thread(thread, permissions=thread_permissions)
-            self._actions_panel.set_thread(thread, permissions=thread_permissions)
->>>>>>> origin/main
+            if thread:  # UI: only push active-thread state through the detail panes when real thread data is present
+                self._chat_view.set_thread(thread, permissions=thread_permissions, truth=thread_truth)  # UI: refresh the chat pane when the active thread snapshot changes
+                self._actions_panel.set_thread(thread, permissions=thread_permissions, truth=thread_truth)  # UI: refresh the actions pane when the active thread snapshot changes
+                self._last_no_thread_applied = False  # UI: clear the empty-thread token as soon as a real thread is rendered
 
         packs = [pack for pack in payload.get("packs") or [] if isinstance(pack, dict)]
-        packs_token = _serialize_rows(
-            [
-                {
-                    "id": str(pack.get("id") or "").strip(),
-                    "name": str(pack.get("name") or "").strip(),
-                    "type": str(pack.get("type") or "").strip(),
-                    "active": bool(pack.get("active", True)),
-                }
-                for pack in packs
-            ]
+        packs_token = tuple(
+            (
+                str(pack.get("id") or "").strip(),
+                str(pack.get("name") or "").strip(),
+                str(pack.get("type") or "").strip(),
+                bool(pack.get("active", True)),
+            )
+            for pack in packs
         )
         if packs_token != self._packs_token:
             self._packs_token = packs_token
@@ -607,13 +565,10 @@ class InboxView(QWidget):
         self._actions_panel.set_status(str(payload.get("actions_status") or "").strip())
 
         if not thread:
-<<<<<<< HEAD
-            self._chat_view.set_thread(None, permissions=thread_permissions, truth=thread_truth)
-            self._actions_panel.set_thread(None, permissions=thread_permissions, truth=thread_truth)
-=======
-            self._chat_view.set_thread(None, permissions=thread_permissions)
-            self._actions_panel.set_thread(None, permissions=thread_permissions)
->>>>>>> origin/main
+            if self._last_no_thread_applied is not True:  # UI: only reset the detail panes once per empty-thread transition
+                self._chat_view.set_thread(None, permissions=thread_permissions, truth=thread_truth)  # UI: apply the empty chat state when the selection becomes empty
+                self._actions_panel.set_thread(None, permissions=thread_permissions, truth=thread_truth)  # UI: apply the empty actions state when the selection becomes empty
+                self._last_no_thread_applied = True  # UI: remember that the empty-thread state is already rendered
             return
 
         message_rows = [row for row in payload.get("messages") or [] if isinstance(row, dict)]
@@ -637,6 +592,27 @@ def _serialize_rows(payload: Any) -> str:
         return json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str, separators=(",", ":"))
     except Exception:
         return repr(payload)
+
+
+def _token_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _normalize_token_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return tuple(
+            (str(key), _normalize_token_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalize_token_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted((_normalize_token_value(item) for item in value), key=repr))
+    return str(value)
 
 
 _INBOX_STYLESHEET = """

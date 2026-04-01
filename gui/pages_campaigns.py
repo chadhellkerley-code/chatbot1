@@ -87,7 +87,7 @@ class CampaignsSectionPage(SectionPage):
             ctx,
             title,
             subtitle,
-            section_title="Campañas",
+            section_title="CampaÃ±as",
             section_subtitle="Submenu horizontal para crear, monitorear y revisar historial.",
             section_routes=CAMPAIGNS_SUBSECTIONS,
             route_key=route_key,
@@ -101,14 +101,14 @@ class CampaignsHomePage(CampaignsSectionPage):
     def __init__(self, ctx: PageContext, parent=None) -> None:
         super().__init__(
             ctx,
-            "Campañas",
-            "Creación, monitor y trazabilidad de campañas activas.",
+            "CampaÃ±as",
+            "CreaciÃ³n, monitor y trazabilidad de campaÃ±as activas.",
             route_key=None,
             back_button=False,
             parent=parent,
         )
         panel, layout = self.create_panel(
-            "Centro de campañas",
+            "Centro de campaÃ±as",
             "La operacion queda separada en paneles de creacion, monitoreo e historial para trabajar sin mezclar estados.",
         )
         self._summary = QLabel("")
@@ -122,7 +122,7 @@ class CampaignsHomePage(CampaignsSectionPage):
         metrics.setVerticalSpacing(10)
         self._cards = {
             "templates": ClickableMetricCard("Plantillas", "0"),
-            "active": ClickableMetricCard("Campaña activa", "No"),
+            "active": ClickableMetricCard("CampaÃ±a activa", "No"),
             "sent": ClickableMetricCard("Mensajes hoy", "0"),
             "errors": ClickableMetricCard("Errores hoy", "0"),
         }
@@ -136,7 +136,7 @@ class CampaignsHomePage(CampaignsSectionPage):
 
         helper = QLabel(
             "Usa el submenu superior para ir directo al flujo que necesites. "
-            "La campaña activa y el historial quedan accesibles sin salir de la seccion."
+            "La campaÃ±a activa y el historial quedan accesibles sin salir de la seccion."
         )
         helper.setObjectName("SectionPanelHint")
         helper.setWordWrap(True)
@@ -195,7 +195,7 @@ class CampaignCreatePage(CampaignsSectionPage):
     def __init__(self, ctx: PageContext, parent=None) -> None:
         super().__init__(
             ctx,
-            "Crear campaña",
+            "Crear campaÃ±a",
             "Configura alias, leads, plantilla y concurrencia desde la GUI.",
             route_key="campaign_create_page",
             parent=parent,
@@ -203,11 +203,7 @@ class CampaignCreatePage(CampaignsSectionPage):
         self._template_payloads: dict[str, dict[str, str]] = {}
         self._lead_counts: dict[str, int] = {}
         self._summary_values: dict[str, QLabel] = {}
-<<<<<<< HEAD
         self._capacity_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
-=======
-        self._capacity_cache: dict[str, dict[str, Any]] = {}
->>>>>>> origin/main
         self._form_snapshot_cache: dict[str, Any] | None = None
         self._form_request_id = 0
         self._form_loading = False
@@ -239,7 +235,7 @@ class CampaignCreatePage(CampaignsSectionPage):
         self._capacity_label = QLabel("")
         self._capacity_label.setObjectName("MutedText")
         self._capacity_label.setWordWrap(True)
-        self._use_template_yes = QRadioButton("Sí")
+        self._use_template_yes = QRadioButton("SÃ­")
         self._use_template_no = QRadioButton("No")
         self._use_template_group = QButtonGroup(self)
         self._use_template_group.addButton(self._use_template_yes)
@@ -309,13 +305,13 @@ class CampaignCreatePage(CampaignsSectionPage):
         message_card.body_layout().addWidget(self._template_section)
         message_card.body_layout().addWidget(self._manual_section)
 
-        params_card = CardWidget("Parámetros de envío")
+        params_card = CardWidget("ParÃ¡metros de envÃ­o")
         params_grid = QGridLayout()
         params_grid.setContentsMargins(0, 0, 0, 0)
         params_grid.setHorizontalSpacing(12)
         params_grid.setVerticalSpacing(8)
-        params_grid.addWidget(QLabel("Delay mínimo"), 0, 0)
-        params_grid.addWidget(QLabel("Delay máximo"), 0, 1)
+        params_grid.addWidget(QLabel("Delay mÃ­nimo"), 0, 0)
+        params_grid.addWidget(QLabel("Delay mÃ¡ximo"), 0, 1)
         params_grid.addWidget(self._delay_min, 1, 0)
         params_grid.addWidget(self._delay_max, 1, 1)
         params_grid.addWidget(QLabel("Concurrencia"), 2, 0)
@@ -336,8 +332,8 @@ class CampaignCreatePage(CampaignsSectionPage):
         params_card.body_layout().addLayout(browser_row)
         params_card.body_layout().addWidget(self._capacity_label)
 
-        summary_card = CardWidget("Resumen de configuración")
-        summary_intro = QLabel("Se actualiza automáticamente con la configuración actual.")
+        summary_card = CardWidget("Resumen de configuraciÃ³n")
+        summary_intro = QLabel("Se actualiza automÃ¡ticamente con la configuraciÃ³n actual.")
         summary_intro.setObjectName("MutedText")
         summary_intro.setWordWrap(True)
         summary_card.body_layout().addWidget(summary_intro)
@@ -368,7 +364,7 @@ class CampaignCreatePage(CampaignsSectionPage):
         summary_grid.setColumnStretch(1, 1)
         summary_card.body_layout().addLayout(summary_grid)
 
-        self._start_button = QPushButton("INICIAR CAMPAÑA")
+        self._start_button = QPushButton("INICIAR CAMPAÃ‘A")
         self._start_button.setObjectName("PrimaryButton")
         self._start_button.setMinimumHeight(52)
         self._start_button.clicked.connect(self._start_campaign)
@@ -387,19 +383,11 @@ class CampaignCreatePage(CampaignsSectionPage):
 
         self._alias_combo.currentIndexChanged.connect(self._on_alias_changed)
         self._alias_combo.currentIndexChanged.connect(self._update_summary)
-<<<<<<< HEAD
         self._leads_combo.currentIndexChanged.connect(self._on_leads_changed)
         self._template_combo.currentIndexChanged.connect(self._on_template_changed)
         self._delay_min.valueChanged.connect(self._update_summary)
         self._delay_max.valueChanged.connect(self._update_summary)
         self._concurrency.valueChanged.connect(self._on_concurrency_changed)
-=======
-        self._leads_combo.currentIndexChanged.connect(self._update_summary)
-        self._template_combo.currentIndexChanged.connect(self._on_template_changed)
-        self._delay_min.valueChanged.connect(self._update_summary)
-        self._delay_max.valueChanged.connect(self._update_summary)
-        self._concurrency.valueChanged.connect(self._update_summary)
->>>>>>> origin/main
         self._headless.toggled.connect(self._update_summary)
         self._use_template_yes.toggled.connect(self._update_message_mode)
         self._manual_message.textChanged.connect(self._update_summary)
@@ -413,7 +401,7 @@ class CampaignCreatePage(CampaignsSectionPage):
             return
         self._form_loading = True
         if self._form_snapshot_cache is None:
-            self.set_status("Cargando configuración de campaña...")
+            self.set_status("Cargando configuraciÃ³n de campaÃ±a...")
         self._form_request_id = self._ctx.queries.submit(
             lambda: build_campaign_create_snapshot(
                 self._ctx.services,
@@ -434,7 +422,7 @@ class CampaignCreatePage(CampaignsSectionPage):
         if request_id != self._form_request_id:
             return
         self._form_loading = False
-        self.set_status(f"No se pudo cargar la configuración: {error.message}")
+        self.set_status(f"No se pudo cargar la configuraciÃ³n: {error.message}")
 
     def _apply_form_snapshot(self, payload: dict[str, Any]) -> None:
         current_alias = str(self._alias_combo.currentData() or self._ctx.state.active_alias)
@@ -497,7 +485,6 @@ class CampaignCreatePage(CampaignsSectionPage):
 
         capacity = payload.get("capacity")
         if isinstance(capacity, dict):
-<<<<<<< HEAD
             cache_key = self._capacity_cache_key_from_payload(capacity)
             if cache_key is not None:
                 self._capacity_cache[cache_key] = dict(capacity)
@@ -532,24 +519,6 @@ class CampaignCreatePage(CampaignsSectionPage):
             self._capacity_label.clear()
             return
         cached = self._capacity_cache.get((alias, leads_alias, workers_requested))
-=======
-            capacity_alias = str(capacity.get("alias") or self._alias_combo.currentData() or "").strip()
-            if capacity_alias:
-                self._capacity_cache[capacity_alias] = dict(capacity)
-
-        self._refresh_template_preview()
-        self._update_message_mode()
-        self._request_capacity_refresh(force=not bool(self._capacity_cache.get(str(self._alias_combo.currentData() or "").strip())))
-        self._update_summary()
-        self.clear_status()
-
-    def _request_capacity_refresh(self, *, force: bool = False) -> None:
-        alias = str(self._alias_combo.currentData() or "").strip()
-        if not alias:
-            self._capacity_label.clear()
-            return
-        cached = self._capacity_cache.get(alias)
->>>>>>> origin/main
         if cached:
             self._apply_capacity_payload(cached)
             if not force:
@@ -557,16 +526,12 @@ class CampaignCreatePage(CampaignsSectionPage):
         else:
             self._capacity_label.setText("Calculando capacidad recomendada...")
         self._capacity_request_id = self._ctx.queries.submit(
-<<<<<<< HEAD
             lambda: build_campaign_capacity_snapshot(
                 self._ctx.services,
                 alias=alias,
                 leads_alias=leads_alias,
                 workers_requested=workers_requested,
             ),
-=======
-            lambda: build_campaign_capacity_snapshot(self._ctx.services, alias=alias),
->>>>>>> origin/main
             on_success=self._on_capacity_snapshot_loaded,
             on_error=self._on_capacity_snapshot_failed,
         )
@@ -575,18 +540,11 @@ class CampaignCreatePage(CampaignsSectionPage):
         if request_id != self._capacity_request_id:
             return
         clean_payload = dict(payload) if isinstance(payload, dict) else {}
-<<<<<<< HEAD
         cache_key = self._capacity_cache_key_from_payload(clean_payload)
         if cache_key is not None:
             self._capacity_cache[cache_key] = clean_payload
         current_key = self._capacity_cache_key()
         if cache_key == current_key:
-=======
-        alias = str(clean_payload.get("alias") or self._alias_combo.currentData() or "").strip()
-        if alias:
-            self._capacity_cache[alias] = clean_payload
-        if alias == str(self._alias_combo.currentData() or "").strip():
->>>>>>> origin/main
             self._apply_capacity_payload(clean_payload)
 
     def _on_capacity_snapshot_failed(self, request_id: int, error: QueryError) -> None:
@@ -600,7 +558,6 @@ class CampaignCreatePage(CampaignsSectionPage):
             self._capacity_label.clear()
             return
         workers_capacity = max(0, safe_int(clean_payload.get("workers_capacity") or 0))
-<<<<<<< HEAD
         workers_effective = max(0, safe_int(clean_payload.get("workers_effective") or 0))
         proxies = len(clean_payload.get("proxies") or [])
         none_accounts = bool(clean_payload.get("has_none_accounts"))
@@ -630,21 +587,11 @@ class CampaignCreatePage(CampaignsSectionPage):
             + (f"  |  Por cuenta: {account_remaining_preview}" if account_remaining_preview else "")
         )
         self._update_summary()
-=======
-        proxies = len(clean_payload.get("proxies") or [])
-        none_accounts = bool(clean_payload.get("has_none_accounts"))
-        note = "  |  Sin proxies: se usara 1 worker local con rotacion de cuentas." if none_accounts and not proxies else ""
-        self._capacity_label.setText(
-            f"Capacidad recomendada de workers: {workers_capacity}  |  "
-            f"Proxies detectados: {proxies}{note}"
-        )
->>>>>>> origin/main
 
     def _on_alias_changed(self) -> None:
         self._request_capacity_refresh()
         self._update_summary()
 
-<<<<<<< HEAD
     def _on_leads_changed(self) -> None:
         self._request_capacity_refresh()
         self._update_summary()
@@ -653,15 +600,12 @@ class CampaignCreatePage(CampaignsSectionPage):
         self._request_capacity_refresh()
         self._update_summary()
 
-=======
->>>>>>> origin/main
     def _lead_count(self) -> int:
         leads_alias = str(self._leads_combo.currentData() or "").strip()
         if not leads_alias:
             return 0
         return safe_int(self._lead_counts.get(leads_alias))
 
-<<<<<<< HEAD
     def _current_capacity_payload(self) -> dict[str, Any]:
         payload = self._capacity_cache.get(self._capacity_cache_key())
         return dict(payload) if isinstance(payload, dict) else {}
@@ -672,8 +616,6 @@ class CampaignCreatePage(CampaignsSectionPage):
             return max(0, safe_int(payload.get("planned_runnable_leads") or 0))
         return self._lead_count()
 
-=======
->>>>>>> origin/main
     def _refresh_template_preview(self) -> None:
         if not self._use_template_yes.isChecked():
             self._template_preview.setPlainText("La vista previa se muestra al usar una plantilla guardada.")
@@ -706,11 +648,7 @@ class CampaignCreatePage(CampaignsSectionPage):
         template_name = str(self._template_payloads.get(template_id, {}).get("name") or "").strip()
         self._summary_values["alias"].setText(alias or "-")
         self._summary_values["list"].setText(leads_alias or "-")
-<<<<<<< HEAD
         self._summary_values["count"].setText(str(self._planned_launch_total()) if leads_alias else "0")
-=======
-        self._summary_values["count"].setText(str(self._lead_count()) if leads_alias else "0")
->>>>>>> origin/main
         if self._use_template_yes.isChecked():
             self._summary_values["template"].setText(template_name or "Sin plantilla seleccionada")
         else:
@@ -732,10 +670,10 @@ class CampaignCreatePage(CampaignsSectionPage):
             return
         if self._campaign_task_running():
             self._start_button.setEnabled(False)
-            self._start_button.setText("CAMPAÑA EN CURSO")
+            self._start_button.setText("CAMPAÃ‘A EN CURSO")
             return
         self._start_button.setEnabled(True)
-        self._start_button.setText("INICIAR CAMPAÑA")
+        self._start_button.setText("INICIAR CAMPAÃ‘A")
 
     def _start_campaign(self) -> None:
         if self._start_submit_in_progress or self._campaign_task_running():
@@ -763,11 +701,7 @@ class CampaignCreatePage(CampaignsSectionPage):
             "delay_max": self._delay_max.value(),
             "workers_requested": self._concurrency.value(),
             "headless": self._headless.isChecked(),
-<<<<<<< HEAD
             "total_leads": self._planned_launch_total(),
-=======
-            "total_leads": self._lead_count(),
->>>>>>> origin/main
         }
         launch_request = CampaignLaunchRequest.from_payload(launch_input)
         self._start_submit_in_progress = True
@@ -787,7 +721,7 @@ class CampaignCreatePage(CampaignsSectionPage):
             self._start_submit_in_progress = False
             self._sync_start_button_state()
         monitor_payload["log_cursor_start"] = self._ctx.logs.cursor()
-        self.set_status("Campaña iniciada.")
+        self.set_status("CampaÃ±a iniciada.")
         self._ctx.state.campaign_monitor = monitor_payload
         self._ctx.open_route("campaign_monitor_page", dict(monitor_payload))
 
@@ -802,8 +736,8 @@ class CampaignMonitorPage(CampaignsSectionPage):
     def __init__(self, ctx: PageContext, parent=None) -> None:
         super().__init__(
             ctx,
-            "Monitor de campaña",
-            "Seguimiento en vivo del run actual con métricas propias, workers y log incremental.",
+            "Monitor de campaÃ±a",
+            "Seguimiento en vivo del run actual con mÃ©tricas propias, workers y log incremental.",
             route_key="campaign_monitor_page",
             parent=parent,
         )
@@ -1051,11 +985,11 @@ class CampaignMonitorPage(CampaignsSectionPage):
 
     def _pause_campaign(self) -> None:
         self._ctx.services.campaigns.stop_campaign("campaign pause requested from GUI")
-        self.set_status("Señal de stop seguro enviada.")
+        self.set_status("SeÃ±al de stop seguro enviada.")
 
     def _stop_campaign(self) -> None:
         self._ctx.services.campaigns.stop_campaign("campaign stop requested from GUI")
-        self.set_status("Señal de stop enviada.")
+        self.set_status("SeÃ±al de stop enviada.")
 
     def _on_task_finished(self, task_name: str, ok: bool, message: str) -> None:
         if task_name != "campaign":
@@ -1063,7 +997,7 @@ class CampaignMonitorPage(CampaignsSectionPage):
         self._sync_logs_from_store(force=True)
         self.refresh_monitor()
         if message:
-            self.set_status(message if ok else f"Campaña finalizada con error: {message}")
+            self.set_status(message if ok else f"CampaÃ±a finalizada con error: {message}")
 
     def on_navigate_to(self, payload: Any = None) -> None:
         if isinstance(payload, dict) and payload:
@@ -1096,6 +1030,16 @@ class CampaignHistoryPage(CampaignsSectionPage):
             route_key="campaign_history_page",
             parent=parent,
         )
+        self._summary_day_key = ""
+        self._summary_table = QTableWidget(0, 5)
+        self._summary_table.setHorizontalHeaderLabels(
+            ["Cuenta", "Enviados hoy", "OK", "Fallidos", "Tasa %"]
+        )
+        self._summary_table.verticalHeader().setVisible(False)
+        self._summary_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.content_layout().addWidget(self._summary_table)
+
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
             ["Fecha", "Cuenta", "Lead", "OK", "Detalle", "Alias"]
@@ -1110,10 +1054,82 @@ class CampaignHistoryPage(CampaignsSectionPage):
         self.content_layout().addWidget(refresh_button, 0, Qt.AlignLeft)
         self.content_layout().addStretch(1)
 
-    def refresh_table(self) -> None:
-        rows = self._ctx.services.context.read_jsonl(
-            self._ctx.services.context.storage_path("sent_log.jsonl")
-        )
+        self._day_rollover_timer = QTimer(self)
+        self._day_rollover_timer.setInterval(60_000)
+        self._day_rollover_timer.timeout.connect(self._refresh_for_day_boundary)
+
+    @staticmethod
+    def _normalize_account_username(value: Any) -> str:
+        return str(value or "").strip().lstrip("@").lower()
+
+    def _today_in_storage_timezone(self) -> str:
+        from datetime import datetime
+
+        from core.storage import TZ
+
+        return datetime.now(TZ).date().isoformat()
+
+    def _populate_summary_table(self, rows: list[dict[str, Any]]) -> None:
+        from datetime import datetime
+
+        from core import accounts as accounts_module
+        from core.storage import TZ
+
+        today = datetime.now(TZ).date()
+        account_rows = accounts_module.list_all()
+        ordered_accounts: list[str] = []
+        seen_accounts: set[str] = set()
+        for record in account_rows:
+            if not isinstance(record, dict):
+                continue
+            username = str(record.get("username") or "").strip().lstrip("@")
+            username_key = username.lower()
+            if not username or username_key in seen_accounts:
+                continue
+            seen_accounts.add(username_key)
+            ordered_accounts.append(username)
+
+        summary: dict[str, dict[str, int]] = {
+            username.lower(): {"ok": 0, "failed": 0} for username in ordered_accounts
+        }
+        for row in rows:
+            account_key = self._normalize_account_username(row.get("account"))
+            if not account_key or account_key not in summary:
+                continue
+            ts = row.get("ts")
+            try:
+                local_dt = datetime.fromtimestamp(float(ts), tz=TZ)
+            except Exception:
+                continue
+            if local_dt.date() != today:
+                continue
+            if bool(row.get("ok")):
+                summary[account_key]["ok"] += 1
+                continue
+            if row.get("skipped") or row.get("skip_reason"):
+                continue
+            summary[account_key]["failed"] += 1
+
+        self._summary_table.setRowCount(len(ordered_accounts))
+        for row_index, username in enumerate(ordered_accounts):
+            counts = summary.get(username.lower(), {"ok": 0, "failed": 0})
+            ok_count = int(counts.get("ok", 0))
+            failed_count = int(counts.get("failed", 0))
+            sent_today = ok_count + failed_count
+            rate_label = str(round(ok_count / sent_today * 100)) if sent_today > 0 else "-"
+            values = [
+                username,
+                str(sent_today),
+                str(ok_count),
+                str(failed_count),
+                rate_label,
+            ]
+            for column, value in enumerate(values):
+                self._summary_table.setItem(row_index, column, table_item(value))
+
+        self._summary_day_key = today.isoformat()
+
+    def _populate_events_table(self, rows: list[dict[str, Any]]) -> None:
         recent = list(reversed(rows[-200:]))
         self._table.setRowCount(len(recent))
         for row_index, row in enumerate(recent):
@@ -1128,5 +1144,22 @@ class CampaignHistoryPage(CampaignsSectionPage):
             for column, value in enumerate(values):
                 self._table.setItem(row_index, column, table_item(value))
 
+    def refresh_table(self) -> None:
+        rows = self._ctx.services.context.read_jsonl(
+            self._ctx.services.context.storage_path("sent_log.jsonl")
+        )
+        self._populate_summary_table(rows)
+        self._populate_events_table(rows)
+
+    def _refresh_for_day_boundary(self) -> None:
+        if self._summary_day_key != self._today_in_storage_timezone():
+            self.refresh_table()
+
     def on_navigate_to(self, payload: Any = None) -> None:
         self.refresh_table()
+        if not self._day_rollover_timer.isActive():
+            self._day_rollover_timer.start()
+
+    def on_navigate_from(self) -> None:
+        if self._day_rollover_timer.isActive():
+            self._day_rollover_timer.stop()

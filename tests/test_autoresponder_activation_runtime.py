@@ -182,7 +182,6 @@ def test_alias_account_rows_marks_proxy_preflight_blocked_accounts(monkeypatch) 
     assert rows[1]["safety_message"] == "Proxy en cuarentena"
 
 
-<<<<<<< HEAD
 def test_alias_account_rows_excludes_usage_deactivated_accounts(monkeypatch) -> None:
     service = AutomationService(ServiceContext.default(Path.cwd()))
     monkeypatch.setattr(
@@ -216,8 +215,6 @@ def test_alias_account_rows_excludes_usage_deactivated_accounts(monkeypatch) -> 
     assert [str(row.get("username") or "") for row in rows] == ["acct-1"]
 
 
-=======
->>>>>>> origin/main
 def test_max_alias_concurrency_ignores_proxy_preflight_blocked_accounts(monkeypatch) -> None:
     service = AutomationService(ServiceContext.default(Path.cwd()))
     monkeypatch.setattr(

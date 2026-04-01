@@ -81,11 +81,8 @@ def test_campaign_prefilter_blocks_recent_global_contacts_across_aliases_and_all
     pending, stats = _filter_pending_leads_for_campaign(
         [
             "pepito",
-<<<<<<< HEAD
             "already-selected",
             "alias-recent-sent",
-=======
->>>>>>> origin/main
             "old-alias-sent",
             "alias-skipped",
             "expired-global",
@@ -94,27 +91,20 @@ def test_campaign_prefilter_blocks_recent_global_contacts_across_aliases_and_all
             "fresh",
         ],
         alias="nuevo1",
-<<<<<<< HEAD
         run_id="run-123",
         alias_status_map={
             "already-selected": {"status": "pending", "updated_at": now_ts - 5, "pending_run_id": "run-123"},
             "alias-recent-sent": {"status": "sent", "sent_timestamp": now_ts - 30},
-=======
-        alias_status_map={
->>>>>>> origin/main
             "old-alias-sent": {"status": "sent", "sent_timestamp": now_ts - lead_status_store.GLOBAL_CONTACT_TTL_SECONDS - 1},
             "alias-skipped": {"status": "skipped", "skipped_timestamp": now_ts - 30},
         },
         global_contact_map={
             "pepito": {"last_contacted_at": now_ts - 60, "last_status": "sent", "last_alias": "nuevo"},
-<<<<<<< HEAD
             "already-selected": {
                 "last_contacted_at": now_ts - 10,
                 "last_status": "sent",
                 "last_alias": "externa",
             },
-=======
->>>>>>> origin/main
             "expired-global": {
                 "last_contacted_at": now_ts - lead_status_store.GLOBAL_CONTACT_TTL_SECONDS - 1,
                 "last_status": "sent",
@@ -124,27 +114,18 @@ def test_campaign_prefilter_blocks_recent_global_contacts_across_aliases_and_all
     )
 
     assert pending == [
-<<<<<<< HEAD
         "already-selected",
-=======
->>>>>>> origin/main
         "old-alias-sent",
         "expired-global",
         "campaign-history",
         "shared-history",
         "fresh",
     ]
-<<<<<<< HEAD
     assert stats["blocked_total"] == 3
     assert stats["blocked_by_global_contact"] == 1
     assert stats["blocked_by_alias_sent_status"] == 1
     assert stats["blocked_by_alias_skipped_status"] == 1
     assert stats["preserved_pending"] == 1
-=======
-    assert stats["blocked_total"] == 2
-    assert stats["blocked_by_global_contact"] == 1
-    assert stats["blocked_by_alias_skipped_status"] == 1
->>>>>>> origin/main
     assert stats["advisory_alias_sent_ignored"] == 1
     assert stats["advisory_campaign_registry_hits"] == 1
     assert stats["advisory_shared_registry_hits"] == 1
@@ -160,10 +141,7 @@ def test_get_prefilter_snapshot_bootstraps_global_contacts_from_sent_log_and_reu
                     "matias": {
                         "leads": {
                             "lead-a": {"status": "sent", "sent_timestamp": 100},
-<<<<<<< HEAD
                             "lead-pending": {"status": "pending", "updated_at": 250},
-=======
->>>>>>> origin/main
                         }
                     }
                 },
@@ -220,24 +198,16 @@ def test_get_prefilter_snapshot_bootstraps_global_contacts_from_sent_log_and_reu
 
     assert first_alias_status["lead-a"]["status"] == "sent"
     assert second_alias_status["lead-a"]["status"] == "sent"
-<<<<<<< HEAD
     assert first_alias_status["lead-pending"]["status"] == "pending"
     assert second_alias_status["lead-pending"]["status"] == "pending"
     assert first_global["lead-a"]["last_contacted_at"] == 100
     assert first_global["lead-b"]["last_contacted_at"] == 200
     assert first_global["lead-c"]["last_contacted_at"] == 300
     assert first_global["lead-d"]["last_contacted_at"] == 400
-=======
-    assert first_global["lead-a"]["last_contacted_at"] == 100
-    assert first_global["lead-b"]["last_contacted_at"] == 200
-    assert first_global["lead-c"]["last_contacted_at"] == 300
-    assert "lead-d" not in first_global
->>>>>>> origin/main
     assert second_global == first_global
     assert calls["count"] == 1
 
 
-<<<<<<< HEAD
 def test_pending_preselection_stays_prioritized_and_overrides_later_global_block(monkeypatch, tmp_path) -> None:
     _configure_lead_status_store(monkeypatch, tmp_path)
     now_ts = 1_700_000_000
@@ -317,8 +287,6 @@ def test_stale_pending_from_other_run_does_not_override_recent_contact_block(mon
     assert stats["blocked_total"] == 1
 
 
-=======
->>>>>>> origin/main
 def test_successful_contacts_index_can_filter_campaign_records_by_alias(monkeypatch, tmp_path) -> None:
     sent_file = tmp_path / "sent_log.jsonl"
     sent_file.write_text(
@@ -380,7 +348,6 @@ def test_successful_contacts_index_can_filter_campaign_records_by_alias(monkeypa
 
     assert scoped == {"lead-a": {"acct-1"}}
     assert set(global_index) == {"lead-a", "lead-b", "lead-c", "lead-d"}
-<<<<<<< HEAD
 
 
 def test_get_prefilter_snapshot_bootstraps_recent_non_campaign_sent_log_as_global_contact(monkeypatch, tmp_path) -> None:
@@ -414,5 +381,3 @@ def test_get_prefilter_snapshot_bootstraps_recent_non_campaign_sent_log_as_globa
     _alias_status_map, global_contact_map = lead_status_store.get_prefilter_snapshot("matias")
 
     assert global_contact_map["lead-non-campaign"]["last_account"] == "acct-1"
-=======
->>>>>>> origin/main

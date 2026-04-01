@@ -359,20 +359,14 @@ class ConversationStore:
         *,
         source: str = "manual",
         pack_id: str = "",
-<<<<<<< HEAD
         local_message_id: str = "",
-=======
->>>>>>> origin/main
     ) -> dict[str, Any] | None:
         return self._storage.append_local_outbound_message(
             thread_key,
             text,
             source=source,
             pack_id=pack_id,
-<<<<<<< HEAD
             local_message_id=local_message_id,
-=======
->>>>>>> origin/main
         )
 
     def set_local_outbound_status(self, thread_key: str, local_message_id: str, *, status: str) -> None:
@@ -421,7 +415,6 @@ class ConversationStore:
             scheduled_at=scheduled_at,
         )
 
-<<<<<<< HEAD
     def enqueue_send_queue_job(
         self,
         task_type: str,
@@ -445,8 +438,6 @@ class ConversationStore:
             scheduled_at=scheduled_at,
         )
 
-=======
->>>>>>> origin/main
     def update_send_queue_job(
         self,
         job_id: int,
@@ -501,12 +492,9 @@ class ConversationStore:
             reason=reason,
         )
 
-<<<<<<< HEAD
     def reconcile_send_queue_thread_state(self, thread_key: str) -> None:
         self._storage.reconcile_send_queue_thread_state(thread_key)
 
-=======
->>>>>>> origin/main
     def update_thread_state(self, thread_key: str, updates: dict[str, Any]) -> None:
         self._storage.update_thread_state(thread_key, updates)
 
@@ -532,7 +520,6 @@ class ConversationStore:
     def list_thread_events(self, thread_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._storage.list_thread_events(thread_key, limit=limit)
 
-<<<<<<< HEAD
     def record_diagnostic_event(
         self,
         *,
@@ -593,8 +580,6 @@ class ConversationStore:
             stage=stage,
         )
 
-=======
->>>>>>> origin/main
     def get_runtime_alias_state(self, alias_id: str) -> dict[str, Any]:
         return self._storage.get_runtime_alias_state(alias_id)
 

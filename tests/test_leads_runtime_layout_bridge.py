@@ -42,7 +42,6 @@ def test_service_leaves_legacy_filter_storage_unreferenced(
     assert not (data_root / "lead_filters").exists()
 
 
-<<<<<<< HEAD
 def test_delete_list_removes_legacy_copy_so_it_does_not_reappear_after_restart(
     tmp_path: Path,
     monkeypatch,
@@ -67,8 +66,6 @@ def test_delete_list_removes_legacy_copy_so_it_does_not_reappear_after_restart(
     assert reloaded.list_lists() == []
 
 
-=======
->>>>>>> origin/main
 def test_service_migrates_templates_into_active_data_root(
     tmp_path: Path,
     monkeypatch,

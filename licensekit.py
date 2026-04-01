@@ -1,4 +1,4 @@
-﻿# licensekit.py
+# licensekit.py
 # -*- coding: utf-8 -*-
 """Herramientas de gestión y entrega de licencias."""
 

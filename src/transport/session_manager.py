@@ -2,17 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-<<<<<<< HEAD
 import re
 import threading
 import time
 import uuid
 from contextlib import contextmanager
-=======
-import threading
-import time
-import uuid
->>>>>>> origin/main
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
@@ -21,23 +15,15 @@ from playwright.async_api import Page
 
 from core.proxy_preflight import account_proxy_preflight
 from core.proxy_registry import ProxyResolutionError
-<<<<<<< HEAD
 from src.browser_profile_lifecycle import emit_profile_lifecycle_diagnostic, mark_profile_unclean_shutdown
 from src.browser_profile_paths import browser_storage_state_path
 from src.browser_telemetry import log_browser_stage
 from src.playwright_service import PlaywrightService
 from src.runtime.playwright_runtime import PersistentProfileOwnershipError, run_coroutine_sync
-=======
-from src.browser_profile_paths import browser_storage_state_path
-from src.browser_telemetry import log_browser_stage
-from src.playwright_service import PlaywrightService
-from src.runtime.playwright_runtime import run_coroutine_sync
->>>>>>> origin/main
 
 SessionLoginFunc = Callable[..., Awaitable[Tuple[PlaywrightService, Any, Page]]]
 
 
-<<<<<<< HEAD
 def _normalize_subsystem_label(value: str) -> str:
     cleaned = re.sub(r"[^a-z0-9_-]+", "_", str(value or "").strip().lower()).strip("_")
     return cleaned or "default"
@@ -126,8 +112,6 @@ class _NavigationState:
         self.condition = threading.Condition(threading.RLock())
 
 
-=======
->>>>>>> origin/main
 @dataclass(frozen=True)
 class ManagedSession:
     key: str
@@ -138,7 +122,6 @@ class ManagedSession:
     reused: bool
     lease_id: str = ""
     pool_key: str = ""
-<<<<<<< HEAD
     _acquire_navigation_sync: Callable[[str, float], dict[str, Any]] | None = field(default=None, repr=False, compare=False)
     _acquire_navigation_async: Callable[[str, float], Awaitable[dict[str, Any]]] | None = field(default=None, repr=False, compare=False)
     _release_navigation_sync: Callable[[str], None] | None = field(default=None, repr=False, compare=False)
@@ -174,8 +157,6 @@ class ManagedSession:
                 "timestamp": 0.0,
             }
         return dict(self._navigation_metadata())
-=======
->>>>>>> origin/main
 
 
 @dataclass
@@ -187,10 +168,7 @@ class _SessionEntry:
     proxy_key: str
     sticky_owners: set[str] = field(default_factory=set)
     leases: dict[str, str] = field(default_factory=dict)
-<<<<<<< HEAD
     navigation: _NavigationState = field(default_factory=_NavigationState)
-=======
->>>>>>> origin/main
 
     @property
     def persistent(self) -> bool:
@@ -224,20 +202,14 @@ class SessionManager:
         profiles_root: str,
         normalize_username: Callable[[str], str],
         log_event: Callable[..., None],
-<<<<<<< HEAD
         subsystem: str = "default",
-=======
->>>>>>> origin/main
     ) -> None:
         self._headless = bool(headless)
         self._persistent = bool(keep_browser_open_per_account)
         self._profiles_root = str(profiles_root)
         self._normalize_username = normalize_username
         self._log_event = log_event
-<<<<<<< HEAD
         self._subsystem = _normalize_subsystem_label(subsystem)
-=======
->>>>>>> origin/main
         self._manager_id = uuid.uuid4().hex
         self._held_leases: Dict[str, str] = {}
         env_name = (
@@ -255,11 +227,7 @@ class SessionManager:
         return self._normalize_username(username).lower()
 
     def _pool_key(self, key: str) -> str:
-<<<<<<< HEAD
         return f"{'headless' if self._headless else 'headful'}:{self._subsystem}:{key}"
-=======
-        return f"{'headless' if self._headless else 'headful'}:{key}"
->>>>>>> origin/main
 
     @staticmethod
     def page_closed(page: Optional[Page]) -> bool:
@@ -320,7 +288,6 @@ class SessionManager:
             entry.sticky_owners.add(self._manager_id)
         return lease_id
 
-<<<<<<< HEAD
     def _navigation_metadata(self, entry: _SessionEntry) -> dict[str, Any]:
         with entry.navigation.condition:
             return {
@@ -525,8 +492,6 @@ class SessionManager:
             state.error = error
         state.event.set()
 
-=======
->>>>>>> origin/main
     async def open_session(
         self,
         *,
@@ -592,7 +557,6 @@ class SessionManager:
                         reused=True,
                         lease_id=lease_id,
                         pool_key=pool_key,
-<<<<<<< HEAD
                         _acquire_navigation_sync=lambda owner, timeout, _session_key=pool_key: self.acquire_navigation_sync(
                             ManagedSession(
                                 key=key,
@@ -648,8 +612,6 @@ class SessionManager:
                             owner,
                         ),
                         _navigation_metadata=lambda: self._navigation_metadata(entry),
-=======
->>>>>>> origin/main
                     )
                 open_state = self._OPENING.get(pool_key)
                 if open_state is not None and open_state.event.is_set() and open_state.error is not None:
@@ -658,7 +620,6 @@ class SessionManager:
                 if open_state is None:
                     self._OPENING[pool_key] = _OpenState(proxy_key=proxy_key)
                     should_open = True
-<<<<<<< HEAD
                 else:
                     # Only one opener may own a pool key at a time. Callers
                     # waiting on a different proxy reopen after the current
@@ -666,14 +627,6 @@ class SessionManager:
                     wait_state = open_state
             if stale_entry is not None:
                 self._retire_navigation(stale_entry, reason="stale_session_replaced")
-=======
-                elif open_state.proxy_key == proxy_key:
-                    wait_state = open_state
-                else:
-                    self._OPENING[pool_key] = _OpenState(proxy_key=proxy_key)
-                    should_open = True
-            if stale_entry is not None:
->>>>>>> origin/main
                 await self._close_session_entry(stale_entry)
             if should_open:
                 break
@@ -687,17 +640,13 @@ class SessionManager:
                 open_state = self._OPENING.get(pool_key)
                 if open_state is wait_state and open_state.event.is_set() and open_state.error is not None:
                     self._OPENING.pop(pool_key, None)
-<<<<<<< HEAD
                     if isinstance(open_state.error, Exception):
                         raise open_state.error
-=======
->>>>>>> origin/main
                     raise RuntimeError(str(open_state.error) or type(open_state.error).__name__) from open_state.error
 
         timeout_seconds = self._resolve_open_timeout(deadline=deadline)
         action_account = dict(account or {})
         action_account.setdefault("reuse_session_only", True)
-<<<<<<< HEAD
         action_account.setdefault(
             "validate_reused_session",
             False if self._subsystem == "campaign" else True,
@@ -706,9 +655,6 @@ class SessionManager:
         if self._subsystem == "campaign":
             action_account.setdefault("require_persistent_profile", True)
             action_account.setdefault("disable_safe_browser_recovery", True)
-=======
-        action_account.setdefault("validate_reused_session", True)
->>>>>>> origin/main
         login_coro = login_func(action_account, headless=self._headless, proxy=proxy)
         try:
             if timeout_seconds is None:
@@ -728,7 +674,6 @@ class SessionManager:
             )
             raise TimeoutError("session_open_timeout") from exc
         except Exception as exc:
-<<<<<<< HEAD
             log_payload = {
                 "key": key,
                 "error": str(exc) or type(exc).__name__,
@@ -757,18 +702,6 @@ class SessionManager:
             self._log_event("SESSION_OPEN_FAILED", **log_payload)
             self._publish_open_failure(pool_key, exc)
             log_browser_stage(**browser_stage_payload)
-=======
-            self._log_event("SESSION_OPEN_FAILED", key=key, error=str(exc) or type(exc).__name__, error_type=type(exc).__name__)
-            self._publish_open_failure(pool_key, exc)
-            log_browser_stage(
-                component="playwright_session_manager",
-                stage="session_open_end",
-                status="failed",
-                account=username,
-                error=str(exc) or type(exc).__name__,
-                error_type=type(exc).__name__,
-            )
->>>>>>> origin/main
             raise
 
         entry = _SessionEntry(key=key, svc=svc, ctx=ctx, page=page, proxy_key=proxy_key)
@@ -782,15 +715,9 @@ class SessionManager:
                 self._SHARED_SESSIONS[pool_key] = entry
             lease_id = self._attach_lease(pool_key, entry)
             open_state = self._OPENING.pop(pool_key, None)
-<<<<<<< HEAD
             self._signal_open_state(open_state)
         if stale_entry is not None:
             self._retire_navigation(stale_entry, reason="stale_session_replaced")
-=======
-            if open_state is not None:
-                open_state.event.set()
-        if stale_entry is not None:
->>>>>>> origin/main
             await self._close_session_entry(stale_entry)
         self._log_event("SESSION_OPEN", key=key, persistent=entry.persistent, url=entry.page.url if entry.page else "")
         log_browser_stage(
@@ -818,7 +745,6 @@ class SessionManager:
             reused=False,
             lease_id=lease_id,
             pool_key=pool_key,
-<<<<<<< HEAD
             _acquire_navigation_sync=lambda owner, timeout, _session_key=pool_key: self.acquire_navigation_sync(
                 ManagedSession(
                     key=key,
@@ -874,8 +800,6 @@ class SessionManager:
                 owner,
             ),
             _navigation_metadata=lambda: self._navigation_metadata(entry),
-=======
->>>>>>> origin/main
         )
 
     async def save_storage_state(self, session: ManagedSession, username: str) -> None:
@@ -894,7 +818,6 @@ class SessionManager:
                 entry.ctx,
                 browser_storage_state_path(entry.key, profiles_root=self._profiles_root),
             )
-<<<<<<< HEAD
         except Exception as exc:
             self._log_event(
                 "SESSION_STORAGE_SAVE_FAILED",
@@ -903,10 +826,6 @@ class SessionManager:
                 error_type=type(exc).__name__,
                 subsystem=self._subsystem,
             )
-=======
-        except Exception:
-            pass
->>>>>>> origin/main
 
     async def discard_if_unhealthy(
         self,
@@ -948,10 +867,7 @@ class SessionManager:
         if entry_to_persist is not None:
             await self._save_entry_storage_state(entry_to_persist)
         if entry_to_close is not None:
-<<<<<<< HEAD
             self._retire_navigation(entry_to_close, reason="session_released")
-=======
->>>>>>> origin/main
             await self._close_session_entry(entry_to_close)
 
     async def drop_cached_session(self, key: str) -> None:
@@ -962,15 +878,10 @@ class SessionManager:
             if entry_to_close is not None:
                 for lease_id in list(entry_to_close.leases.keys()):
                     self._held_leases.pop(lease_id, None)
-<<<<<<< HEAD
             open_state = self._OPENING.pop(pool_key, None)
         self._signal_open_state(open_state, RuntimeError("session_dropped"))
         if entry_to_close is not None:
             self._retire_navigation(entry_to_close, reason="session_dropped")
-=======
-                self._OPENING.pop(pool_key, None)
-        if entry_to_close is not None:
->>>>>>> origin/main
             await self._close_session_entry(entry_to_close)
 
     async def close_all_cached_sessions_async(self) -> None:
@@ -988,10 +899,7 @@ class SessionManager:
                     if removed is not None:
                         entries_to_close.append(removed)
         for entry in entries_to_close:
-<<<<<<< HEAD
             self._retire_navigation(entry, reason="session_manager_shutdown")
-=======
->>>>>>> origin/main
             await self._close_session_entry(entry)
 
     def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
@@ -1007,7 +915,6 @@ class SessionManager:
 
     async def _close_session_entry(self, entry: _SessionEntry) -> None:
         await self._save_entry_storage_state(entry)
-<<<<<<< HEAD
         page = entry.page
         if not self.page_closed(page):
             page_close = getattr(page, "close", None)
@@ -1076,18 +983,6 @@ class SessionManager:
                 error_type=type(exc).__name__,
                 subsystem=self._subsystem,
             )
-=======
-        try:
-            if entry.ctx is not None:
-                await entry.ctx.close()
-        except Exception:
-            pass
-        try:
-            if entry.svc is not None:
-                await entry.svc.close()
-        except Exception:
-            pass
->>>>>>> origin/main
 
     def _publish_open_failure(self, pool_key: str, error: BaseException) -> None:
         with self._GLOBAL_LOCK:
@@ -1095,12 +990,7 @@ class SessionManager:
             if state is None:
                 state = _OpenState(proxy_key="")
                 self._OPENING[pool_key] = state
-<<<<<<< HEAD
         self._signal_open_state(state, error)
-=======
-            state.error = error
-            state.event.set()
->>>>>>> origin/main
 
     def _resolve_open_timeout(self, *, deadline: float | None) -> float | None:
         if deadline is None:
@@ -1139,10 +1029,7 @@ class SyncSessionRuntime:
         self._open_timeout_seconds = max(5.0, float(open_timeout_seconds or 5.0))
         self._session_lock = threading.RLock()
         self._session: ManagedSession | None = None
-<<<<<<< HEAD
         self._navigation_local = threading.local()
-=======
->>>>>>> origin/main
 
     def run_async(self, coro: Any, *, timeout: float | None = None) -> Any:
         return run_coroutine_sync(coro, timeout=self._resolve_timeout(timeout))
@@ -1160,7 +1047,6 @@ class SyncSessionRuntime:
                 pass
             return page
 
-<<<<<<< HEAD
     def acquire_navigation(self, owner: str, *, timeout: float | None = None) -> dict[str, Any]:
         with self._session_lock:
             session = self._ensure_session_locked(timeout=timeout)
@@ -1196,8 +1082,6 @@ class SyncSessionRuntime:
             stack.pop()
             self.release_navigation(clean_owner)
 
-=======
->>>>>>> origin/main
     def close_page(self, page: Any, *, timeout: float | None = None) -> None:
         with self._session_lock:
             session = self._session

@@ -4,10 +4,7 @@ import threading
 
 import pytest
 
-<<<<<<< HEAD
 import application.services.campaign_service as campaign_service_module
-=======
->>>>>>> origin/main
 from application.services.base import ServiceContext, ServiceError
 from application.services.campaign_service import CampaignService
 from runtime.runtime import reset_stop_event
@@ -58,7 +55,6 @@ def _prime_launch_context(service: CampaignService) -> None:
     service._lead_store.save("lista-a", ["uno", "dos", "dos", "tres"])
 
 
-<<<<<<< HEAD
 def _stub_plan(
     monkeypatch,
     *,
@@ -108,12 +104,6 @@ def test_launch_campaign_returns_start_snapshot_and_caps_effective_workers(tmp_p
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
     _stub_plan(monkeypatch, workers_capacity=3)
-=======
-def test_launch_campaign_returns_start_snapshot_and_caps_effective_workers(tmp_path) -> None:
-    service = CampaignService(ServiceContext(root_dir=tmp_path))
-    _prime_launch_context(service)
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 3}  # type: ignore[method-assign]
->>>>>>> origin/main
     task_runner = _IdleTaskRunner()
 
     snapshot = service.launch_campaign(_launch_payload(), task_runner=task_runner)
@@ -140,15 +130,10 @@ def test_launch_campaign_blocks_duplicate_start_from_task_runner(tmp_path) -> No
         service.launch_campaign(_launch_payload(), task_runner=_BusyTaskRunner())
 
 
-<<<<<<< HEAD
 def test_launch_campaign_reconciles_persisted_active_snapshot_when_task_runner_is_idle(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
     _stub_plan(monkeypatch, workers_capacity=3)
-=======
-def test_launch_campaign_blocks_duplicate_start_from_persisted_active_snapshot(tmp_path) -> None:
-    service = CampaignService(ServiceContext(root_dir=tmp_path))
->>>>>>> origin/main
     service._update_current_run(
         {
             "run_id": "run-active",
@@ -163,7 +148,6 @@ def test_launch_campaign_blocks_duplicate_start_from_persisted_active_snapshot(t
         replace=True,
     )
 
-<<<<<<< HEAD
     snapshot = service.launch_campaign(_launch_payload(), task_runner=_IdleTaskRunner())
 
     assert snapshot["status"] == "Starting"
@@ -199,16 +183,6 @@ def test_launch_campaign_restores_previous_snapshot_when_spawn_fails(tmp_path, m
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
     _stub_plan(monkeypatch, workers_capacity=3)
-=======
-    with pytest.raises(ServiceError, match="Ya hay una campana en ejecucion."):
-        service.launch_campaign(_launch_payload(), task_runner=_IdleTaskRunner())
-
-
-def test_launch_campaign_restores_previous_snapshot_when_spawn_fails(tmp_path) -> None:
-    service = CampaignService(ServiceContext(root_dir=tmp_path))
-    _prime_launch_context(service)
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 3}  # type: ignore[method-assign]
->>>>>>> origin/main
     previous_snapshot = {
         "run_id": "run-prev",
         "alias": "ventas",
@@ -232,17 +206,10 @@ def test_launch_campaign_restores_previous_snapshot_when_spawn_fails(tmp_path) -
     assert current["task_active"] is False
 
 
-<<<<<<< HEAD
 def test_launch_campaign_recomputes_total_leads_from_storage_and_not_from_gui(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
     _stub_plan(monkeypatch, workers_capacity=4)
-=======
-def test_launch_campaign_recomputes_total_leads_from_storage_and_not_from_gui(tmp_path) -> None:
-    service = CampaignService(ServiceContext(root_dir=tmp_path))
-    _prime_launch_context(service)
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 4}  # type: ignore[method-assign]
->>>>>>> origin/main
 
     snapshot = service.launch_campaign(
         {
@@ -256,7 +223,6 @@ def test_launch_campaign_recomputes_total_leads_from_storage_and_not_from_gui(tm
     assert snapshot["remaining"] == 3
 
 
-<<<<<<< HEAD
 def test_launch_campaign_uses_same_day_remaining_quota_in_start_snapshot(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
@@ -322,12 +288,6 @@ def test_launch_campaign_blocks_when_runtime_disk_budget_is_low(tmp_path, monkey
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
     _stub_plan(monkeypatch, workers_capacity=3)
-=======
-def test_launch_campaign_blocks_when_runtime_disk_budget_is_low(tmp_path, monkeypatch) -> None:
-    service = CampaignService(ServiceContext(root_dir=tmp_path))
-    _prime_launch_context(service)
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 3}  # type: ignore[method-assign]
->>>>>>> origin/main
     monkeypatch.setattr(
         "application.services.campaign_service.snapshot_disk_usage",
         lambda _root: {"free_bytes": 1},
@@ -340,11 +300,7 @@ def test_launch_campaign_blocks_when_runtime_disk_budget_is_low(tmp_path, monkey
 def test_launch_campaign_blocks_when_sqlite_is_unavailable(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
-<<<<<<< HEAD
     _stub_plan(monkeypatch, workers_capacity=3)
-=======
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 3}  # type: ignore[method-assign]
->>>>>>> origin/main
     service.current_run_snapshot = lambda *, run_id="": {}  # type: ignore[method-assign]
 
     def _broken_connect(*_args, **_kwargs):
@@ -356,17 +312,10 @@ def test_launch_campaign_blocks_when_sqlite_is_unavailable(tmp_path, monkeypatch
         service.launch_campaign(_launch_payload(), task_runner=_IdleTaskRunner())
 
 
-<<<<<<< HEAD
 def test_launch_campaign_fails_cleanly_when_start_snapshot_cannot_be_persisted(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
     _stub_plan(monkeypatch, workers_capacity=3)
-=======
-def test_launch_campaign_fails_cleanly_when_start_snapshot_cannot_be_persisted(tmp_path) -> None:
-    service = CampaignService(ServiceContext(root_dir=tmp_path))
-    _prime_launch_context(service)
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 3}  # type: ignore[method-assign]
->>>>>>> origin/main
 
     def _broken_sync(_payload):  # noqa: ANN001
         raise RuntimeError("sqlite write failed")
@@ -406,11 +355,7 @@ def test_campaign_service_recovers_running_snapshot_as_interrupted_on_restart(tm
 def test_campaign_service_persists_runtime_events_from_runner_progress(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
-<<<<<<< HEAD
     _stub_plan(monkeypatch, workers_capacity=1)
-=======
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 1}  # type: ignore[method-assign]
->>>>>>> origin/main
 
     def _fake_run_campaign(config, *, progress_callback=None):  # noqa: ANN001
         if callable(progress_callback):
@@ -468,11 +413,7 @@ def test_campaign_service_persists_runtime_events_from_runner_progress(tmp_path,
 def test_campaign_service_persists_sent_log_failure_event_from_runner_progress(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
-<<<<<<< HEAD
     _stub_plan(monkeypatch, workers_capacity=1)
-=======
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 1}  # type: ignore[method-assign]
->>>>>>> origin/main
 
     def _fake_run_campaign(config, *, progress_callback=None):  # noqa: ANN001
         if callable(progress_callback):
@@ -519,11 +460,7 @@ def test_campaign_service_persists_sent_log_failure_event_from_runner_progress(t
 def test_campaign_service_marks_run_stopped_when_stop_requested_during_send(tmp_path, monkeypatch) -> None:
     service = CampaignService(ServiceContext(root_dir=tmp_path))
     _prime_launch_context(service)
-<<<<<<< HEAD
     _stub_plan(monkeypatch, workers_capacity=1)
-=======
-    service.get_capacity = lambda alias: {"alias": alias, "workers_capacity": 1}  # type: ignore[method-assign]
->>>>>>> origin/main
     progress_started = threading.Event()
     allow_finish = threading.Event()
     result_holder: dict[str, object] = {}

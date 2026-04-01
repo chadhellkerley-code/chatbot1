@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from typing import Any, Callable
 
@@ -9,10 +10,8 @@ from src.runtime.ownership_router import OwnershipRouter
 
 class InboxController(QObject):
     snapshot_changed = Signal(object)
-<<<<<<< HEAD
     runtime_status_changed = Signal(object)
-=======
->>>>>>> origin/main
+    thread_detail_loaded = Signal(str)
 
     def __init__(
         self,
@@ -20,10 +19,7 @@ class InboxController(QObject):
         *,
         on_thread_selected: Callable[[str], None] | None = None,
         snapshot_poll_ms: int = 0,
-<<<<<<< HEAD
-        runtime_poll_ms: int = 1000,
-=======
->>>>>>> origin/main
+        runtime_poll_ms: int = 750,  # PERF: no runtime signal available, using reduced polling
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -38,24 +34,33 @@ class InboxController(QObject):
         self._loading_thread_key = ""
         self._requested_thread_key = ""
         self._auto_selected_thread_key = ""
-<<<<<<< HEAD
+        self._cached_packs: list[Any] | None = None
+        self._packs_dirty = True
+        self._alias_cache: list[Any] = []  # PERF: cache runtime aliases between snapshot builds
+        self._alias_cache_dirty = True  # PERF: refresh alias cache only after runtime mutations
+        self._thread_detail_fetching: set[str] = set()  # PERF: avoid duplicate background detail fetches
         self._projection_updated_at: float | None = None
         self._projection_reason = ""
         self._ownership_router = OwnershipRouter()
-        self._runtime_poll_ms = max(0, int(runtime_poll_ms or 0))
+        self._runtime_poll_ms = max(0, int(runtime_poll_ms or 0))  # PERF: no runtime signal available, using reduced polling
+        self._snapshot_debounce = QTimer(self)
+        self._snapshot_debounce.setSingleShot(True)
+        self._snapshot_debounce.setInterval(25)
+        self._snapshot_debounce.timeout.connect(self._emit_snapshot)
         self._runtime_timer = QTimer(self)
         self._runtime_timer.setInterval(max(250, self._runtime_poll_ms) if self._runtime_poll_ms else 0)
         self._runtime_timer.timeout.connect(self.refresh_runtime_status)
         self._last_runtime_token = ""
         self._last_runtime_running: bool | None = None
-=======
-        self._sync_label = "Cache local"
-        self._ownership_router = OwnershipRouter()
->>>>>>> origin/main
         runtime_aliases = list(getattr(self._service, "list_runtime_aliases", lambda: [])() or [])
         self._runtime_alias = str(runtime_aliases[0] or "").strip() if runtime_aliases else ""
 
         events = getattr(self._service, "events", None)
+        runtime_signal = getattr(events, "runtime_updated", None)
+        if runtime_signal is None:
+            runtime_signal = getattr(events, "status_changed", None)
+        if runtime_signal is None:
+            runtime_signal = getattr(events, "runtime_status_changed", None)
         cache_signal = getattr(events, "cache_updated", None)
         if cache_signal is not None:
             cache_signal.connect(self._on_cache_updated)
@@ -65,9 +70,15 @@ class InboxController(QObject):
         thread_signal = getattr(events, "thread_updated", None)
         if thread_signal is not None:
             thread_signal.connect(self._on_state_updated)
+        if runtime_signal is not None and hasattr(runtime_signal, "connect"):
+            runtime_signal.connect(lambda *_args: self._schedule_refresh())  # PERF: react to runtime state changes immediately
+            self._runtime_poll_ms = 2000  # PERF: runtime signal available, using slower fallback polling
+            self._runtime_timer.setInterval(max(250, self._runtime_poll_ms) if self._runtime_poll_ms else 0)  # PERF: apply the slower fallback interval when runtime signals exist
+        self.thread_detail_loaded.connect(self._finish_thread_detail_fetch)
 
     def activate(self, *, initial_thread_key: str = "") -> None:
         self._active = True
+        self._packs_dirty = True
         clean_key = str(initial_thread_key or "").strip()
         if clean_key:
             self._auto_selected_thread_key = ""
@@ -79,11 +90,8 @@ class InboxController(QObject):
         set_ui_active = getattr(self._service, "set_ui_active", None)
         if callable(set_ui_active):
             set_ui_active(True)
-<<<<<<< HEAD
         self._start_runtime_refresh()
         self.refresh_runtime_status(force=True)
-=======
->>>>>>> origin/main
         self._schedule_refresh(force=True)
         if clean_key:
             self._requested_thread_key = clean_key
@@ -93,10 +101,9 @@ class InboxController(QObject):
         self._active = False
         self._refresh_scheduled = False
         self._requested_thread_key = ""
-<<<<<<< HEAD
+        if self._snapshot_debounce.isActive():
+            self._snapshot_debounce.stop()
         self._stop_runtime_refresh()
-=======
->>>>>>> origin/main
         set_ui_active = getattr(self._service, "set_ui_active", None)
         if callable(set_ui_active):
             set_ui_active(False)
@@ -109,10 +116,6 @@ class InboxController(QObject):
         self._schedule_refresh(force=True)
 
     def force_refresh(self) -> None:
-<<<<<<< HEAD
-=======
-        self._sync_label = "Sincronizando..."
->>>>>>> origin/main
         self._service.refresh()
         self._schedule_refresh(force=True)
 
@@ -211,10 +214,7 @@ class InboxController(QObject):
 
     def set_runtime_alias(self, alias_id: str) -> None:
         self._runtime_alias = str(alias_id or "").strip()
-<<<<<<< HEAD
         self.refresh_runtime_status(force=True)
-=======
->>>>>>> origin/main
         self._schedule_refresh(force=True)
 
     def start_runtime(self, config: dict[str, Any]) -> None:
@@ -225,10 +225,8 @@ class InboxController(QObject):
         starter = getattr(self._service, "start_alias_runtime", None)
         if callable(starter):
             starter(alias, config)
-<<<<<<< HEAD
+            self._invalidate_alias_cache()
             self.refresh_runtime_status(force=True)
-=======
->>>>>>> origin/main
             self._schedule_refresh(force=True)
 
     def stop_runtime(self) -> None:
@@ -238,7 +236,7 @@ class InboxController(QObject):
         stopper = getattr(self._service, "stop_alias_runtime", None)
         if callable(stopper):
             stopper(alias)
-<<<<<<< HEAD
+            self._invalidate_alias_cache()
             self.refresh_runtime_status(force=True)
             self._schedule_refresh(force=True)
 
@@ -270,13 +268,10 @@ class InboxController(QObject):
             self._last_runtime_token = token
             self.runtime_status_changed.emit(ui_status)
         if running_changed:
-=======
->>>>>>> origin/main
             self._schedule_refresh(force=True)
 
     def _on_cache_updated(self, payload: Any) -> None:
         updated_at = None
-<<<<<<< HEAD
         reason = ""
         if isinstance(payload, dict):
             updated_at = payload.get("updated_at")
@@ -286,16 +281,6 @@ class InboxController(QObject):
             self._projection_updated_at = stamp
         if reason:
             self._projection_reason = reason
-=======
-        if isinstance(payload, dict):
-            updated_at = payload.get("updated_at")
-        try:
-            stamp = float(updated_at) if updated_at is not None else None
-        except Exception:
-            stamp = None
-        if stamp is not None:
-            self._sync_label = f"Actualizado {datetime.fromtimestamp(stamp).strftime('%H:%M:%S')}"
->>>>>>> origin/main
         self._schedule_refresh()
 
     def _on_state_updated(self, _payload: Any) -> None:
@@ -304,10 +289,8 @@ class InboxController(QObject):
     def _schedule_refresh(self, *, force: bool = False) -> None:
         if not self._active and not force:
             return
-        if self._refresh_scheduled:
-            return
         self._refresh_scheduled = True
-        QTimer.singleShot(0, self._emit_snapshot)
+        self._snapshot_debounce.start()
 
     def _request_thread_open(self, thread_key: str) -> None:
         opener = getattr(self._service, "request_open_thread", None)
@@ -316,10 +299,48 @@ class InboxController(QObject):
             return
         self._service.open_thread(thread_key)
 
+    def _invalidate_alias_cache(self) -> None:
+        self._alias_cache_dirty = True  # PERF: defer alias list refresh until the next snapshot build
+
+    def _fetch_thread_detail_async(self, thread_key: str) -> None:
+        clean_key = str(thread_key or "").strip()
+        if not clean_key or clean_key in self._thread_detail_fetching:
+            return
+        fetcher = getattr(self._service, "get_thread", None)
+        if not callable(fetcher):
+            return
+        self._thread_detail_fetching.add(clean_key)
+
+        def _worker() -> None:
+            try:
+                fetcher(clean_key)
+            except Exception:
+                pass
+            self.thread_detail_loaded.emit(clean_key)  # PERF: marshal async detail completion back to the UI thread
+
+        threading.Thread(
+            target=_worker,
+            name=f"inbox-thread-detail-{clean_key}",
+            daemon=True,
+        ).start()  # PERF: move cache-miss detail fetch off the UI thread
+
+    def _finish_thread_detail_fetch(self, thread_key: str) -> None:
+        self._thread_detail_fetching.discard(str(thread_key or "").strip())
+        self._schedule_refresh()
+
     def _emit_snapshot(self) -> None:
         self._refresh_scheduled = False
         if not self._active:
             return
+
+        runtime_status = {}
+        runtime_getter = getattr(self._service, "alias_runtime_status", None)
+        if callable(runtime_getter) and self._runtime_alias:
+            try:
+                runtime_status = dict(runtime_getter(self._runtime_alias) or {})
+            except Exception:
+                runtime_status = {}
+        runtime_status = _runtime_status_ui(runtime_status)
 
         list_threads_cached = getattr(self._service, "list_threads_cached", None)
         projection_ready = bool(getattr(self._service, "projection_ready", lambda: True)())
@@ -327,15 +348,38 @@ class InboxController(QObject):
             all_rows = list(list_threads_cached("all") or [])
         else:
             all_rows = list(self._service.list_threads("all") or [])
-        rows = [row for row in all_rows if _matches_filter(row, self._current_filter)]
-        unread_count = sum(1 for row in all_rows if _matches_filter(row, "unread"))
-        pending_count = sum(1 for row in all_rows if _matches_filter(row, "pending"))
-        qualified_count = sum(1 for row in all_rows if _matches_filter(row, "qualified"))
-        disqualified_count = sum(1 for row in all_rows if _matches_filter(row, "disqualified"))
+        rows: list[dict[str, Any]] = []
+        total_count = 0
+        unread_count = 0
+        pending_count = 0
+        qualified_count = 0
+        disqualified_count = 0
+        for row in all_rows:
+            flags = {
+                "matched": _matches_filter(row, self._current_filter),
+                "is_unread": _matches_filter(row, "unread"),
+                "is_pending": _matches_filter(row, "pending"),
+                "is_qualified": _matches_filter(row, "qualified"),
+                "is_disqualified": _matches_filter(row, "disqualified"),
+            }  # PERF: evaluate all filter flags once per row during aggregation
+            total_count += 1
+            if flags["matched"]:
+                rows.append(row)
+            if flags["is_unread"]:
+                unread_count += 1
+            if flags["is_pending"]:
+                pending_count += 1
+            if flags["is_qualified"]:
+                qualified_count += 1
+            if flags["is_disqualified"]:
+                disqualified_count += 1
+        row_by_key = {
+            str(row.get("thread_key") or "").strip(): row
+            for row in all_rows
+            if str(row.get("thread_key") or "").strip()
+        }  # PERF: cache rows by key for O(1) snapshot lookups
 
-        if projection_ready and self._current_thread_key and not any(
-            str(row.get("thread_key") or "").strip() == self._current_thread_key for row in all_rows
-        ):
+        if projection_ready and self._current_thread_key and self._current_thread_key not in row_by_key:
             self._current_thread_key = ""
             self._loading_thread_key = ""
             self._requested_thread_key = ""
@@ -349,12 +393,17 @@ class InboxController(QObject):
                 self._current_thread_key = auto_key
                 self._persist_selected_thread(auto_key)
 
-        selected_row = _find_thread_row(all_rows, self._current_thread_key)
+        selected_row = dict(row_by_key.get(self._current_thread_key) or {}) if self._current_thread_key in row_by_key else None
         getter = getattr(self._service, "get_thread_cached", None)
         if callable(getter):
             service_thread = getter(self._current_thread_key) if self._current_thread_key else None
         else:
-            service_thread = self._service.get_thread(self._current_thread_key) if self._current_thread_key else None
+            service_thread = None
+        if self._current_thread_key and not isinstance(service_thread, dict):
+            QTimer.singleShot(
+                0,
+                lambda thread_key=self._current_thread_key: self._fetch_thread_detail_async(thread_key),
+            )  # PERF: defer cache-miss detail loading so snapshot emission stays non-blocking
         messages = list((service_thread or {}).get("messages") or []) if isinstance(service_thread, dict) else []
         thread = _merge_thread_snapshot(selected_row, service_thread, messages=messages)
         thread_status = str((thread or {}).get("thread_status") or "").strip().lower() if isinstance(thread, dict) else ""
@@ -371,22 +420,15 @@ class InboxController(QObject):
             self._loading_thread_key = ""
             self._requested_thread_key = ""
 
-        packs = list(self._service.list_packs() or [])
-        runtime_status = {}
-        runtime_getter = getattr(self._service, "alias_runtime_status", None)
-        if callable(runtime_getter) and self._runtime_alias:
-<<<<<<< HEAD
-            try:
-                runtime_status = dict(runtime_getter(self._runtime_alias) or {})
-            except Exception:
-                runtime_status = {}
-        runtime_status = _runtime_status_ui(runtime_status)
-=======
-            runtime_status = dict(runtime_getter(self._runtime_alias) or {})
->>>>>>> origin/main
-        runtime_aliases = list(getattr(self._service, "list_runtime_aliases", lambda: [])() or [])
+        if self._packs_dirty or self._cached_packs is None:
+            self._cached_packs = list(self._service.list_packs() or [])
+            self._packs_dirty = False
+        packs = list(self._cached_packs or [])
+        if self._alias_cache_dirty:
+            self._alias_cache = list(getattr(self._service, "list_runtime_aliases", lambda: [])() or [])
+            self._alias_cache_dirty = False  # PERF: refresh runtime aliases only when marked dirty
+        runtime_aliases = list(self._alias_cache or [])
         thread_runtime_status = _thread_runtime_status(
-            self._service,
             thread,
             selected_alias=self._runtime_alias,
             selected_status=runtime_status,
@@ -396,7 +438,6 @@ class InboxController(QObject):
             runtime_status=thread_runtime_status,
             router=self._ownership_router,
         )
-<<<<<<< HEAD
         thread_alias_id = _thread_alias_id(thread)
         selected_runtime_alias = str(self._runtime_alias or "").strip()
         thread_permissions.update(
@@ -422,14 +463,12 @@ class InboxController(QObject):
             runtime_status=thread_runtime_status,
             selected_runtime_alias=selected_runtime_alias,
         )
-=======
->>>>>>> origin/main
         payload = {
             "rows": rows,
-            "total_count": len(all_rows),
+            "total_count": total_count,
             "current_thread_key": self._current_thread_key,
             "metrics": {
-                "threads": len(all_rows),
+                "threads": total_count,
                 "unread": unread_count,
                 "pending": pending_count,
             },
@@ -437,13 +476,9 @@ class InboxController(QObject):
                 "qualified": qualified_count,
                 "disqualified": disqualified_count,
             },
-<<<<<<< HEAD
             "sync_label": projection_status.get("label") or "Proyeccion local",
             "projection_status": projection_status,
             "remote_sync_status": remote_sync_status,
-=======
-            "sync_label": self._sync_label,
->>>>>>> origin/main
             "thread": thread,
             "messages": messages,
             "seen_text": str((thread or {}).get("last_seen_text") or "").strip() if isinstance(thread, dict) else "",
@@ -458,7 +493,6 @@ class InboxController(QObject):
                 and not messages
             ),
             "force_scroll_to_bottom": bool(self._pending_force_scroll),
-<<<<<<< HEAD
             "actions_status": _actions_status(thread, thread_permissions, truth=thread_truth),
             "runtime_aliases": runtime_aliases,
             "runtime_status": runtime_status,
@@ -466,13 +500,6 @@ class InboxController(QObject):
             "thread_runtime_status": thread_runtime_status,
             "thread_permissions": thread_permissions,
             "thread_truth": thread_truth,
-=======
-            "actions_status": _actions_status(thread, thread_permissions),
-            "runtime_aliases": runtime_aliases,
-            "runtime_status": runtime_status,
-            "thread_runtime_status": thread_runtime_status,
-            "thread_permissions": thread_permissions,
->>>>>>> origin/main
         }
         self.snapshot_changed.emit(payload)
         if messages:
@@ -501,7 +528,6 @@ def _matches_filter(row: dict[str, Any], mode: str) -> bool:
     return True
 
 
-<<<<<<< HEAD
 def _runtime_status_ui(status: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(status, dict) or not status:
         return {}
@@ -588,12 +614,6 @@ def _actions_status(
     truth_payload = dict(truth or {})
     truth_label = str(truth_payload.get("label") or "").strip()
     alias_note = str(truth_payload.get("alias_note") or "").strip()
-=======
-def _actions_status(thread: dict[str, Any] | None, permissions: dict[str, Any] | None = None) -> str:
-    if not isinstance(thread, dict):
-        return "Selecciona una conversacion para habilitar IA y packs."
-    permissions = dict(permissions or {})
->>>>>>> origin/main
     health = str(thread.get("account_health") or "healthy").strip().lower()
     if health != "healthy":
         label = {
@@ -605,7 +625,6 @@ def _actions_status(thread: dict[str, Any] | None, permissions: dict[str, Any] |
             "unknown": "Estado desconocido",
         }.get(health, "Estado desconocido")
         detail = str(thread.get("account_health_reason") or "").strip()
-<<<<<<< HEAD
         prefix = truth_label or "Cuenta con error"
         message = f"{prefix}\nCuenta con error: {label}"
         if detail:
@@ -642,19 +661,6 @@ def _actions_status(thread: dict[str, Any] | None, permissions: dict[str, Any] |
             )
             if part
         )
-=======
-        return f"Cuenta con error: {label}" if not detail else f"Cuenta con error: {label}\n{detail}"
-    suggestion_status = str(thread.get("suggestion_status") or "").strip().lower()
-    if suggestion_status == "queued":
-        return "Generando sugerencia IA..."
-    if suggestion_status == "failed":
-        return str(thread.get("suggestion_error") or "No se pudo generar sugerencia.")
-    if not bool(permissions.get("can_request_ai", True)) or not bool(permissions.get("can_send_pack", True)):
-        return _manual_action_status(thread, permissions)
-    return (
-        f"Cuenta emisora: @{str(thread.get('account_id') or '-').strip()}\n"
-        f"Cliente: @{str(thread.get('recipient_username') or '-').strip() or '-'}"
->>>>>>> origin/main
     )
 
 
@@ -665,7 +671,6 @@ def _thread_alias_id(thread: dict[str, Any] | None) -> str:
 
 
 def _thread_runtime_status(
-    service: Any,
     thread: dict[str, Any] | None,
     *,
     selected_alias: str,
@@ -676,10 +681,9 @@ def _thread_runtime_status(
         return {}
     if alias_id == str(selected_alias or "").strip():
         return dict(selected_status or {})
-    runtime_getter = getattr(service, "alias_runtime_status", None)
-    if not callable(runtime_getter):
-        return {}
-    return dict(runtime_getter(alias_id) or {})
+    # TODO: Preserve the single per-snapshot runtime status fetch; supporting
+    # cross-alias status hydration here would require broader caching/service changes.
+    return {}
 
 
 def _thread_permissions(
@@ -706,12 +710,9 @@ def _thread_permissions(
             "can_clear_classification": False,
             "composer_mode": "disabled",
             "manual_send_reason": "no_thread",
-<<<<<<< HEAD
             "thread_alias_id": "",
             "selected_runtime_alias": "",
             "selected_runtime_matches_thread": False,
-=======
->>>>>>> origin/main
         }
     row = dict(thread)
     health = str(row.get("account_health") or "healthy").strip().lower() or "healthy"
@@ -773,7 +774,6 @@ def _manual_send_block_reason(
 
 def _manual_action_status(thread: dict[str, Any], permissions: dict[str, Any]) -> str:
     reason = str(permissions.get("manual_send_reason") or "").strip().lower()
-<<<<<<< HEAD
     thread_alias_id = str(permissions.get("thread_alias_id") or "").strip()
     selected_runtime_alias = str(permissions.get("selected_runtime_alias") or "").strip()
     alias_suffix = ""
@@ -797,14 +797,6 @@ def _manual_action_status(thread: dict[str, Any], permissions: dict[str, Any]) -
             " Frena el runtime o retoma manual antes de actuar."
             f"{alias_suffix}"
         )
-=======
-    if reason == "runtime_auto_owner":
-        return "Runtime activo para este alias. Toma el thread manual o frena el runtime para usar IA y packs."
-    if reason == "disqualified":
-        return "Thread descalificado. El backend no acepta acciones manuales sobre este contacto."
-    if reason == "runtime_closed":
-        return "El thread esta cerrado mientras el runtime sigue activo. Frena el runtime o retoma manual antes de actuar."
->>>>>>> origin/main
     if reason == "runtime_manual_blocked":
         return "El thread es manual pero no cumple las reglas actuales para responder con el runtime activo."
     return (
@@ -860,7 +852,6 @@ def _merge_thread_snapshot(
         )
     payload["messages"] = [dict(row) for row in messages or [] if isinstance(row, dict)]
     return payload if payload else None
-<<<<<<< HEAD
 
 
 def _coerce_timestamp(value: Any) -> float | None:
@@ -1085,5 +1076,3 @@ def _thread_truth_ui(
         "detail": detail,
         "alias_note": alias_note,
     }
-=======
->>>>>>> origin/main

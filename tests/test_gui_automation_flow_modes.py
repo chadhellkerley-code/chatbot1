@@ -47,11 +47,7 @@ class _FakeAutomationService:
         self.saved_payloads: list[dict] = []
 
     def list_packs(self) -> list[dict[str, str]]:
-<<<<<<< HEAD
         return [{"id": "pack_bienvenida", "type": "PACK_BIENVENIDA", "name": "Pack bienvenida"}]
-=======
-        return [{"id": "pack_bienvenida", "name": "Pack bienvenida"}]
->>>>>>> origin/main
 
     def get_flow_config(self, alias: str) -> dict:
         del alias
@@ -63,24 +59,15 @@ class _FakeAutomationService:
             "stages": [
                 {
                     "id": "etapa_1",
-<<<<<<< HEAD
                     "action_type": "PACK_BIENVENIDA",
-=======
-                    "action_type": "mensaje",
->>>>>>> origin/main
                     "transitions": {
                         "positive": "etapa_1",
                         "negative": "etapa_1",
                         "doubt": "etapa_1",
                         "neutral": "etapa_1",
                     },
-<<<<<<< HEAD
                     "followups": [{"delay_hours": 4.0, "action_type": "followup_text"}],
                     "post_objection": {"enabled": False, "action_type": "objection_engine", "max_steps": 2},
-=======
-                    "followups": [{"delay_hours": 4.0, "action_type": "followup"}],
-                    "post_objection": {"enabled": False, "action_type": "mensaje", "max_steps": 2},
->>>>>>> origin/main
                 }
             ],
             "layout": {
@@ -98,7 +85,6 @@ def test_flow_page_separates_modes_and_persists_structured_stage_updates(monkeyp
     from gui import pages_automation_flow as flow_module
 
     _app()
-<<<<<<< HEAD
     monkeypatch.setattr(
         flow_module.responder_module,
         "_list_packs",
@@ -112,8 +98,6 @@ def test_flow_page_separates_modes_and_persists_structured_stage_updates(monkeyp
             }
         ],
     )
-=======
->>>>>>> origin/main
     monkeypatch.setattr(flow_module.StageEditorDialog, "exec", lambda self: QDialog.Accepted)
     monkeypatch.setattr(
         flow_module.StageEditorDialog,
@@ -127,17 +111,10 @@ def test_flow_page_separates_modes_and_persists_structured_stage_updates(monkeyp
                 "neutral": "etapa_cierre",
                 "doubt": "etapa_cierre",
             },
-<<<<<<< HEAD
             "followups": [{"delay_hours": 6.0, "action_type": "followup_text"}],
             "post_objection": {
                 "enabled": True,
                 "action_type": "objection_engine",
-=======
-            "followups": [{"delay_hours": 6.0, "action_type": "followup"}],
-            "post_objection": {
-                "enabled": True,
-                "action_type": "mensaje",
->>>>>>> origin/main
                 "max_steps": 2,
                 "resolved_transition": "positive",
                 "unresolved_transition": "negative",
@@ -198,21 +175,12 @@ def test_flow_page_separates_modes_and_persists_structured_stage_updates(monkeyp
                     "positive": "etapa_1",
                     "negative": "etapa_cierre",
                     "neutral": "etapa_cierre",
-<<<<<<< HEAD
                 "doubt": "etapa_cierre",
                 },
                 "followups": [{"delay_hours": 8.0, "action_type": "followup_text"}],
                 "post_objection": {
                     "enabled": True,
                     "action_type": "objection_engine",
-=======
-                    "doubt": "etapa_cierre",
-                },
-                "followups": [{"delay_hours": 8.0, "action_type": "followup"}],
-                "post_objection": {
-                    "enabled": True,
-                    "action_type": "mensaje",
->>>>>>> origin/main
                     "max_steps": 2,
                     "resolved_transition": "positive",
                     "unresolved_transition": "negative",
@@ -228,11 +196,7 @@ def test_flow_page_separates_modes_and_persists_structured_stage_updates(monkeyp
         assert ctx.services.automation.saved_payloads
         saved = ctx.services.automation.saved_payloads[-1]["flow"]
         assert any(str(stage.get("id")) == "etapa_cierre" for stage in saved["stages"])
-<<<<<<< HEAD
         assert any(str(stage.get("action_type")) == "PACK_BIENVENIDA" for stage in saved["stages"])
-=======
-        assert any(str(stage.get("action_type")) == "pack_bienvenida" for stage in saved["stages"])
->>>>>>> origin/main
         assert saved["layout"]["nodes"]["etapa_cierre"] == {"x": 320.0, "y": 440.0}
         assert saved["layout"]["viewport"]["zoom"] == 1.15
     finally:

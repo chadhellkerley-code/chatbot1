@@ -87,18 +87,11 @@ class InboxService:
             local_id = str(self._engine.send_message(clean_key, text) or "").strip()
             self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
             return local_id
-<<<<<<< HEAD
         thread, takeover_applied = self._prepare_thread_for_manual_send(clean_key, thread)
         if not isinstance(thread, dict):
             if takeover_applied:
                 self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
             return ""
-=======
-        if not self._automation.manual_send_allowed(thread):
-            return ""
-        if str(thread.get("owner") or "").strip().lower() != "manual":
-            self._automation.manual_takeover(clean_key, operator_id="inbox_ui")
->>>>>>> origin/main
         local_id = str(self._engine._sender.queue_message(clean_key, text, job_type="manual_reply") or "").strip()
         self._runtime.request_rebuild(reason="send_message", thread_keys=[clean_key])
         return local_id
@@ -117,18 +110,11 @@ class InboxService:
             if queued:
                 self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
             return queued
-<<<<<<< HEAD
         thread, takeover_applied = self._prepare_thread_for_manual_send(clean_key, thread)
         if not isinstance(thread, dict):
             if takeover_applied:
                 self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
             return False
-=======
-        if not self._automation.manual_send_allowed(thread):
-            return False
-        if str(thread.get("owner") or "").strip().lower() != "manual":
-            self._automation.manual_takeover(clean_key, operator_id="inbox_ui")
->>>>>>> origin/main
         queued = bool(self._engine._sender.queue_pack(clean_key, pack_id, job_type="manual_pack"))
         if queued:
             self._runtime.request_rebuild(reason="send_pack", thread_keys=[clean_key])
@@ -265,7 +251,6 @@ class InboxService:
         return self._automation.list_aliases() if self._automation is not None else []
 
     def alias_runtime_status(self, alias_id: str) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._automation is None:
             return {}
         scheduler_state = self._automation.status(alias_id)
@@ -307,9 +292,6 @@ class InboxService:
         payload.setdefault("last_send_exception_type", str(payload.get("last_send_exception_type") or "").strip())
         payload.setdefault("last_send_exception_message", str(payload.get("last_send_exception_message") or "").strip())
         return payload
-=======
-        return self._automation.status(alias_id) if self._automation is not None else {}
->>>>>>> origin/main
 
     def start_alias_runtime(self, alias_id: str, config: dict[str, Any]) -> dict[str, Any]:
         self.ensure_started()
@@ -317,8 +299,6 @@ class InboxService:
 
     def stop_alias_runtime(self, alias_id: str) -> dict[str, Any]:
         return self._automation.stop_alias(alias_id) if self._automation is not None else {}
-<<<<<<< HEAD
-
     def _prepare_thread_for_manual_send(
         self,
         thread_key: str,
@@ -341,5 +321,3 @@ class InboxService:
         if not self._automation.manual_send_allowed(current):
             return None, takeover_applied
         return current, takeover_applied
-=======
->>>>>>> origin/main

@@ -103,20 +103,6 @@ class FakeResponse:
         return self._payload
 
 
-<<<<<<< HEAD
-=======
-def _set_embedded_supabase(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    url: str = "https://embedded.example.supabase.co",
-    key: str = "embedded-key",
-) -> tuple[str, str]:
-    monkeypatch.setattr("src.licensing._embedded_supabase.SUPABASE_URL", url)
-    monkeypatch.setattr("src.licensing._embedded_supabase.SUPABASE_KEY", key)
-    return url, key
-
-
->>>>>>> origin/main
 def test_validate_and_activate_registers_new_device_when_capacity_is_available() -> None:
     rest = FakeRestClient(
         license_row={
@@ -236,31 +222,15 @@ def test_supabase_license_client_uses_embedded_config_even_when_env_is_set(
 ) -> None:
     monkeypatch.setenv("SUPABASE_URL", "https://wrong-project.supabase.co")
     monkeypatch.setenv("SUPABASE_KEY", "wrong-key")
-<<<<<<< HEAD
-=======
-    expected_url, expected_key = _set_embedded_supabase(monkeypatch)
->>>>>>> origin/main
 
     client = SupabaseLicenseClient(admin=False)
     url, key = _get_embedded_supabase_config()
 
-<<<<<<< HEAD
-=======
-    assert url == expected_url
-    assert key == expected_key
->>>>>>> origin/main
     assert client.config.url == url
     assert client.config.key == key
 
 
-<<<<<<< HEAD
 def test_supabase_rest_client_sends_embedded_url_and_key_in_headers() -> None:
-=======
-def test_supabase_rest_client_sends_embedded_url_and_key_in_headers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_embedded_supabase(monkeypatch)
->>>>>>> origin/main
     url, key = _get_embedded_supabase_config()
     rest = SupabaseRestClient(SupabaseConfig(url=url, key=key))
     captured: dict[str, object] = {}
@@ -280,14 +250,7 @@ def test_supabase_rest_client_sends_embedded_url_and_key_in_headers(
     assert captured["headers"]["Authorization"] == f"Bearer {key}"
 
 
-<<<<<<< HEAD
 def test_supabase_rest_client_maps_network_errors_to_connection_failure() -> None:
-=======
-def test_supabase_rest_client_maps_network_errors_to_connection_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_embedded_supabase(monkeypatch)
->>>>>>> origin/main
     url, key = _get_embedded_supabase_config()
     rest = SupabaseRestClient(SupabaseConfig(url=url, key=key))
 
@@ -303,14 +266,7 @@ def test_supabase_rest_client_maps_network_errors_to_connection_failure(
     assert exc_info.value.code == "supabase_request_failed"
 
 
-<<<<<<< HEAD
 def test_supabase_rest_client_maps_auth_errors_to_auth_failure() -> None:
-=======
-def test_supabase_rest_client_maps_auth_errors_to_auth_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_embedded_supabase(monkeypatch)
->>>>>>> origin/main
     url, key = _get_embedded_supabase_config()
     rest = SupabaseRestClient(SupabaseConfig(url=url, key=key))
 

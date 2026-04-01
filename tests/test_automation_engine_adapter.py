@@ -2,11 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-<<<<<<< HEAD
 import pytest
 
-=======
->>>>>>> origin/main
 from core import responder as responder_module
 from core.inbox.conversation_sender import ConversationSender
 from core.inbox.conversation_store import ConversationStore
@@ -180,7 +177,6 @@ def _flow_config_without_initial() -> dict[str, object]:
 
 def _patch_runtime_flow(monkeypatch, flow_config: dict[str, object]) -> None:
     prompt_entry = {"flow_config": flow_config, "objection_strategy_name": ""}
-<<<<<<< HEAD
     required_types: list[str] = []
     for stage in flow_config.get("stages") or []:
         if not isinstance(stage, dict):
@@ -199,8 +195,6 @@ def _patch_runtime_flow(monkeypatch, flow_config: dict[str, object]) -> None:
             objection_action = str(objection.get("action_type") or "").strip()
             if objection_action and not responder_module._canonical_flow_special_action_type(objection_action):
                 required_types.append(objection_action)
-=======
->>>>>>> origin/main
     monkeypatch.setattr(
         responder_module,
         "_get_prompt_entry",
@@ -224,7 +218,6 @@ def _patch_runtime_flow(monkeypatch, flow_config: dict[str, object]) -> None:
     monkeypatch.setattr(
         responder_module,
         "_list_packs",
-<<<<<<< HEAD
         lambda: [
             {
                 "id": f"pack-{index + 1}",
@@ -234,9 +227,6 @@ def _patch_runtime_flow(monkeypatch, flow_config: dict[str, object]) -> None:
             }
             for index, pack_type in enumerate(required_types)
         ],
-=======
-        lambda: [{"id": "pack-2", "name": "Pack Dos", "type": "PACK_2", "actions": [{"type": "text_fixed", "content": "Hola"}]}],
->>>>>>> origin/main
     )
     monkeypatch.setattr(
         responder_module,
@@ -289,13 +279,8 @@ class _FakeDeliveryBrowserPool:
     def send_text(self, _thread, _text):
         raise AssertionError("send_text should not be used in these pack tests")
 
-<<<<<<< HEAD
     def send_pack(self, _thread, _pack, *, conversation_text="", flow_config=None, job_type="auto_reply"):
         del conversation_text, flow_config, job_type
-=======
-    def send_pack(self, _thread, _pack, *, conversation_text="", flow_config=None):
-        del conversation_text, flow_config
->>>>>>> origin/main
         self.send_pack_calls += 1
         return dict(self._send_pack_result)
 
@@ -357,18 +342,12 @@ def test_adapter_marks_reply_pending_and_defers_stage_transition_for_pack(monkey
         mode="auto",
     )
 
-<<<<<<< HEAD
     assert "pending_reply" not in evaluation["state_updates"]
     assert "pending_inbound_id" not in evaluation["state_updates"]
-=======
-    assert evaluation["state_updates"]["pending_reply"] is True
-    assert evaluation["state_updates"]["pending_inbound_id"] == "in-1"
->>>>>>> origin/main
     assert "stage_id" not in evaluation["thread_updates"]
     assert not any(action["type"] == "move_stage" for action in evaluation["actions"])
 
     pack_action = next(action for action in evaluation["actions"] if action["type"] == "send_pack")
-<<<<<<< HEAD
     assert evaluation["decision"]["stage_id"] == "inicial"
     assert evaluation["decision"]["next_stage_id"] == "stage_2"
     assert evaluation["decision"]["action_type"] == "PACK_1"
@@ -377,15 +356,11 @@ def test_adapter_marks_reply_pending_and_defers_stage_transition_for_pack(monkey
     assert pack_action["enqueue_state_updates"]["pending_reply"] is True
     assert pack_action["enqueue_state_updates"]["pending_inbound_id"] == "in-1"
     assert pack_action["enqueue_state_updates"]["pack_quota_deferral"] is None
-=======
-    assert pack_action["latest_inbound_id"] == "in-1"
->>>>>>> origin/main
     assert pack_action["post_send_thread_updates"]["stage_id"] == "stage_2"
     assert pack_action["post_send_thread_updates"]["followup_level"] == 0
     assert pack_action["post_send_state_updates"]["pending_reply"] is False
     assert pack_action["post_send_state_updates"]["pending_inbound_id"] is None
     assert pack_action["post_send_state_updates"]["last_inbound_id_seen"] == "in-1"
-<<<<<<< HEAD
     assert pack_action["post_send_state_updates"]["pack_quota_deferral"] is None
 
 
@@ -401,8 +376,6 @@ def test_adapter_raises_explicitly_when_pack_binding_is_missing(monkeypatch) -> 
             thread=_thread_payload(),
             mode="auto",
         )
-=======
->>>>>>> origin/main
 
 
 def test_adapter_reuses_pending_inbound_marker_when_message_id_is_missing(monkeypatch) -> None:
@@ -422,7 +395,6 @@ def test_adapter_reuses_pending_inbound_marker_when_message_id_is_missing(monkey
 
     pack_action = next(action for action in evaluation["actions"] if action["type"] == "send_pack")
     assert pack_action["latest_inbound_id"] == "pending-in-42"
-<<<<<<< HEAD
     assert "pending_inbound_id" not in evaluation["state_updates"]
     assert pack_action["enqueue_state_updates"]["pending_inbound_id"] == "pending-in-42"
 
@@ -474,9 +446,6 @@ def test_adapter_retries_pack_after_quota_deferral_expires(monkeypatch) -> None:
     pack_action = next(action for action in evaluation["actions"] if action["type"] == "send_pack")
     assert pack_action["job_type"] == "auto_reply"
     assert evaluation["state_updates"]["pack_quota_deferral"] is None
-=======
-    assert evaluation["state_updates"]["pending_inbound_id"] == "pending-in-42"
->>>>>>> origin/main
 
 
 def test_adapter_blocks_followup_without_confirmed_stage_activation(monkeypatch) -> None:
@@ -614,11 +583,8 @@ def test_adapter_allows_first_real_inbound_when_thread_is_legacy_initial_but_flo
     assert evaluation["decision"]["reason"] == "inbound_relevant"
     assert evaluation["decision"]["confirmed_stage_activation"]["confirmed"] is False
     assert evaluation["decision"]["stage_id"] == "etapa_1"
-<<<<<<< HEAD
     assert evaluation["decision"]["next_stage_id"] == "etapa_2"
     assert evaluation["decision"]["action_type"] == "PACK_1"
-=======
->>>>>>> origin/main
     assert pack_action["post_send_thread_updates"]["stage_id"] == "etapa_2"
 
 
@@ -758,16 +724,12 @@ def test_adapter_allows_real_inbound_transition_when_stage_activation_is_confirm
     assert evaluation["decision"]["decision"] == "reply"
     assert evaluation["decision"]["confirmed_stage_activation"]["confirmed"] is True
     assert evaluation["decision"]["confirmed_stage_activation"]["stage_id"] == "stage_2"
-<<<<<<< HEAD
     assert evaluation["decision"]["next_stage_id"] == "stage_3"
     assert evaluation["decision"]["action_type"] == "PACK_2"
-=======
->>>>>>> origin/main
     assert pack_action["latest_inbound_id"] == "in-2"
     assert pack_action["post_send_thread_updates"]["stage_id"] == "stage_3"
 
 
-<<<<<<< HEAD
 def test_first_inbound_keeps_current_stage_pack_until_send_confirms_transition(monkeypatch) -> None:
     flow_config = _flow_config()
     _patch_runtime_flow(monkeypatch, flow_config)
@@ -787,8 +749,6 @@ def test_first_inbound_keeps_current_stage_pack_until_send_confirms_transition(m
     assert pack_action["post_send_thread_updates"]["stage_id"] == "stage_2"
 
 
-=======
->>>>>>> origin/main
 def test_adapter_blocks_due_followup_for_qualified_thread_even_when_auto_owned(monkeypatch) -> None:
     flow_config = _flow_config_with_followups()
     _patch_runtime_flow(monkeypatch, flow_config)
@@ -984,17 +944,11 @@ def test_adapter_prefers_newer_preview_inbound_when_message_cache_is_stale(tmp_p
         )
 
         pack_action = next(action for action in evaluation["actions"] if action["type"] == "send_pack")
-<<<<<<< HEAD
         assert "pending_reply" not in evaluation["state_updates"]
         assert "pending_inbound_id" not in evaluation["state_updates"]
         assert pack_action["latest_inbound_id"] == "in-2"
         assert pack_action["enqueue_state_updates"]["pending_reply"] is True
         assert pack_action["enqueue_state_updates"]["pending_inbound_id"] == "in-2"
-=======
-        assert evaluation["state_updates"]["pending_reply"] is True
-        assert evaluation["state_updates"]["pending_inbound_id"] == "in-2"
-        assert pack_action["latest_inbound_id"] == "in-2"
->>>>>>> origin/main
         assert pack_action["post_send_thread_updates"]["stage_id"] == "stage_3"
     finally:
         store.shutdown()
@@ -1067,13 +1021,8 @@ def test_runtime_clears_pending_reply_when_pack_send_raises(tmp_path: Path, monk
         def send_text(self, _thread, _text):
             raise AssertionError("send_text should not be used in these pack tests")
 
-<<<<<<< HEAD
         def send_pack(self, _thread, _pack, *, conversation_text="", flow_config=None, job_type="auto_reply"):
             del conversation_text, flow_config, job_type
-=======
-        def send_pack(self, _thread, _pack, *, conversation_text="", flow_config=None):
-            del conversation_text, flow_config
->>>>>>> origin/main
             self.send_pack_calls += 1
             raise RuntimeError("transport_crashed")
 

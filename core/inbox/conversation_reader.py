@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,21 +23,21 @@ class ConversationReader:
         *,
         accounts_provider: Callable[[], list[dict[str, Any]]],
         notifier: Callable[..., None],
-        interval_seconds: float = 30.0,
-        parallelism: int = 2,
+        interval_seconds: float = 5.0,  # PERF: tighter poll interval reduces inbound receive latency
+        parallelism: int = 8,
         thread_limit: int = 50,
         message_limit: int = 12,
-        timeout_seconds: float = 12.0,
-        batch_interval_seconds: float = 1.0,
+        timeout_seconds: float = 8.0,  # PERF: shorter per-account timeout frees worker slots sooner
+        batch_interval_seconds: float = 0.0,
     ) -> None:
         self._store = store
         self._accounts_provider = accounts_provider
         self._notifier = notifier
-        self._interval_seconds = max(5.0, float(interval_seconds or 30.0))
+        self._interval_seconds = max(2.0, float(interval_seconds or 5.0))  # PERF: allow faster configured polling
         self._parallelism = max(1, int(parallelism or 1))
         self._thread_limit = max(1, int(thread_limit or 40))
         self._message_limit = max(1, int(message_limit or 12))
-        self._timeout_seconds = max(2.0, float(timeout_seconds or 12.0))
+        self._timeout_seconds = max(2.0, float(timeout_seconds or 8.0))  # PERF: keep floor while lowering default timeout
         self._batch_interval_seconds = max(0.0, float(batch_interval_seconds or 0.0))
         self._stop_event = threading.Event()
         self._wakeup = threading.Event()
@@ -78,14 +79,18 @@ class ConversationReader:
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            self._wakeup.wait(self._interval_seconds)
-            self._wakeup.clear()
+            if self._force_sync:
+                self._force_sync = False
+                self._wakeup.clear()
+            else:
+                self._wakeup.wait(self._interval_seconds)
+                self._wakeup.clear()
             if self._stop_event.is_set():
                 return
             try:
                 self._sync_all_accounts()
-            except Exception:
-                continue
+            except Exception as exc:
+                logging.getLogger(__name__).error("inbox reader outer loop error — cycle skipped", exc_info=exc)
 
     def _sync_all_accounts(self) -> None:
         accounts = [dict(item) for item in self._accounts_provider() if isinstance(item, dict)]
@@ -106,33 +111,31 @@ class ConversationReader:
                 candidates.append(account)
         if not candidates:
             return
-        max_workers = min(self._parallelism, max(1, len(candidates)))
-        for index in range(0, len(candidates), max_workers):
-            if self._stop_event.is_set():
-                return
-            batch = candidates[index : index + max_workers]
-            batch_started_at = time.monotonic()
-            with ThreadPoolExecutor(max_workers=len(batch), thread_name_prefix="inbox-poll") as pool:
-                futures = {pool.submit(self._sync_single_account, account): account for account in batch}
-                for future in as_completed(futures):
-                    account = futures[future]
-                    account_id = str(account.get("username") or "").strip().lstrip("@").lower()
-                    try:
-                        touched_keys = list(future.result() or [])
-                    except Exception as exc:
-                        health_state, reason = self._classify_reader_error(exc)
-                        self._store.set_account_health(account_id, health_state, reason=reason)
-                        self._store.register_account_sync(account_id, last_error=reason, thread_count=0)
-                        self._notifier(reason="conversation_poll_error", account_ids=[account_id], thread_keys=[])
-                        continue
-                    self._notifier(
-                        reason="conversation_poll",
-                        account_ids=[account_id],
-                        thread_keys=touched_keys,
+        with ThreadPoolExecutor(
+            max_workers=min(len(candidates), max(self._parallelism, 12)),  # PERF: scale pool to active account count
+            thread_name_prefix="inbox-poll",
+        ) as pool:
+            futures = {pool.submit(self._sync_single_account, account): account for account in candidates}
+            for future in as_completed(futures):
+                account = futures[future]
+                account_id = str(account.get("username") or "").strip().lstrip("@").lower()
+                try:
+                    touched_keys = list(future.result() or [])
+                except Exception as exc:
+                    logging.getLogger(__name__).exception(
+                        "Inbox reader sync failed for @%s",
+                        account_id or "?",
                     )
-            remaining = self._batch_interval_seconds - (time.monotonic() - batch_started_at)
-            if remaining > 0 and (index + max_workers) < len(candidates):
-                self._stop_event.wait(remaining)
+                    health_state, reason = self._classify_reader_error(exc)
+                    self._store.set_account_health(account_id, health_state, reason=reason)
+                    self._store.register_account_sync(account_id, last_error=reason, thread_count=0)
+                    self._notifier(reason="conversation_poll_error", account_ids=[account_id], thread_keys=[])
+                    continue
+                self._notifier(
+                    reason="conversation_poll",
+                    account_ids=[account_id],
+                    thread_keys=touched_keys,
+                )
 
     def _sync_single_account(self, account: dict[str, Any]) -> list[str]:
         account_id = str(account.get("username") or "").strip().lstrip("@").lower()

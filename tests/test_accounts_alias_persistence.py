@@ -87,7 +87,6 @@ def test_sync_alias_metadata_relabels_all_matching_accounts(monkeypatch, tmp_pat
     assert all(row["alias"] == "VENTAS norte" for row in ventas_rows)
 
 
-<<<<<<< HEAD
 def test_list_all_defaults_missing_usage_state_to_active_and_persists_it(monkeypatch, tmp_path: Path) -> None:
     accounts_file = _configure_accounts_storage(monkeypatch, tmp_path)
     accounts_file.write_text(
@@ -134,8 +133,6 @@ def test_update_account_persists_usage_state_changes(monkeypatch, tmp_path: Path
     assert stored_rows[0]["usage_state"] == "deactivated"
 
 
-=======
->>>>>>> origin/main
 def test_list_all_migrates_plaintext_passwords_to_encrypted_sqlite(
     monkeypatch,
     tmp_path: Path,

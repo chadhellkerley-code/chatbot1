@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -64,11 +64,57 @@ class ConversationListModel(QAbstractListModel):
             len(clean_rows),
             max(self._page_size, selected_index + 1 if selected_index >= 0 else self._page_size),
         )
-        self.beginResetModel()
+        new_visible_rows = clean_rows[:target_limit]
+        same_identity_order = len(self._all_rows) == len(clean_rows) and all(
+            _thread_identity(current) == _thread_identity(incoming)
+            for current, incoming in zip(self._all_rows, clean_rows)
+        )
+        if not same_identity_order:
+            self.beginResetModel()
+            self._all_rows = clean_rows
+            self._visible_rows = new_visible_rows
+            self._current_thread_key = clean_key
+            self.endResetModel()
+            return
+
+        previous_rows = self._visible_rows
+        previous_key = self._current_thread_key
+        changed_rows = [
+            index
+            for index in range(min(len(previous_rows), len(new_visible_rows)))
+            if _thread_row_update_token(previous_rows[index]) != _thread_row_update_token(new_visible_rows[index])
+        ]
         self._all_rows = clean_rows
-        self._visible_rows = clean_rows[:target_limit]
+        old_visible_count = len(previous_rows)
+        new_visible_count = len(new_visible_rows)
+        if new_visible_count < old_visible_count:
+            self.beginRemoveRows(QModelIndex(), new_visible_count, old_visible_count - 1)
+            self._visible_rows = new_visible_rows
+            self.endRemoveRows()
+        elif new_visible_count > old_visible_count:
+            self.beginInsertRows(QModelIndex(), old_visible_count, new_visible_count - 1)
+            self._visible_rows = new_visible_rows
+            self.endInsertRows()
+        else:
+            self._visible_rows = new_visible_rows
         self._current_thread_key = clean_key
-        self.endResetModel()
+
+        changed_selection_rows = {
+            row
+            for row in (
+                _row_for_thread(previous_rows, previous_key),
+                _row_for_thread(new_visible_rows, clean_key),
+                _row_for_thread(new_visible_rows, previous_key),
+            )
+            if 0 <= row < len(self._visible_rows)
+        }
+        for row in sorted(set(changed_rows) | changed_selection_rows):
+            model_index = self.index(row, 0)
+            self.dataChanged.emit(
+                model_index,
+                model_index,
+                [Qt.DisplayRole, self.ThreadRole, self.SelectedRole],
+            )
 
     def set_current_thread(self, thread_key: str) -> None:
         clean_key = str(thread_key or "").strip()
@@ -122,6 +168,23 @@ class ConversationListModel(QAbstractListModel):
 
 
 class ConversationListDelegate(QStyledItemDelegate):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._avatar_font = QFont()
+        self._avatar_font.setBold(True)
+        self._avatar_font.setPointSize(8)
+        self._title_font = QFont()
+        self._title_font.setBold(True)
+        self._title_font.setPointSize(9)
+        self._subtitle_font = QFont()
+        self._subtitle_font.setPointSize(8)
+        self._preview_font = QFont()
+        self._preview_font.setPointSize(8)
+        self._timestamp_font = QFont()
+        self._timestamp_font.setPointSize(8)
+        self._badge_font = QFont()
+        self._badge_font.setPointSize(8)
+
     def paint(self, painter: QPainter, option, index: QModelIndex) -> None:  # type: ignore[override]
         row = index.data(ConversationListModel.ThreadRole)
         if not isinstance(row, dict):
@@ -149,10 +212,7 @@ class ConversationListDelegate(QStyledItemDelegate):
         painter.setBrush(QColor("#1b4f79") if selected else QColor("#15324d"))
         painter.drawEllipse(avatar_rect)
 
-        avatar_font = QFont()
-        avatar_font.setBold(True)
-        avatar_font.setPointSize(8)
-        painter.setFont(avatar_font)
+        painter.setFont(self._avatar_font)
         painter.setPen(QColor("#f7fbff"))
         painter.drawText(avatar_rect, Qt.AlignCenter, _initials(str(row.get("display_name") or "")))
 
@@ -161,10 +221,7 @@ class ConversationListDelegate(QStyledItemDelegate):
         timestamp_rect = QRectF(content_right - 52, rect.top() + 10, 52, 16)
         title_width = max(80.0, timestamp_rect.left() - content_left - 8.0)
 
-        title_font = QFont()
-        title_font.setBold(True)
-        title_font.setPointSize(9)
-        painter.setFont(title_font)
+        painter.setFont(self._title_font)
         painter.setPen(QColor("#f4f8ff"))
         title = _title_text(row)
         painter.drawText(
@@ -173,9 +230,7 @@ class ConversationListDelegate(QStyledItemDelegate):
             _elided_text(title, painter.fontMetrics(), int(title_width)),
         )
 
-        meta_font = QFont()
-        meta_font.setPointSize(8)
-        painter.setFont(meta_font)
+        painter.setFont(self._subtitle_font)
         painter.setPen(QColor("#7d93ae"))
         subtitle = _secondary_text(row)
         painter.drawText(
@@ -184,9 +239,7 @@ class ConversationListDelegate(QStyledItemDelegate):
             _elided_text(subtitle, painter.fontMetrics(), int(content_right - content_left)),
         )
 
-        preview_font = QFont()
-        preview_font.setPointSize(8)
-        painter.setFont(preview_font)
+        painter.setFont(self._preview_font)
         painter.setPen(QColor("#cfe0f4"))
         preview = _preview_text(row)
         painter.drawText(
@@ -195,13 +248,14 @@ class ConversationListDelegate(QStyledItemDelegate):
             _elided_text(preview, painter.fontMetrics(), int(content_right - content_left)),
         )
 
-        painter.setFont(meta_font)
+        painter.setFont(self._timestamp_font)
         painter.setPen(QColor("#8ea4be"))
         painter.drawText(timestamp_rect, Qt.AlignRight | Qt.AlignVCenter, _short_time(row.get("last_message_timestamp")))
 
         badge_right = rect.right() - 12
         unread_count = _safe_int(row.get("unread_count"))
         health_state = str(row.get("account_health") or "healthy").strip().lower()
+        painter.setFont(self._badge_font)
 
         if unread_count > 0:
             badge_right = _draw_badge(
@@ -246,11 +300,11 @@ class ConversationListDelegate(QStyledItemDelegate):
 class ConversationList(QWidget):
     conversationSelected = Signal(str)
     filterChanged = Signal(str)
-    refreshRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._current_thread_key = ""
+        self._is_loading = False  # UI: track whether the conversation rail should show a loading overlay instead of the empty-state copy
         self._model = ConversationListModel(self)
         self._delegate = ConversationListDelegate(self)
 
@@ -272,11 +326,7 @@ class ConversationList(QWidget):
         title.setObjectName("InboxSectionTitle")
         title_row.addWidget(title, 1)
 
-<<<<<<< HEAD
-        self._summary = QLabel("Esperando proyeccion")
-=======
-        self._summary = QLabel("Esperando sincronizacion")
->>>>>>> origin/main
+        self._summary = QLabel("Esperando proyección")
         self._summary.setObjectName("InboxSummaryText")
         title_row.addWidget(self._summary, 0, Qt.AlignRight)
         panel_layout.addLayout(title_row)
@@ -287,11 +337,7 @@ class ConversationList(QWidget):
         self._filter_buttons = QButtonGroup(self)
         self._filter_buttons.setExclusive(True)
         for index, (label, value) in enumerate(
-<<<<<<< HEAD
             (("Todas", "all"), ("Calificadas", "qualified"), ("Descalificadas", "disqualified"))
-=======
-            (("Todas", "all"), ("Agendar", "qualified"), ("Descalificadas", "disqualified"))
->>>>>>> origin/main
         ):
             button = QPushButton(label)
             button.setCheckable(True)
@@ -311,29 +357,56 @@ class ConversationList(QWidget):
         self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._view.setSelectionMode(QListView.NoSelection)
         self._view.setVerticalScrollMode(QListView.ScrollPerPixel)
-        self._view.setUniformItemSizes(False)
+        self._view.setUniformItemSizes(True)
         self._view.setSpacing(2)
         self._view.clicked.connect(self._handle_clicked)
         scrollbar = self._view.verticalScrollBar()
         scrollbar.valueChanged.connect(self._maybe_load_more)
         panel_layout.addWidget(self._view, 1)
 
+        self._empty_state = QFrame(self._view.viewport())
+        self._empty_state.setObjectName("InboxConversationEmptyState")
+        self._empty_state.setStyleSheet(
+            "QFrame#InboxConversationEmptyState {"
+            "background-color: rgba(9, 20, 33, 235);"
+            "border: 1px solid #1d314a;"
+            "border-radius: 16px;"
+            "}"
+        )
+        empty_layout = QVBoxLayout(self._empty_state)
+        empty_layout.setContentsMargins(18, 16, 18, 16)
+        empty_layout.setSpacing(0)
+        self._empty_label = QLabel("No hay conversaciones")  # UI: keep the normal empty-state copy available when the list is not loading
+        self._empty_label.setAlignment(Qt.AlignCenter)  # UI: center the normal empty-state copy inside the overlay
+        self._empty_label.setWordWrap(True)  # UI: allow the normal empty-state copy to wrap cleanly in narrow layouts
+        self._empty_label.setObjectName("InboxSummaryText")  # UI: style the normal empty-state copy like the rest of the inbox summaries
+        empty_layout.addWidget(self._empty_label)  # UI: render the normal empty-state copy inside the overlay
+        self._loading_label = QLabel("Cargando conversaciones...")  # UI: provide dedicated loading copy for the conversation overlay
+        self._loading_label.setAlignment(Qt.AlignCenter)  # UI: center the loading copy inside the overlay
+        self._loading_label.setWordWrap(True)  # UI: allow the loading copy to wrap cleanly in narrow layouts
+        self._loading_label.setObjectName("InboxSummaryText")  # UI: style the loading copy consistently with the rail empty state
+        empty_layout.addWidget(self._loading_label)  # UI: render the loading copy inside the overlay alongside the empty-state copy
+        self._loading_label.hide()  # UI: start with the loading copy hidden until an explicit loading state is applied
+        self._empty_state.hide()
+        self._view.viewport().installEventFilter(self)
+
         root.addWidget(panel)
+        self._update_empty_state()
 
     def current_filter(self) -> str:
         checked = self._filter_buttons.checkedButton()
         if checked is None:
             return "all"
         text = str(checked.text() or "").strip().lower()
-<<<<<<< HEAD
         if "calificadas" in text:
-=======
-        if "agendar" in text or "calificadas" in text:
->>>>>>> origin/main
             return "qualified"
         if "descalificadas" in text:
             return "disqualified"
         return "all"
+
+    def set_loading(self, is_loading: bool) -> None:  # UI: expose explicit loading control so the overlay can distinguish loading from empty results
+        self._is_loading = bool(is_loading)  # UI: persist the explicit loading flag for the conversation overlay
+        self._update_empty_state()  # UI: refresh the overlay immediately when the loading state changes
 
     def set_threads(
         self,
@@ -347,15 +420,9 @@ class ConversationList(QWidget):
         if visible_count == 0:
             self._summary.setText("Sin resultados")
         elif overall == visible_count:
-<<<<<<< HEAD
             self._summary.setText(f"{visible_count} resultados")
         else:
             self._summary.setText(f"{visible_count}/{overall} resultados")
-=======
-            self._summary.setText(f"{visible_count} activas")
-        else:
-            self._summary.setText(f"{visible_count}/{overall}")
->>>>>>> origin/main
 
         scrollbar = self._view.verticalScrollBar()
         previous_value = scrollbar.value()
@@ -367,6 +434,7 @@ class ConversationList(QWidget):
             self._model.set_current_thread("")
             self._view.clearSelection()
         scrollbar.setValue(min(previous_value, scrollbar.maximum()))
+        self._update_empty_state()
 
     def _handle_clicked(self, index: QModelIndex) -> None:
         row = self._model.thread_at(index.row())
@@ -399,6 +467,32 @@ class ConversationList(QWidget):
         if self._model.load_more():
             scrollbar.setValue(value)
 
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if watched is self._view.viewport() and event.type() in (QEvent.Resize, QEvent.Show):
+            self._layout_empty_state()
+        return super().eventFilter(watched, event)
+
+    def _update_empty_state(self) -> None:
+        row_count = self._model.rowCount()  # UI: decide the overlay state from the current visible conversation count
+        show_empty_state = row_count == 0  # UI: only allow the overlay when there are no visible conversations
+        self._empty_state.setVisible(show_empty_state)  # UI: hide the overlay automatically as soon as conversations are available
+        if not show_empty_state:  # UI: stop here when rows exist so the loading and empty copy stay hidden
+            return
+        self._loading_label.setVisible(self._is_loading)  # UI: show the dedicated loading copy while the list is explicitly loading
+        self._empty_label.setVisible(not self._is_loading)  # UI: show the normal empty copy only when loading has finished
+        self._layout_empty_state()  # UI: keep the overlay centered whenever it is visible
+        self._empty_state.raise_()  # UI: ensure the overlay stays above the list viewport contents
+
+    def _layout_empty_state(self) -> None:
+        if not self._empty_state.isVisible():
+            return
+        viewport = self._view.viewport()
+        width = min(360, max(220, viewport.width() - 32))
+        height = max(88, self._empty_state.sizeHint().height())
+        x = max(16, int((viewport.width() - width) / 2))
+        y = max(20, int((viewport.height() - height) / 2))
+        self._empty_state.setGeometry(x, y, width, height)
+
 
 def _draw_badge(
     painter: QPainter,
@@ -418,6 +512,34 @@ def _draw_badge(
     painter.setPen(QColor(color))
     painter.drawText(rect, Qt.AlignCenter, text)
     return rect.left() - 6
+
+
+def _thread_identity(thread: dict[str, Any]) -> str:
+    return str(thread.get("thread_key") or "").strip()
+
+
+def _row_for_thread(rows: list[dict[str, Any]], thread_key: str) -> int:
+    clean_key = str(thread_key or "").strip()
+    if not clean_key:
+        return -1
+    for index, row in enumerate(rows):
+        if _thread_identity(row) == clean_key:
+            return index
+    return -1
+
+
+def _thread_row_update_token(thread: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(thread.get("display_name") or "").strip(),
+        str(thread.get("recipient_username") or "").strip(),
+        str(thread.get("account_id") or "").strip(),
+        str(thread.get("last_message_text") or "").strip(),
+        str(thread.get("last_message_direction") or "").strip(),
+        thread.get("last_message_timestamp"),
+        _safe_int(thread.get("unread_count")),
+        _needs_reply(thread),
+        str(thread.get("account_health") or "").strip(),
+    )
 
 
 def _initials(value: str) -> str:

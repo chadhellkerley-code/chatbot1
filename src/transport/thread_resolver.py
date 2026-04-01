@@ -15,16 +15,11 @@ if TYPE_CHECKING:
 class ThreadOpenResult:
     opened: bool
     reason: str
-<<<<<<< HEAD
     method: str = "compose_dialog"
-=======
-    method: str = "sidebar_search"
->>>>>>> origin/main
     thread_id: str = ""
 
 
 class SidebarThreadResolver:
-<<<<<<< HEAD
     _SIDEBAR_MIN_WIDTH_PX = 220
     _SIDEBAR_SEARCH_INPUTS = (
         "div[role='navigation'] input[name='searchInput']",
@@ -46,41 +41,27 @@ class SidebarThreadResolver:
         "div[role='dialog'] div[role='button']:has-text('Close')",
         "div[role='dialog'] div[role='button']:has-text('Cerrar')",
     )
-
-=======
->>>>>>> origin/main
     def __init__(
         self,
         sender: "HumanInstagramSender",
         *,
-<<<<<<< HEAD
         compose_triggers: tuple[str, ...],
         search_inputs: tuple[str, ...],
         result_rows: tuple[str, ...],
         confirm_buttons: tuple[str, ...],
-=======
-        search_inputs: tuple[str, ...],
-        result_rows: tuple[str, ...],
->>>>>>> origin/main
         thread_open_timeout_ms: int,
         sidebar_row_timeout_ms: int,
         log_event: Callable[..., None],
     ) -> None:
         self._sender = sender
-<<<<<<< HEAD
         self._compose_triggers = tuple(compose_triggers)
         self._search_inputs = tuple(search_inputs)
         self._result_rows = tuple(result_rows)
         self._confirm_buttons = tuple(confirm_buttons)
-=======
-        self._search_inputs = tuple(search_inputs)
-        self._result_rows = tuple(result_rows)
->>>>>>> origin/main
         self._thread_open_timeout_ms = int(thread_open_timeout_ms)
         self._sidebar_row_timeout_ms = int(sidebar_row_timeout_ms)
         self._log_event = log_event
 
-<<<<<<< HEAD
     async def _click_locator_best_effort(self, page: Page, locator: Locator) -> bool:
         try:
             await locator.scroll_into_view_if_needed(timeout=1_200)
@@ -447,9 +428,6 @@ class SidebarThreadResolver:
         except Exception:
             matched = False
         return bool(matched)
-
-=======
->>>>>>> origin/main
     async def _probe_sidebar_results(
         self,
         page: Page,
@@ -647,11 +625,8 @@ class SidebarThreadResolver:
             current_thread = self.extract_thread_id_from_direct_url(current_url)
             in_thread_url = "/direct/t/" in current_url and bool(current_thread)
             changed_from_before = not previous_thread or current_thread != previous_thread or current_url != previous_url
-<<<<<<< HEAD
             header_match = await self._chat_header_matches_target(page, username)
             candidate_match = self._sender._normalize_username(candidate_username).lower() == target if candidate_username else False
-=======
->>>>>>> origin/main
             if in_thread_url and changed_from_before:
                 self._log_event(
                     "THREAD_OPEN_OK",
@@ -660,7 +635,6 @@ class SidebarThreadResolver:
                     current_thread=current_thread,
                     previous_thread=previous_thread or "-",
                     url=current_url,
-<<<<<<< HEAD
                     matched_via="sidebar_thread_header" if header_match else "sidebar_thread_url_only",
                     header_match=header_match,
                 )
@@ -675,10 +649,29 @@ class SidebarThreadResolver:
                     url=current_url,
                     matched_via="sidebar_target_header" if header_match else "sidebar_target_url_only",
                     header_match=header_match,
-=======
->>>>>>> origin/main
                 )
                 return True
+            if in_thread_url and not changed_from_before:
+                header_confirmed = header_match
+                header_deadline = time.time() + 2.0
+                while not header_confirmed and time.time() < header_deadline:
+                    try:
+                        await page.wait_for_timeout(120)
+                    except Exception:
+                        break
+                    header_confirmed = await self._chat_header_matches_target(page, username)
+                if header_confirmed:
+                    self._log_event(
+                        "THREAD_ALREADY_OPEN_HEADER_CONFIRMED",
+                        row_username=candidate_username or "-",
+                        target_username=target,
+                        current_thread=current_thread or "-",
+                        previous_thread=previous_thread or "-",
+                        url=current_url,
+                        matched_via="sidebar_existing_thread_header",
+                        header_match=header_confirmed,
+                    )
+                    return True
             try:
                 await page.wait_for_timeout(120)
             except Exception:
@@ -852,7 +845,6 @@ class SidebarThreadResolver:
             thread_id=current_thread,
         )
 
-<<<<<<< HEAD
     async def _clear_search_input_best_effort(self, page: Page, search_input: Locator) -> None:
         try:
             await self._sender._focus_input_best_effort(search_input)
@@ -925,9 +917,6 @@ class SidebarThreadResolver:
             )
         finally:
             await self._clear_search_input_best_effort(page, search_input)
-
-=======
->>>>>>> origin/main
     async def open_thread_from_sidebar(
         self,
         page: Page,
@@ -939,7 +928,6 @@ class SidebarThreadResolver:
         if self._sender._is_chrome_error_url(page):
             self._log_event("CHROME_ERROR_IN_OPEN_THREAD", url=page.url if page else "")
             return ThreadOpenResult(False, "chrome_error")
-<<<<<<< HEAD
         cleaned = await self.cleanup_stale_compose_state(page, deadline=deadline)
         if not cleaned:
             return ThreadOpenResult(False, "ui_not_found")
@@ -952,100 +940,3 @@ class SidebarThreadResolver:
         if result is None:
             return ThreadOpenResult(False, "username_not_found", method="sidebar_search")
         return result
-=======
-
-        if callable(flow_hook):
-            flow_hook("open search", False)
-            flow_hook("waiting search input visible", True)
-        search_input = await self._sender._first_visible(page, self._search_inputs, max_scan_per_selector=2)
-        if search_input is None:
-            self._log_event("SIDEBAR_SEARCH_INPUT_MISSING", url=page.url if page else "")
-            if self._sender._is_chrome_error_url(page):
-                return ThreadOpenResult(False, "chrome_error")
-            return ThreadOpenResult(False, "ui_not_found")
-        if callable(flow_hook):
-            flow_hook("search input visible", False)
-
-        baseline_probe = await self._probe_sidebar_results(page)
-        try:
-            if callable(flow_hook):
-                flow_hook(f"typing username: {self._sender._normalize_username(username)}", True)
-            await self.clear_and_type_search(page, search_input, username)
-        except Exception as exc:
-            self._log_event("SIDEBAR_SEARCH_TYPE_FAIL", error=repr(exc))
-            if self._sender._is_chrome_error_url(page):
-                return ThreadOpenResult(False, "chrome_error")
-            return ThreadOpenResult(False, "ui_not_found")
-
-        if self._sender._is_chrome_error_url(page):
-            return ThreadOpenResult(False, "chrome_error")
-
-        row_timeout = self._sender._remaining_ms(deadline, self._sidebar_row_timeout_ms)
-        if row_timeout <= 0:
-            return ThreadOpenResult(False, "thread_open_failed")
-        if callable(flow_hook):
-            flow_hook("waiting search results", True)
-        results_wait_started_at = time.perf_counter()
-        ready_probe = await self.wait_sidebar_results_ready(
-            page,
-            username,
-            timeout_ms=row_timeout,
-            baseline_signature=str(baseline_probe.get("signature") or ""),
-        )
-        self._log_event(
-            "SIDEBAR_RESULTS_READY",
-            target_username=self._sender._normalize_username(username).lower(),
-            wait_ms=int((time.perf_counter() - results_wait_started_at) * 1000),
-            row_count=max(0, int(ready_probe.get("row_count") or 0)),
-            exact_match=bool(ready_probe.get("exact_match")),
-            surface_changed=bool(ready_probe.get("surface_changed")),
-            query_value=str(ready_probe.get("query_value") or ""),
-        )
-        if bool(ready_probe.get("exact_match")):
-            js_open_result = await self._open_exact_match_via_js(
-                page,
-                username,
-                deadline=deadline,
-                flow_hook=flow_hook,
-            )
-            if js_open_result is not None:
-                return js_open_result
-
-        row_timeout = self._sender._remaining_ms(deadline, self._sidebar_row_timeout_ms)
-        if row_timeout <= 0:
-            return ThreadOpenResult(False, "thread_open_failed")
-        row = await self.find_exact_sidebar_row(page, username, timeout_ms=row_timeout)
-        if row is None:
-            js_open_result = await self._open_exact_match_via_js(
-                page,
-                username,
-                deadline=deadline,
-                flow_hook=flow_hook,
-            )
-            if js_open_result is not None:
-                return js_open_result
-            self._log_event("SIDEBAR_EXACT_MATCH_MISSING", username=username)
-            if self._sender._is_chrome_error_url(page):
-                return ThreadOpenResult(False, "chrome_error")
-            return ThreadOpenResult(False, "username_not_found")
-
-        open_timeout = self._sender._remaining_ms(deadline, self._thread_open_timeout_ms)
-        if open_timeout <= 0:
-            return ThreadOpenResult(False, "thread_open_failed")
-        if callable(flow_hook):
-            flow_hook("results detected", False)
-            flow_hook("clicking result", True)
-        opened = await self.wait_thread_open(
-            page,
-            row,
-            username,
-            timeout_ms=open_timeout,
-            flow_hook=flow_hook,
-        )
-        current_thread = self.extract_thread_id_from_direct_url(page.url or "")
-        return ThreadOpenResult(
-            opened,
-            "ok" if opened else "thread_open_failed",
-            thread_id=current_thread,
-        )
->>>>>>> origin/main

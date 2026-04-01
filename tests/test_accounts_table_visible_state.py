@@ -185,11 +185,7 @@ class _FakeAccounts:
         assert alias == "default"
         return [
             {"username": "stale_live"},
-<<<<<<< HEAD
             {"username": "fresh_alive", "usage_state": "deactivated"},
-=======
-            {"username": "fresh_alive"},
->>>>>>> origin/main
             {"username": "fresh_inactive"},
             {"username": "stale_inactive"},
         ]
@@ -210,18 +206,10 @@ class _FakeAccounts:
 
     def manual_action_eligibility(self, record: dict[str, object]) -> dict[str, object]:
         connected = bool(record.get("connected"))
-<<<<<<< HEAD
         allowed = connected
         return {
             "allowed": allowed,
             "message": "" if allowed else "La cuenta no esta conectada.",
-=======
-        badge = str(record.get("health_badge") or "").strip().upper()
-        allowed = connected and badge == "VIVA"
-        return {
-            "allowed": allowed,
-            "message": "" if allowed else "Necesitas re-login en esta cuenta",
->>>>>>> origin/main
         }
 
     def proxy_display_for_account(self, record: dict[str, object]) -> dict[str, str]:
@@ -232,15 +220,12 @@ class _FakeAccounts:
         del record
         return {"active": False, "state": "", "message": "", "label": "", "updated_at": ""}
 
-<<<<<<< HEAD
     def usage_state_for_account(self, record: dict[str, object]) -> str:
         return str(record.get("usage_state") or "active")
 
     def usage_state_label(self, record: dict[str, object]) -> str:
         return "Desactivada" if self.usage_state_for_account(record) == "deactivated" else "Activa"
 
-=======
->>>>>>> origin/main
 
 def test_build_accounts_table_snapshot_decouples_connected_from_health() -> None:
     services = SimpleNamespace(accounts=_FakeAccounts())
@@ -251,20 +236,13 @@ def test_build_accounts_table_snapshot_decouples_connected_from_health() -> None
     assert rows["stale_live"]["health_badge"] == "NO VERIFICADA"
     assert rows["stale_live"]["connected"] is True
     assert rows["stale_live"]["connected_label"] == "Si"
-<<<<<<< HEAD
     assert rows["stale_live"]["manual_action_allowed"] is True
-=======
-    assert rows["stale_live"]["manual_action_allowed"] is False
->>>>>>> origin/main
 
     assert rows["fresh_alive"]["health_badge"] == "VIVA"
     assert rows["fresh_alive"]["connected"] is True
     assert rows["fresh_alive"]["connected_label"] == "Si"
-<<<<<<< HEAD
     assert rows["fresh_alive"]["usage_state"] == "deactivated"
     assert rows["fresh_alive"]["usage_state_label"] == "Desactivada"
-=======
->>>>>>> origin/main
 
     assert rows["fresh_inactive"]["health_badge"] == "NO ACTIVA"
     assert rows["fresh_inactive"]["connected"] is False

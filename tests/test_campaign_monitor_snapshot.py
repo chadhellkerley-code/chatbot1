@@ -130,7 +130,6 @@ def test_campaign_monitor_counts_preblocked_leads_in_completed_progress() -> Non
     assert payload["remaining"] == 0
 
 
-<<<<<<< HEAD
 def test_campaign_monitor_uses_planned_queue_total_without_counting_preblocked_progress() -> None:
     services = SimpleNamespace(
         campaigns=_FakeCampaignService(
@@ -171,8 +170,6 @@ def test_campaign_monitor_uses_planned_queue_total_without_counting_preblocked_p
     assert payload["remaining"] == 16
 
 
-=======
->>>>>>> origin/main
 def test_campaign_monitor_preserves_interrupted_status_as_terminal() -> None:
     services = SimpleNamespace(
         campaigns=_FakeCampaignService(

@@ -74,7 +74,6 @@ def _as_worker_rows(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(dict(row) for row in value if isinstance(row, dict))
 
 
-<<<<<<< HEAD
 def _as_dict_rows(value: Any) -> tuple[dict[str, Any], ...]:
     if not isinstance(value, list):
         return ()
@@ -91,13 +90,10 @@ def _as_text_rows(value: Any) -> tuple[str, ...]:
     )
 
 
-=======
->>>>>>> origin/main
 @dataclass(frozen=True)
 class CampaignCapacity:
     alias: str
     workers_capacity: int
-<<<<<<< HEAD
     leads_alias: str = ""
     proxies: tuple[str, ...] = ()
     has_none_accounts: bool = False
@@ -108,10 +104,6 @@ class CampaignCapacity:
     planned_runnable_leads: int = 0
     remaining_slots_total: int = 0
     account_remaining: tuple[dict[str, Any], ...] = ()
-=======
-    proxies: tuple[str, ...] = ()
-    has_none_accounts: bool = False
->>>>>>> origin/main
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any] | None) -> "CampaignCapacity":
@@ -124,7 +116,6 @@ class CampaignCapacity:
         return cls(
             alias=_as_text(data.get("alias")),
             workers_capacity=_as_int(data.get("workers_capacity"), default=0, minimum=0),
-<<<<<<< HEAD
             leads_alias=_as_text(data.get("leads_alias")),
             proxies=proxies,
             has_none_accounts=bool(data.get("has_none_accounts")),
@@ -135,17 +126,12 @@ class CampaignCapacity:
             planned_runnable_leads=_as_int(data.get("planned_runnable_leads"), default=0, minimum=0),
             remaining_slots_total=_as_int(data.get("remaining_slots_total"), default=0, minimum=0),
             account_remaining=_as_dict_rows(data.get("account_remaining")),
-=======
-            proxies=proxies,
-            has_none_accounts=bool(data.get("has_none_accounts")),
->>>>>>> origin/main
         )
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "alias": self.alias,
             "workers_capacity": self.workers_capacity,
-<<<<<<< HEAD
             "leads_alias": self.leads_alias,
             "proxies": list(self.proxies),
             "has_none_accounts": self.has_none_accounts,
@@ -156,10 +142,6 @@ class CampaignCapacity:
             "planned_runnable_leads": self.planned_runnable_leads,
             "remaining_slots_total": self.remaining_slots_total,
             "account_remaining": [dict(row) for row in self.account_remaining],
-=======
-            "proxies": list(self.proxies),
-            "has_none_accounts": self.has_none_accounts,
->>>>>>> origin/main
         }
 
 
@@ -169,22 +151,16 @@ class CampaignLaunchRequest:
     leads_alias: str
     templates: tuple[dict[str, Any], ...]
     run_id: str = ""
-<<<<<<< HEAD
     root_dir: str = ""
-=======
->>>>>>> origin/main
     delay_min: int = 0
     delay_max: int = 0
     workers_requested: int = 1
     workers_capacity: int = 0
     headless: bool | None = None
     total_leads: int = 0
-<<<<<<< HEAD
     selected_leads_total: int = 0
     planned_eligible_leads: int = 0
     planned_queue: tuple[str, ...] = ()
-=======
->>>>>>> origin/main
     started_at: str = ""
 
     @classmethod
@@ -200,22 +176,16 @@ class CampaignLaunchRequest:
             leads_alias=_as_text(data.get("leads_alias")),
             templates=templates,
             run_id=_as_text(data.get("run_id")),
-<<<<<<< HEAD
             root_dir=_as_text(data.get("root_dir")),
-=======
->>>>>>> origin/main
             delay_min=_as_int(data.get("delay_min"), default=0, minimum=0),
             delay_max=_as_int(data.get("delay_max"), default=0, minimum=0),
             workers_requested=_as_int(data.get("workers_requested"), default=1, minimum=1),
             workers_capacity=_as_int(data.get("workers_capacity"), default=0, minimum=0),
             headless=data.get("headless"),
             total_leads=_as_int(data.get("total_leads"), default=0, minimum=0),
-<<<<<<< HEAD
             selected_leads_total=_as_int(data.get("selected_leads_total"), default=0, minimum=0),
             planned_eligible_leads=_as_int(data.get("planned_eligible_leads"), default=0, minimum=0),
             planned_queue=_as_text_rows(data.get("planned_queue")),
-=======
->>>>>>> origin/main
             started_at=_as_text(data.get("started_at")),
         )
 
@@ -224,10 +194,7 @@ class CampaignLaunchRequest:
             "alias": self.alias,
             "leads_alias": self.leads_alias,
             "run_id": self.run_id,
-<<<<<<< HEAD
             "root_dir": self.root_dir,
-=======
->>>>>>> origin/main
             "templates": [dict(item) for item in self.templates],
             "delay_min": self.delay_min,
             "delay_max": self.delay_max,
@@ -235,12 +202,9 @@ class CampaignLaunchRequest:
             "workers_capacity": self.workers_capacity,
             "headless": self.headless,
             "total_leads": self.total_leads,
-<<<<<<< HEAD
             "selected_leads_total": self.selected_leads_total,
             "planned_eligible_leads": self.planned_eligible_leads,
             "planned_queue": list(self.planned_queue),
-=======
->>>>>>> origin/main
             "started_at": self.started_at,
         }
 
@@ -256,22 +220,16 @@ class CampaignLaunchRequest:
             leads_alias=self.leads_alias,
             templates=self.templates,
             run_id=self.run_id,
-<<<<<<< HEAD
             root_dir=self.root_dir,
-=======
->>>>>>> origin/main
             delay_min=self.delay_min,
             delay_max=self.delay_max,
             workers_requested=self.workers_requested,
             workers_capacity=_as_int(workers_capacity, default=0, minimum=0),
             headless=self.headless,
             total_leads=self.total_leads,
-<<<<<<< HEAD
             selected_leads_total=self.selected_leads_total,
             planned_eligible_leads=self.planned_eligible_leads,
             planned_queue=self.planned_queue,
-=======
->>>>>>> origin/main
             started_at=self.started_at,
         )
 
@@ -280,10 +238,7 @@ class CampaignLaunchRequest:
             "alias": self.alias,
             "leads_alias": self.leads_alias,
             "run_id": self.run_id,
-<<<<<<< HEAD
             "root_dir": self.root_dir,
-=======
->>>>>>> origin/main
             "templates": [dict(item) for item in self.templates],
             "delay_min": self.delay_min,
             "delay_max": self.delay_max,
@@ -291,12 +246,9 @@ class CampaignLaunchRequest:
             "workers_capacity": self.workers_capacity,
             "headless": self.headless,
             "total_leads": self.total_leads,
-<<<<<<< HEAD
             "selected_leads_total": self.selected_leads_total,
             "planned_eligible_leads": self.planned_eligible_leads,
             "planned_queue": list(self.planned_queue),
-=======
->>>>>>> origin/main
         }
 
 
@@ -316,11 +268,8 @@ class CampaignRunSnapshot:
     retried: int = 0
     total_leads: int = 0
     remaining: int = 0
-<<<<<<< HEAD
     selected_leads_total: int = 0
     planned_eligible_leads: int = 0
-=======
->>>>>>> origin/main
     workers_active: int = 0
     workers_requested: int = 0
     workers_capacity: int = 0
@@ -346,11 +295,8 @@ class CampaignRunSnapshot:
             retried=_as_int(data.get("retried"), default=0, minimum=0),
             total_leads=_as_int(data.get("total_leads"), default=0, minimum=0),
             remaining=_as_int(data.get("remaining"), default=0, minimum=0),
-<<<<<<< HEAD
             selected_leads_total=_as_int(data.get("selected_leads_total"), default=0, minimum=0),
             planned_eligible_leads=_as_int(data.get("planned_eligible_leads"), default=0, minimum=0),
-=======
->>>>>>> origin/main
             workers_active=_as_int(data.get("workers_active"), default=0, minimum=0),
             workers_requested=_as_int(data.get("workers_requested"), default=0, minimum=0),
             workers_capacity=_as_int(data.get("workers_capacity"), default=0, minimum=0),
@@ -392,11 +338,8 @@ class CampaignRunSnapshot:
             "retried": self.retried,
             "total_leads": self.total_leads,
             "remaining": self.remaining,
-<<<<<<< HEAD
             "selected_leads_total": self.selected_leads_total,
             "planned_eligible_leads": self.planned_eligible_leads,
-=======
->>>>>>> origin/main
             "workers_active": self.workers_active,
             "workers_requested": self.workers_requested,
             "workers_capacity": self.workers_capacity,

@@ -22,30 +22,17 @@ def test_create_alias_persists_canonical_registry_records(monkeypatch, tmp_path:
 
     assert created == "Ventas Norte"
     assert repeated == "Ventas Norte"
-<<<<<<< HEAD
     assert service.list_aliases() == ["Ventas Norte"]
-=======
-    assert service.list_aliases() == ["default", "Ventas Norte"]
->>>>>>> origin/main
 
     payload = service.context.read_json(service._alias_registry_path(), {})
     assert payload.get("schema_version") == 2
     rows = payload.get("aliases") if isinstance(payload, dict) else []
     assert isinstance(rows, list)
-<<<<<<< HEAD
     assert len(rows) == 1
     assert rows[0]["alias_id"] == "ventas-norte"
     assert rows[0]["display_name"] == "Ventas Norte"
     assert rows[0]["created_at"]
     assert rows[0]["updated_at"]
-=======
-    alias_rows = [row for row in rows if isinstance(row, dict) and row.get("alias_id") != "default"]
-    assert len(alias_rows) == 1
-    assert alias_rows[0]["alias_id"] == "ventas-norte"
-    assert alias_rows[0]["display_name"] == "Ventas Norte"
-    assert alias_rows[0]["created_at"]
-    assert alias_rows[0]["updated_at"]
->>>>>>> origin/main
 
 
 @pytest.mark.parametrize("raw_alias", ["ALL", " all ", "default", " DEFAULT ", "   "])
@@ -118,7 +105,6 @@ def test_list_accounts_projects_current_display_name_from_registry(monkeypatch, 
     assert rows[0]["alias_id"] == "ventas-norte"
     assert rows[0]["alias_display_name"] == "VENTAS norte"
     assert rows[0]["alias"] == "VENTAS norte"
-<<<<<<< HEAD
 
 
 def test_move_accounts_creates_target_alias_and_updates_selected_accounts(monkeypatch, tmp_path: Path) -> None:
@@ -148,5 +134,3 @@ def test_move_accounts_creates_target_alias_and_updates_selected_accounts(monkey
         ("uno", {"alias": "Ventas Norte"}),
         ("dos", {"alias": "Ventas Norte"}),
     ]
-=======
->>>>>>> origin/main

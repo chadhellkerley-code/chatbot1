@@ -6,18 +6,12 @@ import asyncio
 import contextlib
 import logging
 import random
-<<<<<<< HEAD
 import re
-=======
->>>>>>> origin/main
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List
-<<<<<<< HEAD
 from urllib.parse import urlparse
-=======
->>>>>>> origin/main
 
 from config import SETTINGS
 from core.accounts import list_all
@@ -44,7 +38,6 @@ from src.transport.session_manager import ManagedSession, SessionManager
 
 logger = logging.getLogger(__name__)
 _PLAYWRIGHT_REELS_MANAGERS: dict[bool, SessionManager] = {}
-<<<<<<< HEAD
 _REEL_MIN_SECONDS = 5.0
 _REEL_MAX_SECONDS = 45.0
 _LIKE_SESSION_PROGRESS_FLOOR = 0.12
@@ -70,8 +63,6 @@ _PROFILE_PATH_BLOCKLIST = {
     "tv",
 }
 _PROFILE_SECONDARY_SEGMENTS = {"reels", "tagged", "channel"}
-=======
->>>>>>> origin/main
 
 
 @dataclass
@@ -79,10 +70,7 @@ class ReelsPlaywrightSummary:
     username: str
     viewed: int = 0
     liked: int = 0
-<<<<<<< HEAD
     followed: int = 0
-=======
->>>>>>> origin/main
     errors: int = 0
     messages: List[str] = field(default_factory=list)
 
@@ -115,10 +103,7 @@ def _reels_session_manager(headless: bool) -> SessionManager:
             profiles_root=str(_profiles_root()),
             normalize_username=lambda value: str(value or "").strip().lstrip("@"),
             log_event=lambda *_args, **_kwargs: None,
-<<<<<<< HEAD
             subsystem="interactions",
-=======
->>>>>>> origin/main
         )
         _PLAYWRIGHT_REELS_MANAGERS[bool(headless)] = manager
     return manager
@@ -259,7 +244,6 @@ async def _next_reel(page) -> None:
     await page.mouse.wheel(0, 1200)
 
 
-<<<<<<< HEAD
 def _build_like_progress_targets(likes_target: int) -> list[float]:
     return _build_progress_targets(
         likes_target,
@@ -461,15 +445,12 @@ async def _try_follow_current_reel_author(page, attempted_profiles: set[str]) ->
     return False, last_reason
 
 
-=======
->>>>>>> origin/main
 async def _run_reels_for_account(
     *,
     page,
     summary: ReelsPlaywrightSummary,
     duration_s: int,
     likes_target: int,
-<<<<<<< HEAD
     follows_target: int = 0,
 ) -> None:
     total_duration = max(1.0, float(duration_s or 0))
@@ -483,16 +464,11 @@ async def _run_reels_for_account(
     last_followed_view = -999
     attempted_profiles: set[str] = set()
     last_follow_reason = ""
-=======
-) -> None:
-    end = time.monotonic() + max(1.0, float(duration_s or 0))
->>>>>>> origin/main
     await _dismiss_popups_async(page)
     await _sleep_with_stop_async(random.uniform(1.5, 2.5))
     while time.monotonic() < end:
         if STOP_EVENT.is_set():
             return
-<<<<<<< HEAD
         remaining_before_view = max(0.0, end - time.monotonic())
         if remaining_before_view <= 1.0:
             break
@@ -551,36 +527,15 @@ async def _run_reels_for_account(
             await _sleep_with_stop_async(min(remaining_watch, max(0.0, end - time.monotonic())))
         if STOP_EVENT.is_set() or time.monotonic() >= end:
             break
-=======
-        summary.viewed += 1
-        watch_s = random.uniform(25.0, 50.0)
-        like_delay = min(random.uniform(4.0, 12.0), watch_s)
-        await _sleep_with_stop_async(like_delay)
-        if STOP_EVENT.is_set() or time.monotonic() >= end:
-            return
-        if likes_target > 0 and summary.liked < likes_target:
-            with contextlib.suppress(Exception):
-                if await _try_like_current_reel(page):
-                    summary.liked += 1
-        remaining_watch = max(0.0, watch_s - like_delay)
-        await _sleep_with_stop_async(remaining_watch)
-        if STOP_EVENT.is_set() or time.monotonic() >= end:
-            return
->>>>>>> origin/main
         await _sleep_with_stop_async(
             min(random.uniform(0.4, 1.2), max(0.0, end - time.monotonic()))
         )
         if STOP_EVENT.is_set() or time.monotonic() >= end:
-<<<<<<< HEAD
             break
-=======
-            return
->>>>>>> origin/main
         await _next_reel(page)
         await _sleep_with_stop_async(
             min(random.uniform(1.2, 2.4), max(0.0, end - time.monotonic()))
         )
-<<<<<<< HEAD
     if likes_target > 0 and summary.liked < likes_target:
         summary.messages.append(
             f"Likes completados parcialmente: {summary.liked}/{max(0, int(likes_target or 0))}."
@@ -590,8 +545,6 @@ async def _run_reels_for_account(
         if last_follow_reason:
             message += f" Motivo final: {last_follow_reason}."
         summary.messages.append(message)
-=======
->>>>>>> origin/main
 
 
 def run_from_menu(alias: str) -> None:
@@ -605,12 +558,8 @@ def run_from_menu(alias: str) -> None:
 
     minutes = ask_int("Tiempo de navegacion por cuenta (min): ", min_value=1, default=10)
     likes_target = ask_int("Cantidad de likes por cuenta: ", min_value=0, default=10)
-<<<<<<< HEAD
     follows_target = ask_int("Cantidad de follows por cuenta: ", min_value=0, default=0)
     print("Cada reel se vera entre 5s y 45s (random).")
-=======
-    print("Cada reel se vera entre 25s y 50s (random).")
->>>>>>> origin/main
 
     ensure_logging(quiet=SETTINGS.quiet, log_dir=SETTINGS.log_dir, log_file=SETTINGS.log_file)
     reset_stop_event()
@@ -682,10 +631,7 @@ def run_from_menu(alias: str) -> None:
                     summary=summary,
                     duration_s=minutes * 60,
                     likes_target=likes_target,
-<<<<<<< HEAD
                     follows_target=follows_target,
-=======
->>>>>>> origin/main
                 )
                 with contextlib.suppress(Exception):
                     await session_manager.save_storage_state(session, username)
@@ -722,14 +668,10 @@ def run_from_menu(alias: str) -> None:
         color = Fore.GREEN if summary.errors == 0 else Fore.YELLOW
         print(
             style_text(
-<<<<<<< HEAD
                 (
                     f"@{summary.username}: vistos={summary.viewed} "
                     f"likes={summary.liked} follows={summary.followed} errores={summary.errors}"
                 ),
-=======
-                f"@{summary.username}: vistos={summary.viewed} likes={summary.liked} errores={summary.errors}",
->>>>>>> origin/main
                 color=color,
                 bold=True,
             )

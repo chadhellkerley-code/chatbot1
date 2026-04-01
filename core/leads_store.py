@@ -3,10 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
-<<<<<<< HEAD
-=======
-from core.storage_backups import move_file_to_backup
->>>>>>> origin/main
 from core.storage_atomic import atomic_write_json, atomic_write_text, load_json_file, path_lock
 
 _INVISIBLE_USERNAME_CHARS = ("\ufeff", "\u200b", "\u200c", "\u200d", "\u200e", "\u200f")
@@ -269,16 +265,10 @@ class LeadListStore:
         path = self.path_for(clean_name)
         with path_lock(path):
             if not path.exists():
-<<<<<<< HEAD
                 self._clear_summary_index(clean_name)
                 return False
             try:
                 path.unlink()
             finally:
                 self._clear_summary_index(clean_name)
-=======
-                return False
-            move_file_to_backup(path, self.deleted_dir)
-            self._clear_summary_index(clean_name)
->>>>>>> origin/main
         return True

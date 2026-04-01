@@ -7,10 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from runtime.runtime import reset_stop_event
-<<<<<<< HEAD
 from src.auth.persistent_login import ChallengeRequired
-=======
->>>>>>> origin/main
 from src.dm_campaign.contracts import CampaignSendResult, CampaignSendStatus
 from src.dm_campaign.proxy_workers_runner import (
     ProxyWorker,
@@ -18,10 +15,7 @@ from src.dm_campaign.proxy_workers_runner import (
     _campaign_failure_reason,
     _parse_send_result,
 )
-<<<<<<< HEAD
 from src.runtime.playwright_runtime import PersistentProfileOwnershipError
-=======
->>>>>>> origin/main
 from src.transport.human_instagram_sender import HumanInstagramSender
 
 
@@ -170,23 +164,16 @@ def test_sender_uses_sidebar_thread_resolution_for_outbound_flow(monkeypatch) ->
     async def _capture_success(*_args, **_kwargs):
         return None
 
-<<<<<<< HEAD
     async def _ensure_surface_ready(*_args, **_kwargs):
         return fake_composer, {"ok": True, "reason_code": "", "normalized": False, "diagnostic_reason_codes": []}
 
-=======
->>>>>>> origin/main
     monkeypatch.setattr(sender._session_manager, "open_session", _open_session)
     monkeypatch.setattr(sender._session_manager, "save_storage_state", _noop)
     monkeypatch.setattr(sender._session_manager, "discard_if_unhealthy", _noop)
     monkeypatch.setattr(sender._session_manager, "finalize_session", _noop)
     monkeypatch.setattr(sender._inbox_navigator, "ensure_inbox_surface", _ensure_inbox_surface)
     monkeypatch.setattr(sender._thread_resolver, "open_thread_from_sidebar", _open_thread_from_sidebar)
-<<<<<<< HEAD
     monkeypatch.setattr(sender._message_composer, "ensure_visible_chat_surface_ready", _ensure_surface_ready)
-=======
-    monkeypatch.setattr(sender._message_composer, "wait_composer_visible", _return_fake_composer)
->>>>>>> origin/main
     monkeypatch.setattr(sender._message_composer, "type_message", _noop)
     monkeypatch.setattr(sender._message_composer, "composer_text", _return_empty_text)
     monkeypatch.setattr(sender._message_composer, "click_send_button", _return_false)
@@ -226,13 +213,9 @@ def test_sender_uses_sidebar_thread_resolution_for_outbound_flow(monkeypatch) ->
         ("ensure_inbox_surface", True),
         ("open_thread_from_sidebar", ("lead1", True)),
     ]
-<<<<<<< HEAD
     non_flow_stage_events = [stage for stage in stage_events if stage != "flow_stage"]
     assert non_flow_stage_events == ["opening_session", "opening_dm", "sending", "sending"]
     assert "flow_stage" in stage_events
-=======
-    assert stage_events == ["opening_session", "opening_dm", "sending", "sending"]
->>>>>>> origin/main
     assert payload["method"] == "outbound_compose"
     assert payload["thread_open_method"] == "sidebar_search"
     assert payload["thread_id"] == "thread-123"
@@ -298,7 +281,6 @@ def test_sender_returns_inbox_not_ready_as_retryable_failure(monkeypatch) -> Non
     assert "skip_reason" not in payload
 
 
-<<<<<<< HEAD
 def test_sender_does_not_start_send_when_sidebar_is_unavailable(monkeypatch) -> None:
     sender = HumanInstagramSender()
 
@@ -444,9 +426,6 @@ def test_sender_normalizes_profile_conflict_during_session_open(monkeypatch) -> 
 
 
 def test_sender_uses_usable_composer_and_types_before_snapshot(monkeypatch) -> None:
-=======
-def test_sender_uses_visible_composer_without_waiting_for_chat_load(monkeypatch) -> None:
->>>>>>> origin/main
     sender = HumanInstagramSender()
 
     class _FakeKeyboard:
@@ -468,10 +447,7 @@ def test_sender_uses_visible_composer_without_waiting_for_chat_load(monkeypatch)
     fake_page = _FakePage()
     fake_session = SimpleNamespace(page=fake_page)
     fake_composer = _FakeComposer()
-<<<<<<< HEAD
     call_order: list[str] = []
-=======
->>>>>>> origin/main
 
     monkeypatch.setattr(
         "src.transport.human_instagram_sender.can_send_message_for_account",
@@ -491,7 +467,6 @@ def test_sender_uses_visible_composer_without_waiting_for_chat_load(monkeypatch)
         fake_page.url = "https://www.instagram.com/direct/t/thread-123/"
         return SimpleNamespace(opened=True, reason="ok", method="sidebar_search", thread_id="thread-123")
 
-<<<<<<< HEAD
     async def _wait_for_usable_composer(*_args, **_kwargs):
         call_order.append("composer_ready")
         return fake_composer
@@ -866,13 +841,6 @@ def test_sender_reuses_matching_current_thread_before_opening_compose(monkeypatc
             "normalized": False,
             "diagnostic_reason_codes": ["HEADER_PARTIAL_HYDRATION"],
         }
-=======
-    async def _thread_composer(_page):
-        return fake_composer
-
-    async def _wait_composer_visible(*_args, **_kwargs):
-        raise AssertionError("chat load wait should be skipped when the composer is already visible")
->>>>>>> origin/main
 
     async def _return_empty_text(*_args, **_kwargs):
         return ""
@@ -906,12 +874,7 @@ def test_sender_reuses_matching_current_thread_before_opening_compose(monkeypatc
     monkeypatch.setattr(sender._session_manager, "finalize_session", _noop)
     monkeypatch.setattr(sender._inbox_navigator, "ensure_inbox_surface", _ensure_inbox_surface)
     monkeypatch.setattr(sender._thread_resolver, "open_thread_from_sidebar", _open_thread_from_sidebar)
-<<<<<<< HEAD
     monkeypatch.setattr(sender._message_composer, "ensure_visible_chat_surface_ready", _ensure_surface_ready)
-=======
-    monkeypatch.setattr(sender._message_composer, "thread_composer", _thread_composer)
-    monkeypatch.setattr(sender._message_composer, "wait_composer_visible", _wait_composer_visible)
->>>>>>> origin/main
     monkeypatch.setattr(sender._message_composer, "type_message", _noop)
     monkeypatch.setattr(sender._message_composer, "wait_for_text_change", _return_empty_text)
     monkeypatch.setattr(sender._message_composer, "composer_text", _return_empty_text)
@@ -948,11 +911,8 @@ def test_sender_reuses_matching_current_thread_before_opening_compose(monkeypatc
     assert ok is True
     assert detail == "sent"
     assert payload["thread_id"] == "thread-123"
-<<<<<<< HEAD
     assert payload["thread_open_method"] == "current_thread"
     assert payload["post_open_surface_diagnostic_codes"] == ["HEADER_PARTIAL_HYDRATION"]
-=======
->>>>>>> origin/main
 
 
 def test_sender_uses_cached_account_quota_before_opening_session(monkeypatch) -> None:
@@ -983,7 +943,6 @@ def test_sender_uses_cached_account_quota_before_opening_session(monkeypatch) ->
     assert payload["quota"] == {"sent_today": 2, "limit": 2}
 
 
-<<<<<<< HEAD
 def test_sender_campaign_mode_reconciles_cached_quota_with_live_sent_log(monkeypatch) -> None:
     sender = HumanInstagramSender(reconcile_live_quota=True)
 
@@ -1047,8 +1006,6 @@ def test_sender_can_skip_quota_gate_when_campaign_already_preselected(monkeypatc
     assert payload["error"] == "RuntimeError('session_open_attempted')"
 
 
-=======
->>>>>>> origin/main
 def _build_sender_for_unverified_confirmation_test(monkeypatch, *, refresh_confirmed: bool):
     sender = HumanInstagramSender()
 
@@ -1144,7 +1101,6 @@ def _build_sender_for_unverified_confirmation_test(monkeypatch, *, refresh_confi
     monkeypatch.setattr(sender._session_manager, "finalize_session", _noop)
     monkeypatch.setattr(sender._inbox_navigator, "ensure_inbox_surface", _ensure_inbox_surface)
     monkeypatch.setattr(sender._thread_resolver, "open_thread_from_sidebar", _open_thread_from_sidebar)
-<<<<<<< HEAD
     monkeypatch.setattr(
         sender._message_composer,
         "ensure_visible_chat_surface_ready",
@@ -1153,8 +1109,6 @@ def _build_sender_for_unverified_confirmation_test(monkeypatch, *, refresh_confi
             result=(fake_composer, {"ok": True, "reason_code": "", "normalized": False, "diagnostic_reason_codes": []}),
         ),
     )
-=======
->>>>>>> origin/main
     monkeypatch.setattr(sender._message_composer, "wait_composer_visible", _return_fake_composer)
     monkeypatch.setattr(sender._message_composer, "type_message", _noop)
     monkeypatch.setattr(sender._message_composer, "composer_text", _return_empty_text)
@@ -1218,7 +1172,6 @@ def test_sender_keeps_unverified_blocked_when_thread_refresh_cannot_confirm(monk
     assert fake_page.goto_calls == ["https://www.instagram.com/direct/t/thread-123/"]
 
 
-<<<<<<< HEAD
 def test_sender_sync_cancel_does_not_close_all_sessions_for_persistent_campaign(monkeypatch) -> None:
     sender = HumanInstagramSender(keep_browser_open_per_account=True)
     close_calls: list[float] = []
@@ -1252,8 +1205,6 @@ def test_sender_sync_cancel_does_not_close_all_sessions_for_persistent_campaign(
     assert close_calls == []
 
 
-=======
->>>>>>> origin/main
 def test_campaign_failure_reason_keeps_skipped_detail_over_generic_reason_code() -> None:
     parsed = CampaignSendResult(
         ok=False,
@@ -1309,8 +1260,4 @@ def test_proxy_worker_request_stop_closes_sender_sessions(monkeypatch) -> None:
 
     worker.request_stop("test-stop")
 
-<<<<<<< HEAD
     assert close_calls == [10.0]
-=======
-    assert close_calls == [2.0]
->>>>>>> origin/main

@@ -1,4 +1,4 @@
-﻿# src/humanizer.py
+# src/humanizer.py
 import asyncio
 import random
 from typing import Optional, Union

@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-<<<<<<< HEAD
 import json
 import threading
 from datetime import datetime
 from pathlib import Path
-=======
-import threading
->>>>>>> origin/main
 
 import pytest
 
 from core.proxy_preflight import DIRECT_NETWORK_KEY
-<<<<<<< HEAD
 from runtime.runtime import reset_stop_event
-=======
-from runtime.runtime import request_stop, reset_stop_event
->>>>>>> origin/main
 from src.dm_campaign.contracts import CampaignSendResult, CampaignSendStatus
 from src.dm_campaign.health_monitor import HealthMonitor
 from src.dm_campaign.proxy_workers_runner import (
@@ -24,19 +16,12 @@ from src.dm_campaign.proxy_workers_runner import (
     LeadTask,
     ProxyWorker,
     TemplateRotator,
-<<<<<<< HEAD
     calculate_workers_for_alias,
-=======
->>>>>>> origin/main
     calculate_workers,
     load_accounts,
     run_dynamic_campaign,
 )
-<<<<<<< HEAD
 from src.runtime.playwright_runtime import PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY
-=======
-from src.runtime.playwright_runtime import PLAYWRIGHT_BROWSER_MODE_MANAGED
->>>>>>> origin/main
 
 
 class _FakeScheduler:
@@ -94,7 +79,6 @@ def _fake_account_proxy_preflight(account, **_kwargs):
     }
 
 
-<<<<<<< HEAD
 def _configure_campaign_root(monkeypatch, tmp_path: Path) -> Path:
     data_root = tmp_path / "data"
     data_root.mkdir(parents=True, exist_ok=True)
@@ -104,8 +88,6 @@ def _configure_campaign_root(monkeypatch, tmp_path: Path) -> Path:
     return data_root
 
 
-=======
->>>>>>> origin/main
 def test_calculate_workers_uses_explicit_proxy_groups_and_local_group(monkeypatch) -> None:
     accounts = [
         {"username": "proxied-a", "assigned_proxy_id": "proxy-a", "max_messages": 10, "sent_today": 0},
@@ -129,7 +111,6 @@ def test_calculate_workers_uses_explicit_proxy_groups_and_local_group(monkeypatc
     assert payload["group_capacities"][DIRECT_NETWORK_KEY] == 3
 
 
-<<<<<<< HEAD
 def test_calculate_workers_for_alias_uses_live_root_for_same_day_blocking(monkeypatch, tmp_path: Path) -> None:
     data_root = _configure_campaign_root(monkeypatch, tmp_path)
     leads_root = data_root / "leads"
@@ -239,8 +220,6 @@ def test_calculate_workers_for_alias_uses_live_root_for_same_day_blocking(monkey
     assert plan["planned_queue"] == ["lead-fresh"]
 
 
-=======
->>>>>>> origin/main
 def test_calculate_workers_skips_accounts_without_remaining_capacity(monkeypatch) -> None:
     accounts = [
         {"username": "spent-proxy", "assigned_proxy_id": "proxy-a", "max_messages": 2, "sent_today": 2},
@@ -305,7 +284,6 @@ def test_proxy_worker_rotation_does_not_starve_non_session_ready_accounts(monkey
     assert second.account["username"] == "acct-pending"
 
 
-<<<<<<< HEAD
 def test_proxy_worker_limits_active_accounts_and_rotates_next_batch(monkeypatch) -> None:
     closed_accounts: list[str] = []
 
@@ -532,8 +510,6 @@ def test_run_dynamic_campaign_progress_preserves_planning_provenance(monkeypatch
     assert progress_payloads[-1]["planned_eligible_leads"] == 52
 
 
-=======
->>>>>>> origin/main
 def test_proxy_worker_injects_visible_browser_layout_for_headful_campaigns(monkeypatch) -> None:
     class _FakeSender:
         def __init__(self, *args, **kwargs) -> None:
@@ -577,11 +553,8 @@ def test_proxy_worker_injects_visible_browser_layout_for_headful_campaigns(monke
         "scope": "campaign:run-55",
         "target_count": 4,
         "layout_policy": "compact",
-<<<<<<< HEAD
         "width": 1366,
         "height": 900,
-=======
->>>>>>> origin/main
         "stagger_min_ms": 300,
         "stagger_max_ms": 800,
         "stagger_step_ms": 100,
@@ -589,7 +562,6 @@ def test_proxy_worker_injects_visible_browser_layout_for_headful_campaigns(monke
         "proxy_id": "proxy-a",
         "network_key": "proxy:proxy-a",
     }
-<<<<<<< HEAD
     assert worker._states[0].account["campaign_desktop_layout"] == {
         "width": 1366,
         "height": 900,
@@ -605,39 +577,10 @@ def test_proxy_worker_keeps_campaign_sender_headless_and_sets_desktop_layout(mon
         def __init__(self, headless: bool = True, *, keep_browser_open_per_account: bool = False, **_kwargs) -> None:
             created_headless.append(bool(headless))
 
-=======
-    assert worker._states[0].account["manual_visible_browser"] is True
-    assert worker._states[0].account["playwright_browser_mode"] == PLAYWRIGHT_BROWSER_MODE_MANAGED
-
-
-def test_run_dynamic_campaign_caps_queue_by_capacity_uses_full_worker_plan_and_keeps_headless(monkeypatch) -> None:
-    reset_stop_event()
-    created_headless: list[bool] = []
-
-    class _FakeSender:
-        def __init__(self, headless: bool = True, *, keep_browser_open_per_account: bool = False) -> None:
-            created_headless.append(bool(headless))
-
-        def send_message_like_human_sync(
-            self,
-            account,
-            target_username: str,
-            text: str,
-            *,
-            stage_callback=None,
-            **kwargs,
-        ):
-            if callable(stage_callback):
-                stage_callback("opening_dm", {"account": account.get("username"), "lead": target_username})
-                stage_callback("sending", {"account": account.get("username"), "lead": target_username})
-            return True, "sent_verified", {"verified": True}
-
->>>>>>> origin/main
         def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
             return None
 
     monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.HumanInstagramSender", _FakeSender)
-<<<<<<< HEAD
     monkeypatch.setattr("src.dm_campaign.proxy_workers_runner._account_has_storage_state", lambda _account: True)
 
     worker = ProxyWorker(
@@ -725,193 +668,6 @@ def test_proxy_worker_applies_same_desktop_visible_layout_to_all_headful_account
         state.account["playwright_browser_mode"] == PLAYWRIGHT_BROWSER_MODE_CHROME_ONLY
         for state in worker._states
     )
-=======
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._load_selected_accounts",
-        lambda alias, *, run_id="": [
-            {
-                "username": "proxy-a-acct",
-                "alias": alias,
-                "active": True,
-                "connected": True,
-                "assigned_proxy_id": "proxy-a",
-                "max_messages": 2,
-                "messages_per_account": 2,
-                "sent_today": 0,
-            },
-            {
-                "username": "proxy-b-acct",
-                "alias": alias,
-                "active": True,
-                "connected": True,
-                "assigned_proxy_id": "proxy-b",
-                "max_messages": 1,
-                "messages_per_account": 1,
-                "sent_today": 0,
-            },
-            {
-                "username": "local-acct",
-                "alias": alias,
-                "active": True,
-                "connected": True,
-                "max_messages": 1,
-                "messages_per_account": 1,
-                "sent_today": 0,
-            },
-        ],
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner.load_leads",
-        lambda _leads_alias: [f"lead-{index}" for index in range(10)],
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._filter_pending_leads_for_campaign",
-        lambda leads, **_kwargs: (list(leads), {"skipped_already_sent": 0}),
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._campaign_accounts_preflight",
-        lambda accounts: {"ready_accounts": [dict(item) for item in accounts], "blocked_accounts": []},
-    )
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner._account_has_storage_state", lambda _account: True)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.account_proxy_preflight", _fake_account_proxy_preflight)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.get_account", lambda _username: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_connected", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.log_sent", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_sent", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_failed", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_skipped", lambda *_args, **_kwargs: None)
-
-    result = run_dynamic_campaign(
-        {
-            "alias": "alias-a",
-            "leads_alias": "lead-list",
-            "workers_requested": 1,
-            "headless": True,
-            "templates": [{"text": "Hola"}],
-            "total_leads": 10,
-            "delay_min": 0,
-            "delay_max": 0,
-        }
-    )
-
-    assert result["sent"] == 2
-    assert result["failed"] == 0
-    assert result["remaining"] == 0
-    assert result["workers_requested"] == 1
-    assert result["workers_effective"] == 1
-    assert result["workers_capacity"] == 3
-    assert result["skipped_preblocked"] == 8
-    assert created_headless == [True]
-
-
-def test_run_dynamic_campaign_passes_visible_browser_layout_when_headful(monkeypatch) -> None:
-    reset_stop_event()
-    received_layouts: list[dict[str, object]] = []
-    received_visible_flags: list[tuple[bool, str]] = []
-
-    class _FakeSender:
-        def __init__(self, headless: bool = True, *, keep_browser_open_per_account: bool = False) -> None:
-            assert headless is False
-
-        def send_message_like_human_sync(
-            self,
-            account,
-            target_username: str,
-            text: str,
-            *,
-            stage_callback=None,
-            **kwargs,
-        ):
-            del target_username, text, kwargs
-            received_layouts.append(dict(account.get("visible_browser_layout") or {}))
-            received_visible_flags.append(
-                (
-                    bool(account.get("manual_visible_browser")),
-                    str(account.get("playwright_browser_mode") or ""),
-                )
-            )
-            if callable(stage_callback):
-                stage_callback("opening_dm", {"account": account.get("username"), "lead": "lead"})
-                stage_callback("sending", {"account": account.get("username"), "lead": "lead"})
-            return True, "sent_verified", {"verified": True}
-
-        def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
-            return None
-
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.HumanInstagramSender", _FakeSender)
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._load_selected_accounts",
-        lambda alias, *, run_id="": [
-            {
-                "username": "proxy-a-acct",
-                "alias": alias,
-                "active": True,
-                "connected": True,
-                "assigned_proxy_id": "proxy-a",
-                "max_messages": 1,
-                "messages_per_account": 1,
-                "sent_today": 0,
-            },
-            {
-                "username": "proxy-b-acct",
-                "alias": alias,
-                "active": True,
-                "connected": True,
-                "assigned_proxy_id": "proxy-b",
-                "max_messages": 1,
-                "messages_per_account": 1,
-                "sent_today": 0,
-            },
-        ],
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner.load_leads",
-        lambda _leads_alias: ["lead-1", "lead-2"],
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._filter_pending_leads_for_campaign",
-        lambda leads, **_kwargs: (list(leads), {"skipped_already_sent": 0}),
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._campaign_accounts_preflight",
-        lambda accounts: {"ready_accounts": [dict(item) for item in accounts], "blocked_accounts": []},
-    )
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner._account_has_storage_state", lambda _account: True)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.account_proxy_preflight", _fake_account_proxy_preflight)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.get_account", lambda _username: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_connected", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.log_sent", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_sent", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_failed", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_skipped", lambda *_args, **_kwargs: None)
-
-    result = run_dynamic_campaign(
-        {
-            "alias": "alias-visible",
-            "leads_alias": "lead-list",
-            "workers_requested": 2,
-            "headless": False,
-            "templates": [{"text": "Hola"}],
-            "total_leads": 2,
-            "delay_min": 0,
-            "delay_max": 0,
-        }
-    )
-
-    assert result["sent"] == 2
-    assert result["workers_effective"] == 2
-    assert len(received_layouts) == 2
-    assert len({layout["scope"] for layout in received_layouts}) == 1
-    assert next(iter({layout["scope"] for layout in received_layouts})).startswith("campaign:campaign-")
-    assert {layout["target_count"] for layout in received_layouts} == {2}
-    assert {layout["layout_policy"] for layout in received_layouts} == {"compact"}
-    assert {layout["stagger_min_ms"] for layout in received_layouts} == {300}
-    assert {layout["stagger_max_ms"] for layout in received_layouts} == {800}
-    assert received_visible_flags == [
-        (True, PLAYWRIGHT_BROWSER_MODE_MANAGED),
-        (True, PLAYWRIGHT_BROWSER_MODE_MANAGED),
-    ]
->>>>>>> origin/main
 
 
 def test_local_worker_failures_do_not_block_the_local_lane(monkeypatch) -> None:
@@ -1057,13 +813,8 @@ def test_proxy_worker_emits_runtime_event_when_proxy_degrades(monkeypatch) -> No
 
     worker._log_proxy_status_change("degraded")
 
-<<<<<<< HEAD
     proxy_events = [event for event in events if event.get("event_type") == "proxy_degraded"]
     assert proxy_events[0]["failure_kind"] == "retryable"
-=======
-    assert events[0]["event_type"] == "proxy_degraded"
-    assert events[0]["failure_kind"] == "retryable"
->>>>>>> origin/main
 
 
 def test_proxy_worker_success_syncs_connected_without_invalidating_health(monkeypatch) -> None:
@@ -1123,11 +874,7 @@ def test_proxy_worker_success_syncs_connected_without_invalidating_health(monkey
     assert mark_calls == [("acct-a", True, False)]
 
 
-<<<<<<< HEAD
 def test_proxy_worker_marks_global_contact_for_sent_unverified(monkeypatch) -> None:
-=======
-def test_proxy_worker_does_not_mark_global_contact_for_sent_unverified(monkeypatch) -> None:
->>>>>>> origin/main
     mark_sent_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     log_calls: list[dict[str, object]] = []
 
@@ -1183,13 +930,9 @@ def test_proxy_worker_does_not_mark_global_contact_for_sent_unverified(monkeypat
         ),
     )
 
-<<<<<<< HEAD
     assert mark_sent_calls == [
         (("lead-1",), {"sent_by": "acct-a", "alias": "alias"})
     ]
-=======
-    assert mark_sent_calls == []
->>>>>>> origin/main
     assert log_calls[0]["kwargs"]["sent_unverified"] is True
 
 
@@ -1214,7 +957,6 @@ def test_load_accounts_excludes_accounts_blocked_by_proxy_preflight(monkeypatch)
     assert [str(item.get("username") or "") for item in rows] == ["ready"]
 
 
-<<<<<<< HEAD
 def test_load_accounts_excludes_usage_deactivated_accounts(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.dm_campaign.proxy_workers_runner._load_selected_accounts",
@@ -1241,8 +983,6 @@ def test_load_accounts_excludes_usage_deactivated_accounts(monkeypatch) -> None:
     assert [str(item.get("username") or "") for item in rows] == ["ready"]
 
 
-=======
->>>>>>> origin/main
 def test_run_dynamic_campaign_stops_when_proxy_preflight_removes_every_account(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.dm_campaign.proxy_workers_runner._load_selected_accounts",
@@ -1279,42 +1019,15 @@ def test_run_dynamic_campaign_stops_when_proxy_preflight_removes_every_account(m
     assert progress[-1]["message"] == "No hay cuentas operables para iniciar la campaña."
 
 
-<<<<<<< HEAD
 def test_proxy_worker_headless_accounts_do_not_receive_visible_browser_payload(monkeypatch) -> None:
     class _FakeSender:
         def __init__(self, *args, **kwargs) -> None:
             return None
-=======
-def test_run_dynamic_campaign_keeps_pending_leads_when_user_stops(monkeypatch) -> None:
-    failed_marks: list[tuple[str, str, int, str]] = []
-
-    class _FakeSender:
-        def __init__(self, *args, **kwargs) -> None:
-            self._calls = 0
-
-        def send_message_like_human_sync(
-            self,
-            account,
-            target_username: str,
-            text: str,
-            *args,
-            stage_callback=None,
-            **kwargs,
-        ):
-            self._calls += 1
-            if callable(stage_callback):
-                stage_callback("opening_dm", {"account": account.get("username"), "lead": target_username})
-                stage_callback("sending", {"account": account.get("username"), "lead": target_username})
-            if self._calls == 1:
-                request_stop("test stop")
-            return True, "sent_verified", {"verified": True}
->>>>>>> origin/main
 
         def close_all_sessions_sync(self, *, timeout: float = 5.0) -> None:
             return None
 
     monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.HumanInstagramSender", _FakeSender)
-<<<<<<< HEAD
     monkeypatch.setattr("src.dm_campaign.proxy_workers_runner._account_has_storage_state", lambda _account: True)
 
     worker = ProxyWorker(
@@ -1345,59 +1058,6 @@ def test_run_dynamic_campaign_keeps_pending_leads_when_user_stops(monkeypatch) -
     assert worker._states[0].account["campaign_desktop_layout"] == {"width": 1366, "height": 900}
     assert "visible_browser_layout" not in worker._states[0].account
     assert worker._states[0].account.get("manual_visible_browser") is None
-=======
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._load_selected_accounts",
-        lambda alias, *, run_id="": [
-            {
-                "username": "local-acct",
-                "alias": alias,
-                "active": True,
-                "connected": True,
-                "max_messages": 3,
-                "messages_per_account": 3,
-                "sent_today": 0,
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner.load_leads",
-        lambda _leads_alias: [f"lead-{index}" for index in range(3)],
-    )
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner._filter_pending_leads_for_campaign",
-        lambda leads, **_kwargs: (list(leads), {"skipped_already_sent": 0}),
-    )
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner._account_has_storage_state", lambda _account: True)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.account_proxy_preflight", _fake_account_proxy_preflight)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.get_account", lambda _username: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_connected", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.log_sent", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_sent", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.dm_campaign.proxy_workers_runner.mark_lead_skipped", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        "src.dm_campaign.proxy_workers_runner.mark_lead_failed",
-        lambda lead, *, reason="", attempts=0, alias="": failed_marks.append((lead, reason, attempts, alias)),
-    )
-
-    result = run_dynamic_campaign(
-        {
-            "alias": "alias-a",
-            "leads_alias": "lead-list",
-            "workers_requested": 1,
-            "headless": True,
-            "templates": [{"text": "Hola"}],
-            "total_leads": 3,
-            "delay_min": 0,
-            "delay_max": 0,
-        }
-    )
-
-    assert result["sent"] == 1
-    assert result["failed"] == 0
-    assert result["remaining"] == 2
-    assert failed_marks == []
->>>>>>> origin/main
 
 
 def test_load_accounts_blocks_legacy_proxy_accounts_from_direct_worker(monkeypatch) -> None:
@@ -1528,7 +1188,6 @@ def test_proxy_worker_ensure_session_syncs_connected_without_invalidating_health
 
     assert worker._ensure_session(worker._states[0]) is True
     assert mark_calls == [("acct-a", True, False)]
-<<<<<<< HEAD
 
 
 def test_proxy_worker_account_limit_does_not_requery_live_quota_mid_run(monkeypatch) -> None:
@@ -1575,5 +1234,3 @@ def test_proxy_worker_account_limit_does_not_requery_live_quota_mid_run(monkeypa
     worker._states[0].sent_count = 3
     worker._states[0].account["sent_today"] = 3
     assert worker._account_reached_limit(worker._states[0]) is True
-=======
->>>>>>> origin/main
